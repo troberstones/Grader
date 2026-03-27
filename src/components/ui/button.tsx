@@ -13,8 +13,10 @@ const buttonVariants = cva(
         // Primary: signature orange gradient — the high-impact accent
         default:
           "bg-[linear-gradient(135deg,var(--primary),var(--primary-container))] text-primary-foreground shadow-[0_2px_12px_oklch(0.74_0.17_40/30%)] hover:opacity-90 active:opacity-80",
+        // Outline: bg-muted surface makes it legible as a button without a harsh border.
+        // A ghost border (outline-variant at 15%) adds just enough edge definition.
         outline:
-          "border-border bg-background hover:bg-accent hover:text-foreground",
+          "bg-muted text-foreground border-[oklch(0.34_0.003_50/20%)] hover:bg-accent hover:border-[oklch(0.34_0.003_50/35%)]",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/70",
         ghost:

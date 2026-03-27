@@ -6,7 +6,7 @@ import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
 import { ReviewClient } from "./review-client";
-import { BookOpen } from "lucide-react";
+import { ArrowLeft, BookOpen, ClipboardList } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -40,9 +40,11 @@ export default async function ReviewPage({
         actions={
           <div className="flex gap-2">
             <LinkButton href={`/assignments/${assignment.id}`} variant="outline">
+              <ClipboardList className="h-4 w-4" />
               Grade Sheet
             </LinkButton>
             <LinkButton href={`/courses/${assignment.courseId}`} variant="outline">
+              <ArrowLeft className="h-4 w-4" />
               Back to Course
             </LinkButton>
           </div>

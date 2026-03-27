@@ -3,6 +3,39 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { AnnotationTool } from "./annotation-toolbar";
 
+// ── Ramer–Douglas–Peucker stroke simplification ──────────────────────────────
+function _perpDist(
+  p: { x: number; y: number },
+  a: { x: number; y: number },
+  b: { x: number; y: number }
+): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  if (dx === 0 && dy === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy);
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+function rdpSimplify(
+  pts: { x: number; y: number }[],
+  epsilon: number
+): { x: number; y: number }[] {
+  if (pts.length <= 2) return pts;
+  let maxD = 0;
+  let maxI = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = _perpDist(pts[i], pts[0], pts[pts.length - 1]);
+    if (d > maxD) { maxD = d; maxI = i; }
+  }
+  if (maxD > epsilon) {
+    return [
+      ...rdpSimplify(pts.slice(0, maxI + 1), epsilon).slice(0, -1),
+      ...rdpSimplify(pts.slice(maxI), epsilon),
+    ];
+  }
+  return [pts[0], pts[pts.length - 1]];
+}
+
 export interface AnnotationCanvasHandle {
   loadFrame: (json: string | null) => Promise<boolean>;
   getCurrentJSON: () => string | null;
@@ -134,7 +167,31 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCan
         canvas.selection = toolRef.current === "select";
 
         // History events
-        canvas.on("path:created", () => { onDirty(); });
+        canvas.on("path:created", (e: any) => {
+          onDirty();
+          // Simplify the path using Ramer–Douglas–Peucker (2.5px tolerance)
+          const path = e.path;
+          if (!path?.path || path.path.length < 4) return;
+          // Extract the endpoint of every SVG command as the point set
+          const pts: { x: number; y: number }[] = (path.path as any[][]).map((cmd) => ({
+            x: cmd[cmd.length - 2] as number,
+            y: cmd[cmd.length - 1] as number,
+          }));
+          const simplified = rdpSimplify(pts, 2.5);
+          if (simplified.length >= pts.length) return; // nothing to reduce
+          // Rebuild as smooth quadratic-bezier path using the midpoint algorithm
+          // (identical to what PencilBrush generates, so the stroke stays smooth)
+          const newPath: any[][] = [["M", simplified[0].x, simplified[0].y]];
+          for (let i = 1; i < simplified.length - 1; i++) {
+            const c = simplified[i];
+            const n = simplified[i + 1];
+            newPath.push(["Q", c.x, c.y, (c.x + n.x) / 2, (c.y + n.y) / 2]);
+          }
+          newPath.push(["L", simplified[simplified.length - 1].x, simplified[simplified.length - 1].y]);
+          path.path = newPath;
+          path.setCoords?.();
+          canvas.renderAll();
+        });
         canvas.on("object:added", () => { if (!suppressHistoryRef.current) onDirty(); });
         canvas.on("object:modified", () => { if (!suppressHistoryRef.current) onDirty(); });
         canvas.on("object:removed", () => { if (!suppressHistoryRef.current) onDirty(); });

@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -69,6 +70,9 @@ export function ReviewClient({ assignment, students, initialSubmissions }: Revie
   const canvasRef = useRef<AnnotationCanvasHandle>(null);
   const videoRef = useRef<VideoPlayerHandle>(null);
   const mediaAreaRef = useRef<HTMLDivElement>(null);
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ref mirror of submission for use inside timer callbacks (avoids stale closure)
+  const submissionRef = useRef<SubmissionRow | null>(null);
 
   // Pending annotation to load once the canvas fires onReady.
   // undefined = nothing pending; null = load empty; string = load this JSON.
@@ -83,6 +87,38 @@ export function ReviewClient({ assignment, students, initialSubmissions }: Revie
   // ── Keep refs in sync ─────────────────────────────────────────────────────
   useEffect(() => { annotationMapRef.current = annotationMap; }, [annotationMap]);
   useEffect(() => { currentFrameRef.current = currentFrame; }, [currentFrame]);
+  useEffect(() => { submissionRef.current = submission; }, [submission]);
+
+  // ── Auto-save: 1.5 s after the last stroke, silently persist ─────────────
+  useEffect(() => {
+    if (!isDirty) {
+      if (autoSaveTimerRef.current) { clearTimeout(autoSaveTimerRef.current); autoSaveTimerRef.current = null; }
+      return;
+    }
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(async () => {
+      const sub = submissionRef.current;
+      if (!sub) return;
+      try {
+        const json = canvasRef.current?.getCurrentJSON() ?? null;
+        const newMap = new Map(annotationMapRef.current);
+        if (json) newMap.set(currentFrameRef.current, json);
+        else newMap.delete(currentFrameRef.current);
+        setAnnotationMap(newMap);
+        annotationMapRef.current = newMap;
+        const frames: AnnotationFrame[] = Array.from(newMap.entries()).map(([k, v]) => ({
+          frameNumber: k,
+          annotationData: v,
+        }));
+        await saveAnnotations(sub.id, frames);
+        setIsDirty(false);
+      } catch {
+        // Silent — manual save is always available
+      }
+    }, 1500);
+    return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDirty]);
 
   // ── Canvas ready callback: load any pending annotation ───────────────────
   const handleCanvasReady = useCallback(() => {
@@ -270,6 +306,16 @@ export function ReviewClient({ assignment, students, initialSubmissions }: Revie
     }
   }
 
+  // ── Annotated frames set (for timeline markers) ───────────────────────────
+  const annotatedFrames = useMemo(() => {
+    if (submission?.mediaType !== "video") return undefined;
+    const s = new Set<number>();
+    for (const [k] of annotationMap) {
+      if (k !== null) s.add(k as number);
+    }
+    return s;
+  }, [annotationMap, submission?.mediaType]);
+
   // ── Zoom helpers ──────────────────────────────────────────────────────────
   function zoomIn() {
     setZoom((prev) => {
@@ -425,6 +471,7 @@ export function ReviewClient({ assignment, students, initialSubmissions }: Revie
                   src={submissionUrl!}
                   fps={canvasFps}
                   zoom={zoom}
+                  annotatedFrames={annotatedFrames}
                   onFrameChange={handleFrameChange}
                   onReady={handleVideoReady}
                   annotationOverlay={

@@ -30,6 +30,8 @@ interface VideoPlayerProps {
   fps?: number;
   zoom?: number;
   annotationOverlay?: ReactNode;
+  /** Set of frame numbers that have saved annotations — shown as markers on the ruler */
+  annotatedFrames?: Set<number>;
   onFrameChange?: (frame: number) => void;
   onReady?: (width: number, height: number, duration: number, fps: number) => void;
 }
@@ -38,7 +40,7 @@ const SPEEDS = [0.25, 0.5, 1, 1.5, 2];
 const MAX_VIDEO_DIM = 1920;
 
 export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
-  function VideoPlayer({ src, fps: fpsProp = 30, zoom = 1, annotationOverlay, onFrameChange, onReady }, ref) {
+  function VideoPlayer({ src, fps: fpsProp = 30, zoom = 1, annotationOverlay, annotatedFrames, onFrameChange, onReady }, ref) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const timelineRef = useRef<HTMLDivElement>(null);
     const videoAreaRef = useRef<HTMLDivElement>(null);
@@ -54,6 +56,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     // areaSize is the available display area (from ResizeObserver)
     const [areaSize, setAreaSize] = useState({ width: 0, height: 0 });
     const [scrubbing, setScrubbing] = useState(false);
+    // Alt/Option key held — enables drag-to-scrub anywhere on the video area
+    const [altHeld, setAltHeld] = useState(false);
+    const [altScrubbing, setAltScrubbing] = useState(false);
+    const altScrubStartRef = useRef({ x: 0, time: 0 });
 
     const lastFrameRef = useRef(-1);
 
@@ -79,6 +85,52 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       ro.observe(el);
       return () => ro.disconnect();
     }, []);
+
+    // ── Alt/Option key tracker ────────────────────────────────────────────────
+    useEffect(() => {
+      const down = (e: KeyboardEvent) => { if (e.altKey) setAltHeld(true); };
+      const up   = (e: KeyboardEvent) => { if (!e.altKey) setAltHeld(false); };
+      const blur = () => setAltHeld(false); // window lost focus — key state unknown
+      window.addEventListener("keydown", down);
+      window.addEventListener("keyup",   up);
+      window.addEventListener("blur",    blur);
+      return () => {
+        window.removeEventListener("keydown", down);
+        window.removeEventListener("keyup",   up);
+        window.removeEventListener("blur",    blur);
+      };
+    }, []);
+
+    // ── Alt-drag scrub (global move/up while altScrubbing) ────────────────────
+    useEffect(() => {
+      if (!altScrubbing) return;
+      document.body.style.userSelect = "none";
+      const move = (e: MouseEvent) => {
+        const v = videoRef.current;
+        if (!v) return;
+        // 8 px per frame — precise, like Blender's T-drag
+        const deltaTime = (e.clientX - altScrubStartRef.current.x) / (8 * fps);
+        const newTime = Math.max(0, Math.min(v.duration, altScrubStartRef.current.time + deltaTime));
+        v.currentTime = newTime;
+        setCurrentTime(newTime);
+        const frame = Math.round(newTime * fps);
+        if (frame !== lastFrameRef.current) {
+          lastFrameRef.current = frame;
+          onFrameChange?.(frame);
+        }
+      };
+      const up = () => {
+        setAltScrubbing(false);
+        document.body.style.userSelect = "";
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup",   up);
+      return () => {
+        document.body.style.userSelect = "";
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup",   up);
+      };
+    }, [altScrubbing, fps, onFrameChange]);
 
     // ── Derived values ────────────────────────────────────────────────────────
     const currentFrame = Math.round(currentTime * fps);
@@ -173,6 +225,15 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       v.currentTime = v.duration;
     }
 
+    function startAltScrub(e: React.MouseEvent) {
+      const v = videoRef.current;
+      if (!v) return;
+      e.preventDefault();
+      v.pause(); setPlaying(false);
+      altScrubStartRef.current = { x: e.clientX, time: v.currentTime };
+      setAltScrubbing(true);
+    }
+
     function setPlaybackSpeed(s: number) {
       setSpeed(s);
       if (videoRef.current) videoRef.current.playbackRate = s;
@@ -201,16 +262,22 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
 
     useEffect(() => {
       if (!scrubbing) return;
+      // Prevent text selection / element highlighting while dragging
+      document.body.style.userSelect = "none";
       const move = (e: MouseEvent | TouchEvent) => {
         const x = "touches" in e ? e.touches[0].clientX : e.clientX;
         seekFromPointer(x);
       };
-      const up = () => setScrubbing(false);
+      const up = () => {
+        setScrubbing(false);
+        document.body.style.userSelect = "";
+      };
       window.addEventListener("mousemove", move);
-      window.addEventListener("touchmove", move);
+      window.addEventListener("touchmove", move, { passive: true });
       window.addEventListener("mouseup", up);
       window.addEventListener("touchend", up);
       return () => {
+        document.body.style.userSelect = "";
         window.removeEventListener("mousemove", move);
         window.removeEventListener("touchmove", move);
         window.removeEventListener("mouseup", up);
@@ -218,12 +285,39 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       };
     }, [scrubbing, seekFromPointer]);
 
+    // ── Timeline tick marks ───────────────────────────────────────────────────
+    const timelineTicks = (() => {
+      if (totalFrames <= 0) return null;
+      // Pick the coarsest interval that still gives ≤ 14 labels
+      const candidates = [1, 2, 5, 10, 24, 30, 48, 60, 100, 120, 240, 300, 600, 1200];
+      const interval = candidates.find((i) => totalFrames / i <= 14) ?? Math.ceil(totalFrames / 12);
+      const items = [];
+      for (let f = 0; f <= totalFrames; f += interval) {
+        const x = (f / totalFrames) * 100;
+        items.push(
+          <div key={f} className="absolute top-0 bottom-0" style={{ left: `${x}%` }}>
+            <div className="w-px h-3 bg-white/10" />
+          </div>
+        );
+        items.push(
+          <span
+            key={`l${f}`}
+            className="absolute top-1 text-[10px] leading-none tabular-nums text-muted-foreground/50 pl-1"
+            style={{ left: `${x}%` }}
+          >
+            {f}
+          </span>
+        );
+      }
+      return items;
+    })();
+
     return (
       <div className="flex flex-col w-full h-full">
         {/* ── Video + overlay ───────────────────────────────────────────────── */}
         <div
           ref={videoAreaRef}
-          className="flex-1 min-h-0 bg-black"
+          className={cn("flex-1 min-h-0 bg-black", altHeld && !altScrubbing && "cursor-ew-resize")}
           style={{ overflow: "auto", position: "relative" }}
         >
           {videoSize.width > 0 && areaSize.width > 0 ? (
@@ -290,27 +384,60 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
               </div>
             </>
           )}
+
+          {/* Alt/Option-drag scrub overlay — floats on top of annotation canvas */}
+          {altHeld && (
+            <div
+              className="absolute inset-0 cursor-ew-resize"
+              style={{ zIndex: 40 }}
+              onMouseDown={startAltScrub}
+              title="Drag left/right to scrub"
+            />
+          )}
         </div>
 
         {/* ── Controls ──────────────────────────────────────────────────────── */}
         <div className="shrink-0 bg-background border-t px-3 py-2 space-y-2">
-          {/* Timeline */}
+          {/* ── Blender-style frame ruler timeline ─────────────────────────── */}
           <div
             ref={timelineRef}
-            className="relative h-6 flex items-center cursor-pointer group"
-            onMouseDown={(e) => { setScrubbing(true); seekFromPointer(e.clientX); }}
+            className="relative select-none cursor-col-resize overflow-hidden rounded bg-[oklch(0.085_0_0)] border border-white/5"
+            style={{ height: 48 }}
+            onMouseDown={(e) => { e.preventDefault(); setScrubbing(true); seekFromPointer(e.clientX); }}
             onTouchStart={(e) => { setScrubbing(true); seekFromPointer(e.touches[0].clientX); }}
           >
-            <div className="absolute inset-x-0 h-1.5 rounded-full bg-muted group-hover:h-2 transition-all">
-              <div
-                className="h-full rounded-full bg-primary transition-none"
-                style={{ width: `${pct}%` }}
-              />
-            </div>
+            {/* Subtle progress fill */}
             <div
-              className="absolute w-3 h-3 rounded-full bg-primary shadow border-2 border-background -translate-x-1/2"
-              style={{ left: `${pct}%` }}
+              className="absolute inset-y-0 left-0 bg-primary/6 transition-none pointer-events-none"
+              style={{ width: `${pct}%` }}
             />
+
+            {/* Tick marks + frame number labels */}
+            {timelineTicks}
+
+            {/* Annotation markers — small orange nubs at bottom of ruler */}
+            {annotatedFrames && totalFrames > 0 && Array.from(annotatedFrames).map((f) => (
+              <div
+                key={`ann-${f}`}
+                className="absolute bottom-0 w-1 h-2 rounded-t-sm bg-primary/70 -translate-x-1/2 pointer-events-none"
+                style={{ left: `${(f / totalFrames) * 100}%` }}
+              />
+            ))}
+
+            {/* Playhead */}
+            <div
+              className="absolute top-0 bottom-0 pointer-events-none"
+              style={{ left: `${pct}%`, transform: "translateX(-50%)" }}
+            >
+              {/* Badge */}
+              <div className="absolute top-1 left-1/2 -translate-x-1/2">
+                <div className="bg-primary text-primary-foreground text-[10px] font-mono font-semibold px-1.5 py-[3px] rounded-sm leading-none whitespace-nowrap shadow-sm">
+                  {currentFrame}
+                </div>
+              </div>
+              {/* Vertical line below badge */}
+              <div className="absolute left-1/2 -translate-x-1/2 w-px bg-primary/80" style={{ top: 20, bottom: 0 }} />
+            </div>
           </div>
 
           {/* Buttons row */}
