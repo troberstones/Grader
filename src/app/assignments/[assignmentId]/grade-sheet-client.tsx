@@ -6,12 +6,11 @@ import { Button } from "@/components/ui/button";
 import { LinkButton } from "@/components/ui/link-button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { StudentNavBar } from "@/components/shared/student-nav-bar";
 import { saveGrade, exportGradesCSV, clearGrade } from "@/actions/grades";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
-  ChevronLeft,
-  ChevronRight,
   Download,
   RotateCcw,
   CheckCircle2,
@@ -225,11 +224,6 @@ export function GradeSheetClient({
   const gradedCount = students.filter((s) => s.grade?.status === "graded").length;
   const pct = students.length > 0 ? Math.round((gradedCount / students.length) * 100) : 0;
 
-  // Nav between students
-  const currentIdx = students.findIndex((s) => s.id === selectedStudentId);
-  const prevStudent = currentIdx > 0 ? students[currentIdx - 1] : null;
-  const nextStudent = currentIdx < students.length - 1 ? students[currentIdx + 1] : null;
-
   type Level = { id: number; level: number; label: string; description: string; points: number };
 
   // Levels ordered high→low for display
@@ -310,65 +304,33 @@ export function GradeSheetClient({
         <div className="flex-1 flex flex-col min-w-0">
           {selectedStudent ? (
             <>
-              {/* Student header */}
-              <div className="px-6 py-3 border-b flex items-center justify-between gap-4 bg-muted/30">
-                <div className="flex items-center gap-3">
-                  <div>
-                    <div className="font-semibold">{selectedStudent.name}</div>
-                    {selectedStudent.netId && (
-                      <div className="text-xs text-muted-foreground">{selectedStudent.netId}</div>
-                    )}
-                  </div>
-                  <StatusBadge status={selectedStudent.grade?.status ?? "ungraded"} />
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {/* Prev / Next */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => prevStudent && selectStudent(prevStudent.id)}
-                    disabled={!prevStudent}
-                    title="Previous student"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    {currentIdx + 1} / {students.length}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => nextStudent && selectStudent(nextStudent.id)}
-                    disabled={!nextStudent}
-                    title="Next student"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-
-                  {/* Reset */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={handleClear}
-                    disabled={saving || !selectedStudent.grade}
-                    title="Clear grade"
-                  >
-                    <RotateCcw className="h-4 w-4" />
-                  </Button>
-
-                  {/* Review — links to the review page with this student pre-selected */}
-                  <LinkButton
-                    href={`/assignments/${assignment.id}/review?studentId=${selectedStudentId}`}
-                    variant="outline"
-                    size="sm"
-                    className="ml-1"
-                  >
-                    <Video className="h-3.5 w-3.5" />
-                    Review
-                  </LinkButton>
-                </div>
-              </div>
+              {/* Student nav — same component as review page for consistent UX */}
+              <StudentNavBar
+                students={students}
+                selectedStudentId={selectedStudentId}
+                onSelect={selectStudent}
+                actions={
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={handleClear}
+                      disabled={saving || !selectedStudent.grade}
+                      title="Clear grade"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                    </Button>
+                    <LinkButton
+                      href={`/assignments/${assignment.id}/review?studentId=${selectedStudentId}`}
+                      variant="outline"
+                      size="sm"
+                    >
+                      <Video className="h-3.5 w-3.5" />
+                      Review
+                    </LinkButton>
+                  </>
+                }
+              />
 
               {/* Rubric table */}
               {criteria.length > 0 ? (

@@ -10,9 +10,10 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { CheckCircle2, Clock, Circle, Users, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, ClipboardList } from "lucide-react";
+import { CheckCircle2, Clock, Circle, Users, ZoomIn, ZoomOut, ClipboardList } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LinkButton } from "@/components/ui/link-button";
+import { StudentNavBar } from "@/components/shared/student-nav-bar";
 import { UploadZone } from "@/components/review/upload-zone";
 import { AnnotationToolbar, type AnnotationTool } from "@/components/review/annotation-toolbar";
 import { AnnotationCanvas, type AnnotationCanvasHandle } from "@/components/review/annotation-canvas";
@@ -461,69 +462,53 @@ export function ReviewClient({ assignment, students, initialSubmissions, initial
       <div ref={mediaAreaRef} className="flex-1 min-w-0 flex flex-col overflow-hidden bg-muted/20">
         {selectedStudent && (
           <>
-            {/* Student nav + zoom controls */}
-            <div className="shrink-0 px-4 py-2 border-b flex items-center gap-3 bg-background">
-              <Button
-                variant="ghost" size="icon"
-                onClick={() => prevStudent && selectStudent(prevStudent.id)}
-                disabled={!prevStudent}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <span className="text-sm font-medium flex-1 text-center">
-                {selectedStudent.name}
-                <span className="text-muted-foreground ml-2 text-xs">
-                  ({currentIdx + 1}/{students.length})
-                </span>
-              </span>
-              <Button
-                variant="ghost" size="icon"
-                onClick={() => nextStudent && selectStudent(nextStudent.id)}
-                disabled={!nextStudent}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
+            {/* Student nav — same component as grade sheet for consistent UX */}
+            <StudentNavBar
+              students={students}
+              selectedStudentId={selectedStudentId}
+              onSelect={selectStudent}
+              actions={
+                <>
+                  <LinkButton
+                    href={`/assignments/${assignment.id}?studentId=${selectedStudentId ?? ""}`}
+                    variant="outline"
+                    size="sm"
+                  >
+                    <ClipboardList className="h-3.5 w-3.5" />
+                    Grade Sheet
+                  </LinkButton>
 
-              {/* Grade Sheet link — syncs current student back to grade sheet */}
-              <LinkButton
-                href={`/assignments/${assignment.id}?studentId=${selectedStudentId ?? ""}`}
-                variant="outline"
-                size="sm"
-                className="ml-2"
-              >
-                <ClipboardList className="h-3.5 w-3.5" />
-                Grade Sheet
-              </LinkButton>
-
-              {/* Zoom controls */}
-              {submission && (
-                <div className="flex items-center gap-1 ml-2 border-l pl-3">
-                  <button
-                    onClick={zoomOut}
-                    disabled={zoom <= ZOOM_STEPS[0]}
-                    className="p-1 rounded hover:bg-muted disabled:opacity-30 transition-colors"
-                    title="Zoom out (Ctrl+scroll)"
-                  >
-                    <ZoomOut className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => setZoom(1)}
-                    className="text-xs tabular-nums w-10 text-center py-0.5 rounded hover:bg-muted transition-colors"
-                    title="Reset to fit"
-                  >
-                    {zoom === 1 ? "Fit" : `${Math.round(zoom * 100)}%`}
-                  </button>
-                  <button
-                    onClick={zoomIn}
-                    disabled={zoom >= ZOOM_STEPS[ZOOM_STEPS.length - 1]}
-                    className="p-1 rounded hover:bg-muted disabled:opacity-30 transition-colors"
-                    title="Zoom in (Ctrl+scroll)"
-                  >
-                    <ZoomIn className="h-4 w-4" />
-                  </button>
-                </div>
-              )}
-            </div>
+                  {/* Zoom controls */}
+                  {submission && (
+                    <div className="flex items-center gap-1 ml-1 border-l pl-2">
+                      <button
+                        onClick={zoomOut}
+                        disabled={zoom <= ZOOM_STEPS[0]}
+                        className="p-1 rounded hover:bg-muted disabled:opacity-30 transition-colors"
+                        title="Zoom out (Ctrl+scroll)"
+                      >
+                        <ZoomOut className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => setZoom(1)}
+                        className="text-xs tabular-nums w-10 text-center py-0.5 rounded hover:bg-muted transition-colors"
+                        title="Reset to fit"
+                      >
+                        {zoom === 1 ? "Fit" : `${Math.round(zoom * 100)}%`}
+                      </button>
+                      <button
+                        onClick={zoomIn}
+                        disabled={zoom >= ZOOM_STEPS[ZOOM_STEPS.length - 1]}
+                        className="p-1 rounded hover:bg-muted disabled:opacity-30 transition-colors"
+                        title="Zoom in (Ctrl+scroll)"
+                      >
+                        <ZoomIn className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+                </>
+              }
+            />
 
             {/* Media area */}
             {!submission ? (
