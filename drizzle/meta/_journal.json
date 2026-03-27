@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1774558641166,
+      "tag": "0000_loud_hitman",
+      "breakpoints": true
+    }
+  ]
+}

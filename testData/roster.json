@@ -1,0 +1,16 @@
+{
+  "course": "CSANM 354 — Advanced Shading",
+  "students": [
+    { "sortName": "Anderson, Blake",  "name": "Blake Anderson",  "netId": "bland42"  },
+    { "sortName": "Chen, Maya",       "name": "Maya Chen",       "netId": "mchen18"  },
+    { "sortName": "Davis, Jordan",    "name": "Jordan Davis",    "netId": "jdavis77" },
+    { "sortName": "Evans, Riley",     "name": "Riley Evans",     "netId": "revans5"  },
+    { "sortName": "Garcia, Sam",      "name": "Sam Garcia",      "netId": "sgarc21"  },
+    { "sortName": "Hill, Morgan",     "name": "Morgan Hill",     "netId": "mhill09"  },
+    { "sortName": "Jones, Casey",     "name": "Casey Jones",     "netId": "cjones3"  },
+    { "sortName": "Lee, Alex",        "name": "Alex Lee",        "netId": "alee56"   },
+    { "sortName": "Moore, Quinn",     "name": "Quinn Moore",     "netId": "qmoore2"  },
+    { "sortName": "Patel, Drew",      "name": "Drew Patel",      "netId": "dpatel14" },
+    { "sortName": "Torres, Avery",    "name": "Avery Torres",    "netId": "atorr88"  }
+  ]
+}

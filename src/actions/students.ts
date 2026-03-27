@@ -1,0 +1,138 @@
+"use server";
+
+import { db } from "@/db";
+import { students, courseEnrollments } from "@/db/schema";
+import { eq, and } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
+import { parseCSV } from "@/lib/csv";
+import { normalizeRosterRow } from "@/lib/learning-suite";
+import type { LMSRosterRow } from "@/types/learning-suite";
+
+export async function getStudentsForCourse(courseId: number) {
+  return db
+    .select({
+      id: students.id,
+      name: students.name,
+      sortName: students.sortName,
+      netId: students.netId,
+      email: students.email,
+      lmsStudentId: students.lmsStudentId,
+      enrolledAt: courseEnrollments.enrolledAt,
+    })
+    .from(courseEnrollments)
+    .innerJoin(students, eq(courseEnrollments.studentId, students.id))
+    .where(eq(courseEnrollments.courseId, courseId))
+    .orderBy(students.sortName);
+}
+
+export async function importRoster(courseId: number, csvText: string) {
+  const { data, errors } = parseCSV<LMSRosterRow>(csvText);
+
+  if (errors.length > 0) {
+    return { success: false, error: `CSV parse errors: ${errors.map((e) => e.message).join(", ")}`, imported: 0 };
+  }
+
+  let imported = 0;
+  let skipped = 0;
+
+  for (const row of data) {
+    const normalized = normalizeRosterRow(row);
+    if (!normalized) {
+      skipped++;
+      continue;
+    }
+
+    // Upsert student by netId if available, otherwise by name
+    let studentId: number;
+
+    if (normalized.netId) {
+      const existing = await db
+        .select()
+        .from(students)
+        .where(eq(students.netId, normalized.netId));
+
+      if (existing.length > 0) {
+        studentId = existing[0].id;
+        // Update name/email if changed
+        await db
+          .update(students)
+          .set({
+            name: normalized.name,
+            sortName: normalized.sortName,
+            email: normalized.email,
+            lmsStudentId: normalized.lmsStudentId,
+          })
+          .where(eq(students.id, studentId));
+      } else {
+        const result = await db
+          .insert(students)
+          .values({
+            name: normalized.name,
+            sortName: normalized.sortName,
+            netId: normalized.netId,
+            email: normalized.email,
+            lmsStudentId: normalized.lmsStudentId,
+          })
+          .returning();
+        studentId = result[0].id;
+      }
+    } else {
+      // No netId — insert new student
+      const result = await db
+        .insert(students)
+        .values({
+          name: normalized.name,
+          sortName: normalized.sortName,
+          email: normalized.email,
+          lmsStudentId: normalized.lmsStudentId,
+        })
+        .returning();
+      studentId = result[0].id;
+    }
+
+    // Enroll in course (ignore if already enrolled)
+    const existingEnrollment = await db
+      .select()
+      .from(courseEnrollments)
+      .where(
+        and(
+          eq(courseEnrollments.courseId, courseId),
+          eq(courseEnrollments.studentId, studentId)
+        )
+      );
+
+    if (existingEnrollment.length === 0) {
+      await db.insert(courseEnrollments).values({ courseId, studentId });
+    }
+
+    imported++;
+  }
+
+  revalidatePath(`/courses/${courseId}/roster`);
+  return { success: true, imported, skipped };
+}
+
+export async function addStudent(
+  courseId: number,
+  data: { name: string; sortName: string; netId?: string; email?: string }
+) {
+  const result = await db.insert(students).values(data).returning();
+  await db.insert(courseEnrollments).values({
+    courseId,
+    studentId: result[0].id,
+  });
+  revalidatePath(`/courses/${courseId}/roster`);
+  return result[0];
+}
+
+export async function removeEnrollment(courseId: number, studentId: number) {
+  await db
+    .delete(courseEnrollments)
+    .where(
+      and(
+        eq(courseEnrollments.courseId, courseId),
+        eq(courseEnrollments.studentId, studentId)
+      )
+    );
+  revalidatePath(`/courses/${courseId}/roster`);
+}
