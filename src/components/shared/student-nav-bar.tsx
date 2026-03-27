@@ -33,11 +33,11 @@ interface StudentNavBarProps {
 /**
  * Unified student navigation bar used on both the grade-sheet and review pages.
  *
- * Layout:  [◀]  name · netId  ● status  [x of n]  [▶]  │  [actions]  │  [pageLink]
+ * Layout:  [pageLink]  │  [◀]  name · netId  ● status  [x of n]  [▶]  │  [actions]
  *
- * • The arrows always flank the name — same muscle memory on both pages.
- * • pageLink is always the rightmost element at a fixed distance from the edge,
- *   so Review and Grade Sheet buttons are click-for-click in the same spot.
+ * • pageLink (Review ↔ Grade Sheet) is always the LEFTMOST element, well away
+ *   from the annotation toolbar that lives on the right of the review page.
+ * • Users learn: left = switch page context, right = page-specific tools.
  */
 export function StudentNavBar({
   students,
@@ -59,6 +59,18 @@ export function StudentNavBar({
         className
       )}
     >
+      {/*
+       * Cross-page link is FIRST (left edge), always away from the annotation
+       * toolbar that lives on the right side of the review page.
+       * Users learn: left = switch context, right = page-specific tools.
+       */}
+      {pageLink && (
+        <>
+          {pageLink}
+          <div className="w-px h-5 bg-border mx-1 shrink-0" />
+        </>
+      )}
+
       {/* ◀ Prev */}
       <button
         onClick={() => prev && onSelect(prev.id)}
@@ -95,19 +107,11 @@ export function StudentNavBar({
         <ChevronRight className="h-4 w-4" />
       </button>
 
-      {/* Page-specific utility actions (Reset, Zoom, …) */}
+      {/* Page-specific utility actions (Reset, Zoom, …) — right side */}
       {actions && (
         <>
           <div className="w-px h-5 bg-border mx-1 shrink-0" />
           {actions}
-        </>
-      )}
-
-      {/* Cross-page link — always last so its position is identical on both pages */}
-      {pageLink && (
-        <>
-          <div className="w-px h-5 bg-border mx-1 shrink-0" />
-          {pageLink}
         </>
       )}
     </div>
