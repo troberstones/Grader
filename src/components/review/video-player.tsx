@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -17,6 +18,8 @@ import {
   SkipForward,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +35,11 @@ interface VideoPlayerProps {
   annotationOverlay?: ReactNode;
   /** Set of frame numbers that have saved annotations — shown as markers on the ruler */
   annotatedFrames?: Set<number>;
+  hasPrevAnnotation?: boolean;
+  hasNextAnnotation?: boolean;
+  onZoomChange?: (zoom: number) => void;
+  onPrevAnnotation?: () => void;
+  onNextAnnotation?: () => void;
   onFrameChange?: (frame: number) => void;
   onReady?: (width: number, height: number, duration: number, fps: number) => void;
 }
@@ -40,7 +48,12 @@ const SPEEDS = [0.25, 0.5, 1, 1.5, 2];
 const MAX_VIDEO_DIM = 1920;
 
 export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
-  function VideoPlayer({ src, fps: fpsProp = 30, zoom = 1, annotationOverlay, annotatedFrames, onFrameChange, onReady }, ref) {
+  function VideoPlayer({
+    src, fps: fpsProp = 30, zoom = 1, annotationOverlay,
+    annotatedFrames, hasPrevAnnotation, hasNextAnnotation,
+    onZoomChange, onPrevAnnotation, onNextAnnotation,
+    onFrameChange, onReady,
+  }, ref) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const timelineRef = useRef<HTMLDivElement>(null);
     const videoAreaRef = useRef<HTMLDivElement>(null);
@@ -62,6 +75,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     const altScrubStartRef = useRef({ x: 0, time: 0 });
 
     const lastFrameRef = useRef(-1);
+
+    // Zoom ref + pending scroll for zoom-around-cursor
+    const zoomRef = useRef(zoom);
+    useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+    const pendingScrollRef = useRef<{ cx: number; cy: number; ratio: number } | null>(null);
 
     useImperativeHandle(ref, () => ({
       pause: () => { videoRef.current?.pause(); setPlaying(false); },
@@ -85,6 +103,38 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       ro.observe(el);
       return () => ro.disconnect();
     }, []);
+
+    // ── Ctrl/Cmd-scroll → zoom around cursor ──────────────────────────────────
+    useEffect(() => {
+      const el = videoAreaRef.current;
+      if (!el) return;
+      const onWheel = (e: WheelEvent) => {
+        if (!e.ctrlKey && !e.metaKey) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = el.getBoundingClientRect();
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        const prev = zoomRef.current;
+        const next = Math.max(0.25, Math.min(4, prev * Math.exp(-e.deltaY / 300)));
+        pendingScrollRef.current = { cx, cy, ratio: next / prev };
+        onZoomChange?.(next);
+      };
+      el.addEventListener("wheel", onWheel, { passive: false });
+      return () => el.removeEventListener("wheel", onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Keep cursor-under point stationary after zoom re-renders
+    useLayoutEffect(() => {
+      const adj = pendingScrollRef.current;
+      if (!adj) return;
+      pendingScrollRef.current = null;
+      const el = videoAreaRef.current;
+      if (!el) return;
+      el.scrollLeft = (el.scrollLeft + adj.cx) * adj.ratio - adj.cx;
+      el.scrollTop  = (el.scrollTop  + adj.cy) * adj.ratio - adj.cy;
+    }, [zoom]);
 
     // ── Alt/Option key tracker ────────────────────────────────────────────────
     useEffect(() => {
@@ -442,10 +492,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
 
           {/* Buttons row */}
           <div className="flex items-center gap-1">
-            <button onClick={seekToStart} title="Start" className="p-1 text-muted-foreground hover:text-foreground">
+            <button onClick={seekToStart} title="Jump to start" className="p-1 text-muted-foreground hover:text-foreground">
               <SkipBack className="h-3.5 w-3.5" />
             </button>
-            <button onClick={() => stepFrame(-1)} title="Back 1 frame" className="p-1 text-muted-foreground hover:text-foreground">
+            <button onClick={() => stepFrame(-1)} title="Back 1 frame  (←)" className="p-1 text-muted-foreground hover:text-foreground">
               <ChevronLeft className="h-4 w-4" />
             </button>
             <button
@@ -454,12 +504,34 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
             >
               {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 translate-x-px" />}
             </button>
-            <button onClick={() => stepFrame(1)} title="Forward 1 frame" className="p-1 text-muted-foreground hover:text-foreground">
+            <button onClick={() => stepFrame(1)} title="Forward 1 frame  (→)" className="p-1 text-muted-foreground hover:text-foreground">
               <ChevronRight className="h-4 w-4" />
             </button>
-            <button onClick={seekToEnd} title="End" className="p-1 text-muted-foreground hover:text-foreground">
+            <button onClick={seekToEnd} title="Jump to end" className="p-1 text-muted-foreground hover:text-foreground">
               <SkipForward className="h-3.5 w-3.5" />
             </button>
+
+            {/* Annotation jump buttons */}
+            {(onPrevAnnotation || onNextAnnotation) && (
+              <div className="flex items-center gap-0.5 ml-1 pl-1.5 border-l">
+                <button
+                  onClick={onPrevAnnotation}
+                  disabled={!hasPrevAnnotation}
+                  title="Previous annotated frame  (Shift+←)"
+                  className="p-1 rounded transition-colors disabled:opacity-25 text-primary hover:bg-primary/10"
+                >
+                  <ChevronsLeft className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={onNextAnnotation}
+                  disabled={!hasNextAnnotation}
+                  title="Next annotated frame  (Shift+→)"
+                  className="p-1 rounded transition-colors disabled:opacity-25 text-primary hover:bg-primary/10"
+                >
+                  <ChevronsRight className="h-4 w-4" />
+                </button>
+              </div>
+            )}
 
             <button
               onClick={toggleLoop}

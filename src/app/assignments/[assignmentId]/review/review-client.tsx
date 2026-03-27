@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -167,23 +168,10 @@ export function ReviewClient({ assignment, students, initialSubmissions }: Revie
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Ctrl+scroll / trackpad pinch to zoom (continuous, 1:1 with gesture) ──
-  useEffect(() => {
-    const el = mediaAreaRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      e.preventDefault();
-      // Exponential scaling so zoom feels proportional at all levels.
-      // k=300 is tuned so a typical trackpad pinch gesture (cumulative deltaY ~100)
-      // produces roughly a 2× zoom change, and feels 1:1 with finger spread.
-      setZoom((prev) => {
-        const factor = Math.exp(-e.deltaY / 300);
-        return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prev * factor));
-      });
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+  // Zoom is now handled inside each viewer (ImageViewer / VideoPlayer) so they
+  // can zoom around the cursor position. This is just the setter they call back up.
+  const handleZoomChange = useCallback((z: number) => {
+    setZoom(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)));
   }, []);
 
   // ── Auto-save current frame before switching student ─────────────────────
@@ -306,6 +294,76 @@ export function ReviewClient({ assignment, students, initialSubmissions }: Revie
     }
   }
 
+  // ── Navigation (derived early — used by keyboard handler below) ──────────
+  const currentIdx = students.findIndex((s) => s.id === selectedStudentId);
+  const prevStudent = currentIdx > 0 ? students[currentIdx - 1] : null;
+  const nextStudent = currentIdx < students.length - 1 ? students[currentIdx + 1] : null;
+
+  // ── Annotation frame navigation ──────────────────────────────────────────
+  function goPrevAnnotation() {
+    const frames = [...annotationMapRef.current.keys()]
+      .filter((k): k is number => k !== null)
+      .sort((a, b) => a - b);
+    const prev = [...frames].reverse().find((f) => f < (currentFrameRef.current ?? 0));
+    if (prev !== undefined) videoRef.current?.seekToFrame(prev);
+  }
+  function goNextAnnotation() {
+    const frames = [...annotationMapRef.current.keys()]
+      .filter((k): k is number => k !== null)
+      .sort((a, b) => a - b);
+    const next = frames.find((f) => f > (currentFrameRef.current ?? 0));
+    if (next !== undefined) videoRef.current?.seekToFrame(next);
+  }
+
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+  // Handler ref pattern: window listener registered once, body refreshed every
+  // render so it always closes over the latest state + derived values.
+  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  useEffect(() => {
+    keyHandlerRef.current = (e: KeyboardEvent) => {
+      // Don't intercept while typing in inputs or Fabric's hidden IText textarea
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement).isContentEditable) return;
+
+      const isVideo = submissionRef.current?.mediaType === "video";
+
+      switch (e.key) {
+        case "ArrowUp":
+          e.preventDefault();
+          if (prevStudent) selectStudent(prevStudent.id);
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          if (nextStudent) selectStudent(nextStudent.id);
+          break;
+        case "ArrowLeft":
+          if (!isVideo) break;
+          e.preventDefault();
+          if (e.shiftKey) goPrevAnnotation();
+          else videoRef.current?.seekToFrame(Math.max(0, (currentFrameRef.current ?? 0) - 1));
+          break;
+        case "ArrowRight":
+          if (!isVideo) break;
+          e.preventDefault();
+          if (e.shiftKey) goNextAnnotation();
+          else videoRef.current?.seekToFrame((currentFrameRef.current ?? 0) + 1);
+          break;
+        case "[":
+          setStrokeWidth((w) => Math.max(1, w - 1));
+          break;
+        case "]":
+          setStrokeWidth((w) => Math.min(40, w + 1));
+          break;
+      }
+    };
+  }); // no dep array — runs every render to stay fresh
+
+  useEffect(() => {
+    const dispatch = (e: KeyboardEvent) => keyHandlerRef.current(e);
+    window.addEventListener("keydown", dispatch);
+    return () => window.removeEventListener("keydown", dispatch);
+  }, []); // registered once
+
   // ── Annotated frames set (for timeline markers) ───────────────────────────
   const annotatedFrames = useMemo(() => {
     if (submission?.mediaType !== "video") return undefined;
@@ -331,10 +389,18 @@ export function ReviewClient({ assignment, students, initialSubmissions }: Revie
     });
   }
 
-  // ── Navigation ────────────────────────────────────────────────────────────
-  const currentIdx = students.findIndex((s) => s.id === selectedStudentId);
-  const prevStudent = currentIdx > 0 ? students[currentIdx - 1] : null;
-  const nextStudent = currentIdx < students.length - 1 ? students[currentIdx + 1] : null;
+  // ── Annotation nav availability ───────────────────────────────────────────
+  const hasPrevAnnotation = useMemo(() => {
+    if (!annotatedFrames) return false;
+    const cur = currentFrame ?? 0;
+    return [...annotatedFrames].some((f) => f < cur);
+  }, [annotatedFrames, currentFrame]);
+
+  const hasNextAnnotation = useMemo(() => {
+    if (!annotatedFrames) return false;
+    const cur = currentFrame ?? 0;
+    return [...annotatedFrames].some((f) => f > cur);
+  }, [annotatedFrames, currentFrame]);
 
   const submissionUrl = submission ? `/api/submissions/${submission.id}/file` : null;
   const canvasFps = submission?.fps ?? 30;
@@ -457,6 +523,7 @@ export function ReviewClient({ assignment, students, initialSubmissions }: Revie
                 key={selectedStudentId ?? 0}
                 src={submissionUrl!}
                 zoom={zoom}
+                onZoomChange={handleZoomChange}
                 canvasRef={canvasRef}
                 tool={activeTool}
                 color={activeColor}
@@ -472,6 +539,11 @@ export function ReviewClient({ assignment, students, initialSubmissions }: Revie
                   fps={canvasFps}
                   zoom={zoom}
                   annotatedFrames={annotatedFrames}
+                  hasPrevAnnotation={hasPrevAnnotation}
+                  hasNextAnnotation={hasNextAnnotation}
+                  onZoomChange={handleZoomChange}
+                  onPrevAnnotation={goPrevAnnotation}
+                  onNextAnnotation={goNextAnnotation}
                   onFrameChange={handleFrameChange}
                   onReady={handleVideoReady}
                   annotationOverlay={
@@ -526,6 +598,7 @@ export function ReviewClient({ assignment, students, initialSubmissions }: Revie
 function ImageViewer({
   src,
   zoom,
+  onZoomChange,
   canvasRef,
   tool,
   color,
@@ -535,6 +608,7 @@ function ImageViewer({
 }: {
   src: string;
   zoom: number;
+  onZoomChange: (z: number) => void;
   canvasRef: React.RefObject<AnnotationCanvasHandle | null>;
   tool: AnnotationTool;
   color: string;
@@ -546,6 +620,13 @@ function ImageViewer({
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   // Capped logical dimensions — canvas is always this size
   const [logicalSize, setLogicalSize] = useState({ width: 0, height: 0 });
+
+  // Ref of current zoom for wheel handler (avoids stale closure)
+  const zoomRef = useRef(zoom);
+  useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+
+  // Stored cursor info so the layout-effect can reposition scroll after zoom
+  const pendingScrollRef = useRef<{ cx: number; cy: number; ratio: number } | null>(null);
 
   // Track the container so fitScale updates on window resize
   useEffect(() => {
@@ -560,6 +641,40 @@ function ImageViewer({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Ctrl/Cmd-scroll → zoom around cursor position
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = el.getBoundingClientRect();
+      const cx = e.clientX - rect.left; // cursor in viewport coords
+      const cy = e.clientY - rect.top;
+      const prev = zoomRef.current;
+      const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prev * Math.exp(-e.deltaY / 300)));
+      pendingScrollRef.current = { cx, cy, ratio: next / prev };
+      onZoomChange(next);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // After zoom re-render, keep the cursor-under point stationary
+  useLayoutEffect(() => {
+    const adj = pendingScrollRef.current;
+    if (!adj) return;
+    pendingScrollRef.current = null;
+    const el = containerRef.current;
+    if (!el) return;
+    // (scrollLeft + cx) is the scroll-space coordinate under the cursor.
+    // Multiply by ratio to get the new scroll-space coord, then subtract cx.
+    el.scrollLeft = (el.scrollLeft + adj.cx) * adj.ratio - adj.cx;
+    el.scrollTop  = (el.scrollTop  + adj.cy) * adj.ratio - adj.cy;
+  }, [zoom]);
 
   function handleLoad(e: React.SyntheticEvent<HTMLImageElement>) {
     const img = e.currentTarget;
