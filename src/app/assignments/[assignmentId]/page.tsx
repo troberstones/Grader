@@ -5,7 +5,7 @@ import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
 import { GradeSheetClient } from "./grade-sheet-client";
-import { Calendar, BookOpen, Pencil } from "lucide-react";
+import { Calendar, BookOpen, Pencil, Video } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +54,10 @@ export default async function AssignmentGradeSheetPage({
             <LinkButton href={`/assignments/${assignment.id}/edit`} variant="outline">
               <Pencil className="mr-2 h-4 w-4" />
               Edit
+            </LinkButton>
+            <LinkButton href={`/assignments/${assignment.id}/review`} variant="outline">
+              <Video className="mr-2 h-4 w-4" />
+              Review
             </LinkButton>
             <LinkButton href={`/courses/${assignment.courseId}`} variant="outline">
               Back to Course

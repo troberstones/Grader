@@ -42,3 +42,12 @@ next-env.d.ts
 
 # app storage (uploads, db, thumbnails)
 /storage/
+
+# test media (local only — filenames may contain real student names)
+testData/**/*.png
+testData/**/*.jpg
+testData/**/*.jpeg
+testData/**/*.mp4
+testData/**/*.mov
+testData/**/*.gif
+testData/**/*.webm
