@@ -468,45 +468,44 @@ export function ReviewClient({ assignment, students, initialSubmissions, initial
               selectedStudentId={selectedStudentId}
               onSelect={selectStudent}
               actions={
-                <>
-                  <LinkButton
-                    href={`/assignments/${assignment.id}?studentId=${selectedStudentId ?? ""}`}
-                    variant="outline"
-                    size="sm"
-                  >
-                    <ClipboardList className="h-3.5 w-3.5" />
-                    Grade Sheet
-                  </LinkButton>
-
-                  {/* Zoom controls */}
-                  {submission && (
-                    <div className="flex items-center gap-1 ml-1 border-l pl-2">
-                      <button
-                        onClick={zoomOut}
-                        disabled={zoom <= ZOOM_STEPS[0]}
-                        className="p-1 rounded hover:bg-muted disabled:opacity-30 transition-colors"
-                        title="Zoom out (Ctrl+scroll)"
-                      >
-                        <ZoomOut className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => setZoom(1)}
-                        className="text-xs tabular-nums w-10 text-center py-0.5 rounded hover:bg-muted transition-colors"
-                        title="Reset to fit"
-                      >
-                        {zoom === 1 ? "Fit" : `${Math.round(zoom * 100)}%`}
-                      </button>
-                      <button
-                        onClick={zoomIn}
-                        disabled={zoom >= ZOOM_STEPS[ZOOM_STEPS.length - 1]}
-                        className="p-1 rounded hover:bg-muted disabled:opacity-30 transition-colors"
-                        title="Zoom in (Ctrl+scroll)"
-                      >
-                        <ZoomIn className="h-4 w-4" />
-                      </button>
-                    </div>
-                  )}
-                </>
+                /* Zoom controls — only shown when a submission is loaded */
+                submission ? (
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      onClick={zoomOut}
+                      disabled={zoom <= ZOOM_STEPS[0]}
+                      className="p-1.5 rounded hover:bg-muted disabled:opacity-25 transition-colors"
+                      title="Zoom out (Ctrl+scroll)"
+                    >
+                      <ZoomOut className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => setZoom(1)}
+                      className="text-xs tabular-nums w-10 text-center py-0.5 rounded hover:bg-muted transition-colors"
+                      title="Reset to fit"
+                    >
+                      {zoom === 1 ? "Fit" : `${Math.round(zoom * 100)}%`}
+                    </button>
+                    <button
+                      onClick={zoomIn}
+                      disabled={zoom >= ZOOM_STEPS[ZOOM_STEPS.length - 1]}
+                      className="p-1.5 rounded hover:bg-muted disabled:opacity-25 transition-colors"
+                      title="Zoom in (Ctrl+scroll)"
+                    >
+                      <ZoomIn className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : undefined
+              }
+              pageLink={
+                <LinkButton
+                  href={`/assignments/${assignment.id}?studentId=${selectedStudentId ?? ""}`}
+                  variant="outline"
+                  size="sm"
+                >
+                  <ClipboardList className="h-3.5 w-3.5" />
+                  Grade Sheet
+                </LinkButton>
               }
             />
 

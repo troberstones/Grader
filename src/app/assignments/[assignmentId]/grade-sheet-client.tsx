@@ -310,25 +310,25 @@ export function GradeSheetClient({
                 selectedStudentId={selectedStudentId}
                 onSelect={selectStudent}
                 actions={
-                  <>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={handleClear}
-                      disabled={saving || !selectedStudent.grade}
-                      title="Clear grade"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                    </Button>
-                    <LinkButton
-                      href={`/assignments/${assignment.id}/review?studentId=${selectedStudentId}`}
-                      variant="outline"
-                      size="sm"
-                    >
-                      <Video className="h-3.5 w-3.5" />
-                      Review
-                    </LinkButton>
-                  </>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={handleClear}
+                    disabled={saving || !selectedStudent.grade}
+                    title="Clear grade"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  </Button>
+                }
+                pageLink={
+                  <LinkButton
+                    href={`/assignments/${assignment.id}/review?studentId=${selectedStudentId}`}
+                    variant="outline"
+                    size="sm"
+                  >
+                    <Video className="h-3.5 w-3.5" />
+                    Review
+                  </LinkButton>
                 }
               />
 

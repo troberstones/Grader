@@ -16,24 +16,35 @@ interface StudentNavBarProps {
   selectedStudentId: number | null;
   /** Called when user clicks a prev/next arrow. May be async — fire-and-forget is fine. */
   onSelect: (id: number) => void;
-  /** Page-specific buttons placed after the divider (e.g. Review, Grade Sheet, Zoom). */
+  /**
+   * Page-specific utility controls (e.g. Reset icon, Zoom controls).
+   * Rendered between the navigation arrows and the page-link button.
+   */
   actions?: React.ReactNode;
+  /**
+   * The cross-page navigation button (Review ↔ Grade Sheet).
+   * Always rendered last, after its own divider, so it sits at the same
+   * right-edge position on both pages regardless of what actions are present.
+   */
+  pageLink?: React.ReactNode;
   className?: string;
 }
 
 /**
  * Unified student navigation bar used on both the grade-sheet and review pages.
  *
- * Layout:  [◀]  name · netId  ● status  [x of n]  [▶]  │  actions
+ * Layout:  [◀]  name · netId  ● status  [x of n]  [▶]  │  [actions]  │  [pageLink]
  *
- * The arrows always flank the student name so the controls are in the same
- * position regardless of which page the user is on.
+ * • The arrows always flank the name — same muscle memory on both pages.
+ * • pageLink is always the rightmost element at a fixed distance from the edge,
+ *   so Review and Grade Sheet buttons are click-for-click in the same spot.
  */
 export function StudentNavBar({
   students,
   selectedStudentId,
   onSelect,
   actions,
+  pageLink,
   className,
 }: StudentNavBarProps) {
   const idx = students.findIndex((s) => s.id === selectedStudentId);
@@ -84,11 +95,19 @@ export function StudentNavBar({
         <ChevronRight className="h-4 w-4" />
       </button>
 
-      {/* Divider + page-specific actions */}
+      {/* Page-specific utility actions (Reset, Zoom, …) */}
       {actions && (
         <>
           <div className="w-px h-5 bg-border mx-1 shrink-0" />
           {actions}
+        </>
+      )}
+
+      {/* Cross-page link — always last so its position is identical on both pages */}
+      {pageLink && (
+        <>
+          <div className="w-px h-5 bg-border mx-1 shrink-0" />
+          {pageLink}
         </>
       )}
     </div>
