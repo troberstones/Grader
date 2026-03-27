@@ -25,11 +25,16 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="w-56 shrink-0 border-r bg-card flex flex-col">
-      <div className="p-4 border-b">
-        <h1 className="text-lg font-bold tracking-tight">Art Grader</h1>
+    // No border-r — tonal separation via bg-sidebar (#0a0a0a) against bg (#0e0e0e)
+    <aside className="w-56 shrink-0 bg-sidebar flex flex-col">
+      {/* Wordmark — no border-b, spacing creates the break */}
+      <div className="px-5 pt-6 pb-5">
+        <span className="text-base font-bold tracking-widest uppercase text-primary">
+          Art Grader
+        </span>
       </div>
-      <nav className="flex-1 p-2 space-y-1">
+
+      <nav className="flex-1 px-3 pb-4 space-y-0.5">
         {navItems.map(({ href, label, icon: Icon }) => {
           const isActive =
             href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -38,13 +43,19 @@ export function Sidebar() {
               key={href}
               href={href}
               className={cn(
-                "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-150",
                 isActive
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  // Active: orange text + very subtle tinted bg — the accent "pop"
+                  ? "text-primary bg-primary/10"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
               )}
             >
-              <Icon className="h-4 w-4" />
+              <Icon
+                className={cn(
+                  "h-4 w-4 shrink-0 transition-colors",
+                  isActive ? "text-primary" : ""
+                )}
+              />
               {label}
             </Link>
           );
