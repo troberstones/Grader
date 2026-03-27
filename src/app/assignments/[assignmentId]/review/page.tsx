@@ -6,16 +6,19 @@ import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
 import { ReviewClient } from "./review-client";
-import { ArrowLeft, BookOpen, ClipboardList } from "lucide-react";
+import { ArrowLeft, BookOpen } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function ReviewPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ assignmentId: string }>;
+  searchParams: Promise<{ studentId?: string }>;
 }) {
-  const { assignmentId } = await params;
+  const [{ assignmentId }, { studentId }] = await Promise.all([params, searchParams]);
+  const initialStudentId = studentId ? Number(studentId) : undefined;
   const [assignment, students, submissions] = await Promise.all([
     getAssignment(Number(assignmentId)),
     getGradeSheet(Number(assignmentId)),
@@ -38,16 +41,10 @@ export default async function ReviewPage({
           </span>
         }
         actions={
-          <div className="flex gap-2">
-            <LinkButton href={`/assignments/${assignment.id}`} variant="outline">
-              <ClipboardList className="h-4 w-4" />
-              Grade Sheet
-            </LinkButton>
-            <LinkButton href={`/courses/${assignment.courseId}`} variant="outline">
-              <ArrowLeft className="h-4 w-4" />
-              Back to Course
-            </LinkButton>
-          </div>
+          <LinkButton href={`/courses/${assignment.courseId}`} variant="outline">
+            <ArrowLeft className="h-4 w-4" />
+            Back to Course
+          </LinkButton>
         }
       />
 
@@ -55,6 +52,7 @@ export default async function ReviewPage({
         assignment={assignment}
         students={students}
         initialSubmissions={submissionMap}
+        initialStudentId={initialStudentId}
       />
     </PageContainer>
   );

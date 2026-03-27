@@ -10,8 +10,9 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { CheckCircle2, Clock, Circle, Users, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from "lucide-react";
+import { CheckCircle2, Clock, Circle, Users, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, ClipboardList } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LinkButton } from "@/components/ui/link-button";
 import { UploadZone } from "@/components/review/upload-zone";
 import { AnnotationToolbar, type AnnotationTool } from "@/components/review/annotation-toolbar";
 import { AnnotationCanvas, type AnnotationCanvasHandle } from "@/components/review/annotation-canvas";
@@ -42,6 +43,7 @@ interface ReviewClientProps {
   assignment: Assignment;
   students: StudentWithGrade[];
   initialSubmissions: Record<number, SubmissionRow>;
+  initialStudentId?: number;
 }
 
 // Used only by the +/- buttons; trackpad pinch uses continuous exponential zoom
@@ -50,8 +52,12 @@ const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 4;
 const MAX_CANVAS_DIM = 2048;
 
-export function ReviewClient({ assignment, students, initialSubmissions }: ReviewClientProps) {
-  const [selectedStudentId, setSelectedStudentId] = useState<number | null>(students[0]?.id ?? null);
+export function ReviewClient({ assignment, students, initialSubmissions, initialStudentId }: ReviewClientProps) {
+  const [selectedStudentId, setSelectedStudentId] = useState<number | null>(
+    (initialStudentId ? students.find((s) => s.id === initialStudentId)?.id : undefined)
+    ?? students[0]?.id
+    ?? null
+  );
   const [submissions, setSubmissions] = useState<Record<number, SubmissionRow>>(initialSubmissions);
   const [annotationMap, setAnnotationMap] = useState<Map<number | null, string>>(new Map());
   const [currentFrame, setCurrentFrame] = useState<number | null>(null);
@@ -477,6 +483,17 @@ export function ReviewClient({ assignment, students, initialSubmissions }: Revie
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>
+
+              {/* Grade Sheet link — syncs current student back to grade sheet */}
+              <LinkButton
+                href={`/assignments/${assignment.id}?studentId=${selectedStudentId ?? ""}`}
+                variant="outline"
+                size="sm"
+                className="ml-2"
+              >
+                <ClipboardList className="h-3.5 w-3.5" />
+                Grade Sheet
+              </LinkButton>
 
               {/* Zoom controls */}
               {submission && (

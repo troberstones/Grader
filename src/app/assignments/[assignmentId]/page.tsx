@@ -5,16 +5,19 @@ import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
 import { GradeSheetClient } from "./grade-sheet-client";
-import { Calendar, BookOpen, Pencil, Video } from "lucide-react";
+import { Calendar, BookOpen, Pencil } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function AssignmentGradeSheetPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ assignmentId: string }>;
+  searchParams: Promise<{ studentId?: string }>;
 }) {
-  const { assignmentId } = await params;
+  const [{ assignmentId }, { studentId }] = await Promise.all([params, searchParams]);
+  const initialStudentId = studentId ? Number(studentId) : undefined;
   const [assignment, students] = await Promise.all([
     getAssignment(Number(assignmentId)),
     getGradeSheet(Number(assignmentId)),
@@ -55,10 +58,6 @@ export default async function AssignmentGradeSheetPage({
               <Pencil className="mr-2 h-4 w-4" />
               Edit
             </LinkButton>
-            <LinkButton href={`/assignments/${assignment.id}/review`} variant="outline">
-              <Video className="mr-2 h-4 w-4" />
-              Review
-            </LinkButton>
             <LinkButton href={`/courses/${assignment.courseId}`} variant="outline">
               Back to Course
             </LinkButton>
@@ -71,6 +70,7 @@ export default async function AssignmentGradeSheetPage({
         students={students}
         gradedCount={gradedCount}
         inProgressCount={inProgressCount}
+        initialStudentId={initialStudentId}
       />
     </PageContainer>
   );

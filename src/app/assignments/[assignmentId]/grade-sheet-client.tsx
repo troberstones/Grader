@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LinkButton } from "@/components/ui/link-button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { saveGrade, exportGradesCSV, clearGrade } from "@/actions/grades";
@@ -17,6 +18,7 @@ import {
   Clock,
   Circle,
   Users,
+  Video,
 } from "lucide-react";
 import type { StudentWithGrade } from "@/actions/grades";
 import type { getAssignment } from "@/actions/assignments";
@@ -28,6 +30,7 @@ interface GradeSheetClientProps {
   students: StudentWithGrade[];
   gradedCount: number;
   inProgressCount: number;
+  initialStudentId?: number;
 }
 
 // Local state for one student's entries: criteriaId → { levelId, score }
@@ -38,13 +41,30 @@ export function GradeSheetClient({
   students: initialStudents,
   gradedCount: initialGraded,
   inProgressCount: initialInProgress,
+  initialStudentId,
 }: GradeSheetClientProps) {
   const [students, setStudents] = useState(initialStudents);
+
+  // If the caller passed a studentId (from ?studentId= param), start there;
+  // otherwise fall back to the first student in the list.
+  const startStudent =
+    (initialStudentId
+      ? initialStudents.find((s) => s.id === initialStudentId)
+      : undefined) ?? initialStudents[0];
+
   const [selectedStudentId, setSelectedStudentId] = useState<number | null>(
-    initialStudents[0]?.id ?? null
+    startStudent?.id ?? null
   );
-  const [entryMap, setEntryMap] = useState<EntryMap>({});
-  const [feedback, setFeedback] = useState("");
+  const [entryMap, setEntryMap] = useState<EntryMap>(() => {
+    const map: EntryMap = {};
+    for (const entry of startStudent?.grade?.entries ?? []) {
+      if (entry.levelId !== null && entry.score !== null) {
+        map[entry.criteriaId] = { levelId: entry.levelId, score: entry.score };
+      }
+    }
+    return map;
+  });
+  const [feedback, setFeedback] = useState(startStudent?.grade?.feedback ?? "");
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -336,6 +356,17 @@ export function GradeSheetClient({
                   >
                     <RotateCcw className="h-4 w-4" />
                   </Button>
+
+                  {/* Review — links to the review page with this student pre-selected */}
+                  <LinkButton
+                    href={`/assignments/${assignment.id}/review?studentId=${selectedStudentId}`}
+                    variant="outline"
+                    size="sm"
+                    className="ml-1"
+                  >
+                    <Video className="h-3.5 w-3.5" />
+                    Review
+                  </LinkButton>
                 </div>
               </div>
 
