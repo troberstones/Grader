@@ -3,19 +3,10 @@
 import * as React from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-export interface NavStudent {
-  id: number;
-  name: string;
-  netId?: string | null;
-  grade?: { status: string } | null;
-}
+import type { GradeStatus } from "@/types/grading";
+import { useGrading } from "./grading-context";
 
 interface StudentNavBarProps {
-  students: NavStudent[];
-  selectedStudentId: number | null;
-  /** Called when user clicks a prev/next arrow. May be async — fire-and-forget is fine. */
-  onSelect: (id: number) => void;
   /**
    * Page-specific utility controls (e.g. Reset icon, Zoom controls).
    * Rendered between the navigation arrows and the page-link button.
@@ -32,6 +23,7 @@ interface StudentNavBarProps {
 
 /**
  * Unified student navigation bar used on both the grade-sheet and review pages.
+ * Reads students and the current selection directly from GradingContext.
  *
  * Layout:  [pageLink]  │  [◀]  name · netId  ● status  [x of n]  [▶]  │  [actions]
  *
@@ -39,14 +31,9 @@ interface StudentNavBarProps {
  *   from the annotation toolbar that lives on the right of the review page.
  * • Users learn: left = switch page context, right = page-specific tools.
  */
-export function StudentNavBar({
-  students,
-  selectedStudentId,
-  onSelect,
-  actions,
-  pageLink,
-  className,
-}: StudentNavBarProps) {
+export function StudentNavBar({ actions, pageLink, className }: StudentNavBarProps) {
+  const { students, selectedStudentId, selectStudent } = useGrading();
+
   const idx = students.findIndex((s) => s.id === selectedStudentId);
   const student = idx >= 0 ? students[idx] : null;
   const prev = idx > 0 ? students[idx - 1] : null;
@@ -56,7 +43,7 @@ export function StudentNavBar({
     <div
       className={cn(
         "shrink-0 h-11 px-3 border-b flex items-center gap-1.5 bg-background",
-        className
+        className,
       )}
     >
       {/*
@@ -73,7 +60,7 @@ export function StudentNavBar({
 
       {/* ◀ Prev */}
       <button
-        onClick={() => prev && onSelect(prev.id)}
+        onClick={() => prev && selectStudent(prev.id)}
         disabled={!prev}
         title="Previous student (↑)"
         className="p-1.5 rounded hover:bg-muted disabled:opacity-25 transition-colors shrink-0"
@@ -89,7 +76,7 @@ export function StudentNavBar({
             {student.netId}
           </span>
         )}
-        <StatusDot status={student?.grade?.status ?? "ungraded"} />
+        <StatusDot status={(student?.grade?.status ?? "ungraded") as GradeStatus} />
       </div>
 
       {/* x of n */}
@@ -99,7 +86,7 @@ export function StudentNavBar({
 
       {/* ▶ Next */}
       <button
-        onClick={() => next && onSelect(next.id)}
+        onClick={() => next && selectStudent(next.id)}
         disabled={!next}
         title="Next student (↓)"
         className="p-1.5 rounded hover:bg-muted disabled:opacity-25 transition-colors shrink-0"
@@ -118,7 +105,7 @@ export function StudentNavBar({
   );
 }
 
-function StatusDot({ status }: { status: string }) {
+function StatusDot({ status }: { status: GradeStatus }) {
   return (
     <span
       title={status === "graded" ? "Graded" : status === "in_progress" ? "In progress" : "Ungraded"}
@@ -126,7 +113,7 @@ function StatusDot({ status }: { status: string }) {
         "inline-block h-1.5 w-1.5 rounded-full shrink-0",
         status === "graded"      && "bg-green-500",
         status === "in_progress" && "bg-yellow-500",
-        status === "ungraded"    && "bg-muted-foreground/30"
+        status === "ungraded"    && "bg-muted-foreground/30",
       )}
     />
   );

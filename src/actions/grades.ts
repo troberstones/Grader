@@ -11,6 +11,7 @@ import {
 } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import type { GradeStatus } from "@/types/grading";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,7 +26,7 @@ export type StudentGrade = {
   id: number;
   totalScore: number | null;
   feedback: string | null;
-  status: string;
+  status: GradeStatus;
   gradedAt: string | null;
   exportedAt: string | null;
   entries: GradeEntry[];
@@ -100,7 +101,7 @@ export async function getGradeSheet(assignmentId: number): Promise<StudentWithGr
             id: grade.id,
             totalScore: grade.totalScore,
             feedback: grade.feedback,
-            status: grade.status,
+            status: grade.status as GradeStatus,
             gradedAt: grade.gradedAt,
             exportedAt: grade.exportedAt,
             entries,
@@ -141,7 +142,7 @@ export async function saveGrade({
     criteriaCount = criteria.length;
   }
 
-  const status: "ungraded" | "in_progress" | "graded" =
+  const status: GradeStatus =
     entries.length === 0
       ? "ungraded"
       : criteriaCount > 0 && entries.length >= criteriaCount

@@ -1,6 +1,5 @@
 import { notFound } from "next/navigation";
 import { getAssignment } from "@/actions/assignments";
-import { getGradeSheet } from "@/actions/grades";
 import { getSubmissionsForAssignment } from "@/actions/submissions";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
@@ -12,22 +11,17 @@ export const dynamic = "force-dynamic";
 
 export default async function ReviewPage({
   params,
-  searchParams,
 }: {
   params: Promise<{ assignmentId: string }>;
-  searchParams: Promise<{ studentId?: string }>;
 }) {
-  const [{ assignmentId }, { studentId }] = await Promise.all([params, searchParams]);
-  const initialStudentId = studentId ? Number(studentId) : undefined;
-  const [assignment, students, submissions] = await Promise.all([
+  const { assignmentId } = await params;
+  const [assignment, submissions] = await Promise.all([
     getAssignment(Number(assignmentId)),
-    getGradeSheet(Number(assignmentId)),
     getSubmissionsForAssignment(Number(assignmentId)),
   ]);
 
   if (!assignment) notFound();
 
-  // Map submissions by studentId for quick lookup
   const submissionMap = Object.fromEntries(submissions.map((s) => [s.studentId, s]));
 
   return (
@@ -50,9 +44,7 @@ export default async function ReviewPage({
 
       <ReviewClient
         assignment={assignment}
-        students={students}
         initialSubmissions={submissionMap}
-        initialStudentId={initialStudentId}
       />
     </PageContainer>
   );

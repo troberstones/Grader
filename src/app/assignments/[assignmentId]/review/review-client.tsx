@@ -4,47 +4,28 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
-import { CheckCircle2, Clock, Circle, Users, ZoomIn, ZoomOut, ClipboardList } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { ZoomIn, ZoomOut, ClipboardList } from "lucide-react";
 import { LinkButton } from "@/components/ui/link-button";
 import { StudentNavBar } from "@/components/shared/student-nav-bar";
+import { useGrading } from "@/components/shared/grading-context";
+import { useAnnotations } from "@/hooks/use-annotations";
 import { UploadZone } from "@/components/review/upload-zone";
 import { AnnotationToolbar, type AnnotationTool } from "@/components/review/annotation-toolbar";
 import { AnnotationCanvas, type AnnotationCanvasHandle } from "@/components/review/annotation-canvas";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/review/video-player";
-import { getAnnotations, saveAnnotations, type AnnotationFrame } from "@/actions/annotations";
-import { updateSubmissionMeta } from "@/actions/submissions";
+import { updateSubmissionMeta, type SubmissionRow } from "@/actions/submissions";
 import type { getAssignment } from "@/actions/assignments";
-import type { StudentWithGrade } from "@/actions/grades";
 
 type Assignment = NonNullable<Awaited<ReturnType<typeof getAssignment>>>;
 
-type SubmissionRow = {
-  id: number;
-  assignmentId: number;
-  studentId: number;
-  filePath: string;
-  fileName: string;
-  fileType: string;
-  fileSize: number | null;
-  mediaType: string;
-  fps: number | null;
-  duration: number | null;
-  frameCount: number | null;
-  submittedAt: string;
-};
-
 interface ReviewClientProps {
   assignment: Assignment;
-  students: StudentWithGrade[];
   initialSubmissions: Record<number, SubmissionRow>;
-  initialStudentId?: number;
 }
 
 // Used only by the +/- buttons; trackpad pinch uses continuous exponential zoom
@@ -53,184 +34,102 @@ const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 4;
 const MAX_CANVAS_DIM = 2048;
 
-export function ReviewClient({ assignment, students, initialSubmissions, initialStudentId }: ReviewClientProps) {
-  const [selectedStudentId, setSelectedStudentId] = useState<number | null>(
-    (initialStudentId ? students.find((s) => s.id === initialStudentId)?.id : undefined)
-    ?? students[0]?.id
-    ?? null
-  );
+export function ReviewClient({ assignment, initialSubmissions }: ReviewClientProps) {
+  const router = useRouter();
+  const {
+    students,
+    selectedStudentId,
+    setSelectedStudentId,
+    selectHandlerRef,
+  } = useGrading();
+
   const [submissions, setSubmissions] = useState<Record<number, SubmissionRow>>(initialSubmissions);
-  const [annotationMap, setAnnotationMap] = useState<Map<number | null, string>>(new Map());
-  const [currentFrame, setCurrentFrame] = useState<number | null>(null);
-  const [isDirty, setIsDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [mediaSize, setMediaSize] = useState({ width: 0, height: 0 });
 
   // Tool state
   const [activeTool, setActiveTool] = useState<AnnotationTool>("pen");
   const [activeColor, setActiveColor] = useState("#ef4444");
   const [strokeWidth, setStrokeWidth] = useState(4);
 
-  // Canvas size for video overlay (set from VideoPlayer's onReady with capped dims)
-  const [mediaSize, setMediaSize] = useState({ width: 0, height: 0 });
-
   const canvasRef = useRef<AnnotationCanvasHandle>(null);
   const videoRef = useRef<VideoPlayerHandle>(null);
   const mediaAreaRef = useRef<HTMLDivElement>(null);
-  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Ref mirror of submission for use inside timer callbacks (avoids stale closure)
-  const submissionRef = useRef<SubmissionRow | null>(null);
-
-  // Pending annotation to load once the canvas fires onReady.
-  // undefined = nothing pending; null = load empty; string = load this JSON.
-  const pendingAnnotationRef = useRef<string | null | undefined>(undefined);
-  // Ref mirrors for async callbacks
-  const annotationMapRef = useRef<Map<number | null, string>>(new Map());
-  const currentFrameRef = useRef<number | null>(null);
 
   const selectedStudent = students.find((s) => s.id === selectedStudentId) ?? null;
   const submission = selectedStudentId ? submissions[selectedStudentId] ?? null : null;
 
-  // ── Keep refs in sync ─────────────────────────────────────────────────────
-  useEffect(() => { annotationMapRef.current = annotationMap; }, [annotationMap]);
-  useEffect(() => { currentFrameRef.current = currentFrame; }, [currentFrame]);
-  useEffect(() => { submissionRef.current = submission; }, [submission]);
+  // ── Annotation state — all owned by the hook ─────────────────────────────
+  const {
+    annotationMap,
+    currentFrame,
+    isDirty,
+    saving,
+    annotatedFrames,
+    hasPrevAnnotation,
+    hasNextAnnotation,
+    markDirty,
+    handleCanvasReady,
+    handleFrameChange,
+    loadForSubmission,
+    handleSave,
+    flushCurrentFrame,
+    resetForNewMedia,
+  } = useAnnotations(canvasRef);
 
-  // ── Auto-save: 1.5 s after the last stroke, silently persist ─────────────
-  useEffect(() => {
-    if (!isDirty) {
-      if (autoSaveTimerRef.current) { clearTimeout(autoSaveTimerRef.current); autoSaveTimerRef.current = null; }
-      return;
-    }
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(async () => {
-      const sub = submissionRef.current;
-      if (!sub) return;
-      try {
-        const json = canvasRef.current?.getCurrentJSON() ?? null;
-        const newMap = new Map(annotationMapRef.current);
-        if (json) newMap.set(currentFrameRef.current, json);
-        else newMap.delete(currentFrameRef.current);
-        setAnnotationMap(newMap);
-        annotationMapRef.current = newMap;
-        const frames: AnnotationFrame[] = Array.from(newMap.entries()).map(([k, v]) => ({
-          frameNumber: k,
-          annotationData: v,
-        }));
-        await saveAnnotations(sub.id, frames);
-        setIsDirty(false);
-      } catch {
-        // Silent — manual save is always available
-      }
-    }, 1500);
-    return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDirty]);
-
-  // ── Canvas ready callback: load any pending annotation ───────────────────
-  const handleCanvasReady = useCallback(() => {
-    const pending = pendingAnnotationRef.current;
-    if (pending !== undefined) {
-      pendingAnnotationRef.current = undefined;
-      canvasRef.current?.loadFrame(pending ?? null);
-    }
-  }, []);
-
-  // ── Load annotations for a submission ────────────────────────────────────
-  const loadStudentAnnotations = useCallback(async (sub: SubmissionRow | null, frame: number | null) => {
-    if (!sub) {
-      setAnnotationMap(new Map());
-      annotationMapRef.current = new Map();
-      const loaded = await canvasRef.current?.loadFrame(null);
-      if (!loaded) pendingAnnotationRef.current = null;
-      return;
-    }
-    try {
-      const frames = await getAnnotations(sub.id);
-      const map = new Map<number | null, string>();
-      for (const f of frames) map.set(f.frameNumber, f.annotationData);
-      setAnnotationMap(map);
-      annotationMapRef.current = map;
-      const json = map.get(frame) ?? null;
-      const loaded = await canvasRef.current?.loadFrame(json);
-      if (!loaded) pendingAnnotationRef.current = json ?? null;
-    } catch {
-      setAnnotationMap(new Map());
-      annotationMapRef.current = new Map();
-      const loaded = await canvasRef.current?.loadFrame(null);
-      if (!loaded) pendingAnnotationRef.current = null;
-    }
-  }, []);
-
-  // On mount: load first student's annotations
-  useEffect(() => {
-    if (!selectedStudentId) return;
-    const sub = submissions[selectedStudentId] ?? null;
-    const frame = sub?.mediaType === "video" ? 0 : null;
-    setCurrentFrame(frame);
-    currentFrameRef.current = frame;
-    setMediaSize({ width: 0, height: 0 });
-    loadStudentAnnotations(sub, frame);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Zoom is now handled inside each viewer (ImageViewer / VideoPlayer) so they
-  // can zoom around the cursor position. This is just the setter they call back up.
+  // ── Zoom helpers ──────────────────────────────────────────────────────────
   const handleZoomChange = useCallback((z: number) => {
     setZoom(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)));
   }, []);
 
-  // ── Auto-save current frame before switching student ─────────────────────
-  async function flushCurrentFrame() {
-    if (!isDirty || !submission) return;
-    const json = canvasRef.current?.getCurrentJSON() ?? null;
-    const newMap = new Map(annotationMapRef.current);
-    if (json) newMap.set(currentFrameRef.current, json);
-    else newMap.delete(currentFrameRef.current);
-    setAnnotationMap(newMap);
-    annotationMapRef.current = newMap;
-    const frames: AnnotationFrame[] = Array.from(newMap.entries()).map(([k, v]) => ({
-      frameNumber: k,
-      annotationData: v,
-    }));
-    await saveAnnotations(submission.id, frames).catch(() => {});
-    setIsDirty(false);
+  function zoomIn() {
+    setZoom((prev) => {
+      const next = ZOOM_STEPS.find((z) => z > prev + 0.01);
+      return next ?? ZOOM_STEPS[ZOOM_STEPS.length - 1];
+    });
+  }
+  function zoomOut() {
+    setZoom((prev) => {
+      const next = [...ZOOM_STEPS].reverse().find((z) => z < prev - 0.01);
+      return next ?? ZOOM_STEPS[0];
+    });
   }
 
+  // ── On mount: load first student's annotations ────────────────────────────
+  useEffect(() => {
+    if (!selectedStudentId) return;
+    const sub = submissions[selectedStudentId] ?? null;
+    const frame = sub?.mediaType === "video" ? 0 : null;
+    setMediaSize({ width: 0, height: 0 });
+    loadForSubmission(sub?.id ?? null, frame);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Student selection ─────────────────────────────────────────────────────
-  async function selectStudent(studentId: number) {
+  async function handleStudentSelect(studentId: number) {
     if (studentId === selectedStudentId) return;
-    await flushCurrentFrame();
+    await flushCurrentFrame(submission?.id ?? null);
 
     setSelectedStudentId(studentId);
     setMediaSize({ width: 0, height: 0 });
-    setIsDirty(false);
-    pendingAnnotationRef.current = undefined;
 
     const sub = submissions[studentId] ?? null;
     const frame = sub?.mediaType === "video" ? 0 : null;
-    setCurrentFrame(frame);
-    currentFrameRef.current = frame;
-    await loadStudentAnnotations(sub, frame);
+    await loadForSubmission(sub?.id ?? null, frame);
   }
 
-  // ── Frame change (video scrubbing) ────────────────────────────────────────
-  async function handleFrameChange(frame: number) {
-    if (frame === currentFrameRef.current) return;
-    const json = canvasRef.current?.getCurrentJSON() ?? null;
-    const newMap = new Map(annotationMapRef.current);
-    if (json) newMap.set(currentFrameRef.current, json);
-    else newMap.delete(currentFrameRef.current);
-    setAnnotationMap(newMap);
-    annotationMapRef.current = newMap;
-    setCurrentFrame(frame);
-    currentFrameRef.current = frame;
-    setIsDirty(false);
-    await canvasRef.current?.loadFrame(newMap.get(frame) ?? null);
-  }
+  // Stable wrapper + local ref pattern so the handler never goes stale
+  const selectGuardRef = useRef<(id: number) => void>(() => {});
+  selectGuardRef.current = (id) => { handleStudentSelect(id); };
 
-  // ── Video ready (get logical size for canvas) ─────────────────────────────
+  useLayoutEffect(() => {
+    selectHandlerRef.current = (id) => selectGuardRef.current(id);
+    return () => { selectHandlerRef.current = (id) => setSelectedStudentId(id); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Video ready (capture logical dimensions for canvas overlay) ───────────
   async function handleVideoReady(width: number, height: number, duration: number, fps: number) {
     setMediaSize({ width, height });
     if (submission) {
@@ -261,12 +160,8 @@ export function ReviewClient({ assignment, students, initialSubmissions, initial
       setSubmissions((prev) => ({ ...prev, [selectedStudentId]: newSub }));
 
       const frame = newSub.mediaType === "video" ? 0 : null;
-      setCurrentFrame(frame);
-      currentFrameRef.current = frame;
       setMediaSize({ width: 0, height: 0 });
-      setAnnotationMap(new Map());
-      annotationMapRef.current = new Map();
-      pendingAnnotationRef.current = null;
+      resetForNewMedia(frame, newSub.id);
       await canvasRef.current?.loadFrame(null);
       toast.success("Submission uploaded");
     } catch (err) {
@@ -276,90 +171,66 @@ export function ReviewClient({ assignment, students, initialSubmissions, initial
     }
   }
 
-  // ── Save annotations ──────────────────────────────────────────────────────
-  async function handleSave() {
-    if (!submission) return;
-    setSaving(true);
-    try {
-      const json = canvasRef.current?.getCurrentJSON() ?? null;
-      const newMap = new Map(annotationMapRef.current);
-      if (json) newMap.set(currentFrameRef.current, json);
-      else newMap.delete(currentFrameRef.current);
-      setAnnotationMap(newMap);
-      annotationMapRef.current = newMap;
-      const frames: AnnotationFrame[] = Array.from(newMap.entries()).map(([k, v]) => ({
-        frameNumber: k,
-        annotationData: v,
-      }));
-      await saveAnnotations(submission.id, frames);
-      setIsDirty(false);
-      toast.success("Annotations saved");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Save failed");
-    } finally {
-      setSaving(false);
-    }
+  // ── Annotation frame navigation (uses hook's annotationMap) ──────────────
+  function goPrevAnnotation() {
+    const frames = [...annotationMap.keys()]
+      .filter((k): k is number => k !== null)
+      .sort((a, b) => a - b);
+    const prev = [...frames].reverse().find((f) => f < (currentFrame ?? 0));
+    if (prev !== undefined) videoRef.current?.seekToFrame(prev);
+  }
+  function goNextAnnotation() {
+    const frames = [...annotationMap.keys()]
+      .filter((k): k is number => k !== null)
+      .sort((a, b) => a - b);
+    const next = frames.find((f) => f > (currentFrame ?? 0));
+    if (next !== undefined) videoRef.current?.seekToFrame(next);
   }
 
-  // ── Navigation (derived early — used by keyboard handler below) ──────────
+  // ── Navigation (for keyboard handler) ────────────────────────────────────
   const currentIdx = students.findIndex((s) => s.id === selectedStudentId);
   const prevStudent = currentIdx > 0 ? students[currentIdx - 1] : null;
   const nextStudent = currentIdx < students.length - 1 ? students[currentIdx + 1] : null;
 
-  // ── Annotation frame navigation ──────────────────────────────────────────
-  function goPrevAnnotation() {
-    const frames = [...annotationMapRef.current.keys()]
-      .filter((k): k is number => k !== null)
-      .sort((a, b) => a - b);
-    const prev = [...frames].reverse().find((f) => f < (currentFrameRef.current ?? 0));
-    if (prev !== undefined) videoRef.current?.seekToFrame(prev);
-  }
-  function goNextAnnotation() {
-    const frames = [...annotationMapRef.current.keys()]
-      .filter((k): k is number => k !== null)
-      .sort((a, b) => a - b);
-    const next = frames.find((f) => f > (currentFrameRef.current ?? 0));
-    if (next !== undefined) videoRef.current?.seekToFrame(next);
-  }
-
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
-  // Handler ref pattern: window listener registered once, body refreshed every
-  // render so it always closes over the latest state + derived values.
   const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
   useEffect(() => {
     keyHandlerRef.current = (e: KeyboardEvent) => {
-      // Don't intercept while typing in inputs or Fabric's hidden IText textarea
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement).isContentEditable) return;
 
-      const isVideo = submissionRef.current?.mediaType === "video";
+      const isVideo = submission?.mediaType === "video";
 
       switch (e.key) {
         case "ArrowUp":
           e.preventDefault();
-          if (prevStudent) selectStudent(prevStudent.id);
+          if (prevStudent) handleStudentSelect(prevStudent.id);
           break;
         case "ArrowDown":
           e.preventDefault();
-          if (nextStudent) selectStudent(nextStudent.id);
+          if (nextStudent) handleStudentSelect(nextStudent.id);
           break;
         case "ArrowLeft":
           if (!isVideo) break;
           e.preventDefault();
           if (e.shiftKey) goPrevAnnotation();
-          else videoRef.current?.seekToFrame(Math.max(0, (currentFrameRef.current ?? 0) - 1));
+          else videoRef.current?.seekToFrame(Math.max(0, (currentFrame ?? 0) - 1));
           break;
         case "ArrowRight":
           if (!isVideo) break;
           e.preventDefault();
           if (e.shiftKey) goNextAnnotation();
-          else videoRef.current?.seekToFrame((currentFrameRef.current ?? 0) + 1);
+          else videoRef.current?.seekToFrame((currentFrame ?? 0) + 1);
           break;
         case "[":
           setStrokeWidth((w) => Math.max(1, w - 1));
           break;
         case "]":
           setStrokeWidth((w) => Math.min(40, w + 1));
+          break;
+        case "t":
+          e.preventDefault();
+          router.push(`/assignments/${assignment.id}?studentId=${selectedStudentId ?? ""}`);
           break;
       }
     };
@@ -371,104 +242,18 @@ export function ReviewClient({ assignment, students, initialSubmissions, initial
     return () => window.removeEventListener("keydown", dispatch);
   }, []); // registered once
 
-  // ── Annotated frames set (for timeline markers) ───────────────────────────
-  const annotatedFrames = useMemo(() => {
-    if (submission?.mediaType !== "video") return undefined;
-    const s = new Set<number>();
-    for (const [k] of annotationMap) {
-      if (k !== null) s.add(k as number);
-    }
-    return s;
-  }, [annotationMap, submission?.mediaType]);
-
-  // ── Zoom helpers ──────────────────────────────────────────────────────────
-  function zoomIn() {
-    setZoom((prev) => {
-      // Find first step strictly above current (handles mid-step values from pinch)
-      const next = ZOOM_STEPS.find((z) => z > prev + 0.01);
-      return next ?? ZOOM_STEPS[ZOOM_STEPS.length - 1];
-    });
-  }
-  function zoomOut() {
-    setZoom((prev) => {
-      const next = [...ZOOM_STEPS].reverse().find((z) => z < prev - 0.01);
-      return next ?? ZOOM_STEPS[0];
-    });
-  }
-
-  // ── Annotation nav availability ───────────────────────────────────────────
-  const hasPrevAnnotation = useMemo(() => {
-    if (!annotatedFrames) return false;
-    const cur = currentFrame ?? 0;
-    return [...annotatedFrames].some((f) => f < cur);
-  }, [annotatedFrames, currentFrame]);
-
-  const hasNextAnnotation = useMemo(() => {
-    if (!annotatedFrames) return false;
-    const cur = currentFrame ?? 0;
-    return [...annotatedFrames].some((f) => f > cur);
-  }, [annotatedFrames, currentFrame]);
-
   const submissionUrl = submission ? `/api/submissions/${submission.id}/file` : null;
   const canvasFps = submission?.fps ?? 30;
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div
-      className="flex -mx-6 border-t"
-      style={{ height: "calc(100vh - 180px)" }}
-    >
-      {/* ── Left: student list ──────────────────────────────────────── */}
-      <div className="w-56 shrink-0 border-r flex flex-col">
-        <div className="px-3 py-2 border-b">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Users className="h-3 w-3" />
-            {students.length} students
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {students.map((student) => {
-            const hasSub = !!submissions[student.id];
-            const status = student.grade?.status ?? "ungraded";
-            return (
-              <button
-                key={student.id}
-                onClick={() => selectStudent(student.id)}
-                className={cn(
-                  "w-full text-left px-3 py-2.5 text-sm border-b last:border-b-0 transition-colors hover:bg-muted/50",
-                  student.id === selectedStudentId && "bg-primary/8 border-l-2 border-l-primary"
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <StatusIcon status={status} />
-                  <span className="flex-1 truncate font-medium">{student.sortName}</span>
-                </div>
-                <div className="ml-6 text-xs text-muted-foreground mt-0.5">
-                  {hasSub ? (
-                    <span className="text-green-600">
-                      {submissions[student.id]?.mediaType === "video" ? "🎬" : "🖼"} Submitted
-                    </span>
-                  ) : (
-                    <span className="opacity-50">No submission</span>
-                  )}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
+    <div className="flex h-full">
       {/* ── Center: media viewer ───────────────────────────────────── */}
       <div ref={mediaAreaRef} className="flex-1 min-w-0 flex flex-col overflow-hidden bg-muted/20">
         {selectedStudent && (
           <>
-            {/* Student nav — same component as grade sheet for consistent UX */}
             <StudentNavBar
-              students={students}
-              selectedStudentId={selectedStudentId}
-              onSelect={selectStudent}
               actions={
-                /* Zoom controls — only shown when a submission is loaded */
                 submission ? (
                   <div className="flex items-center gap-0.5">
                     <button
@@ -509,7 +294,6 @@ export function ReviewClient({ assignment, students, initialSubmissions, initial
               }
             />
 
-            {/* Media area */}
             {!submission ? (
               <UploadZone
                 submissionType={assignment.submissionType as "image" | "video" | "any"}
@@ -518,8 +302,6 @@ export function ReviewClient({ assignment, students, initialSubmissions, initial
                 studentName={selectedStudent.name}
               />
             ) : submission.mediaType === "image" ? (
-              // key forces full remount on student change so naturalSize resets and
-              // the old canvas never bleeds through to the next student
               <ImageViewer
                 key={selectedStudentId ?? 0}
                 src={submissionUrl!}
@@ -529,7 +311,7 @@ export function ReviewClient({ assignment, students, initialSubmissions, initial
                 tool={activeTool}
                 color={activeColor}
                 strokeWidth={strokeWidth}
-                onDirty={() => setIsDirty(true)}
+                onDirty={markDirty}
                 onCanvasReady={handleCanvasReady}
               />
             ) : (
@@ -556,7 +338,7 @@ export function ReviewClient({ assignment, students, initialSubmissions, initial
                         tool={activeTool}
                         color={activeColor}
                         strokeWidth={strokeWidth}
-                        onDirty={() => setIsDirty(true)}
+                        onDirty={markDirty}
                         onReady={handleCanvasReady}
                       />
                     ) : null
@@ -584,8 +366,8 @@ export function ReviewClient({ assignment, students, initialSubmissions, initial
         onColorChange={setActiveColor}
         onStrokeWidthChange={setStrokeWidth}
         onUndo={() => canvasRef.current?.undo()}
-        onClear={() => { canvasRef.current?.clear(); setIsDirty(true); }}
-        onSave={handleSave}
+        onClear={() => { canvasRef.current?.clear(); markDirty(); }}
+        onSave={() => submission && handleSave(submission.id)}
       />
     </div>
   );
@@ -619,17 +401,13 @@ function ImageViewer({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
-  // Capped logical dimensions — canvas is always this size
   const [logicalSize, setLogicalSize] = useState({ width: 0, height: 0 });
 
-  // Ref of current zoom for wheel handler (avoids stale closure)
   const zoomRef = useRef(zoom);
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
 
-  // Stored cursor info so the layout-effect can reposition scroll after zoom
   const pendingScrollRef = useRef<{ cx: number; cy: number; ratio: number } | null>(null);
 
-  // Track the container so fitScale updates on window resize
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -643,7 +421,6 @@ function ImageViewer({
     return () => ro.disconnect();
   }, []);
 
-  // Ctrl/Cmd-scroll → zoom around cursor position
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -652,7 +429,7 @@ function ImageViewer({
       e.preventDefault();
       e.stopPropagation();
       const rect = el.getBoundingClientRect();
-      const cx = e.clientX - rect.left; // cursor in viewport coords
+      const cx = e.clientX - rect.left;
       const cy = e.clientY - rect.top;
       const prev = zoomRef.current;
       const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prev * Math.exp(-e.deltaY / 300)));
@@ -665,14 +442,14 @@ function ImageViewer({
   }, []);
 
   // After zoom re-render, keep the cursor-under point stationary
-  useLayoutEffect(() => {
+  // useLayoutEffect is intentional here — must run synchronously after DOM update
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
     const adj = pendingScrollRef.current;
     if (!adj) return;
     pendingScrollRef.current = null;
     const el = containerRef.current;
     if (!el) return;
-    // (scrollLeft + cx) is the scroll-space coordinate under the cursor.
-    // Multiply by ratio to get the new scroll-space coord, then subtract cx.
     el.scrollLeft = (el.scrollLeft + adj.cx) * adj.ratio - adj.cx;
     el.scrollTop  = (el.scrollTop  + adj.cy) * adj.ratio - adj.cy;
   }, [zoom]);
@@ -682,7 +459,6 @@ function ImageViewer({
     const nw = img.naturalWidth || img.offsetWidth;
     const nh = img.naturalHeight || img.offsetHeight;
     if (!nw || !nh) return;
-    // Cap longest side to MAX_CANVAS_DIM so Fabric.js canvas isn't huge
     const s = Math.min(1, MAX_CANVAS_DIM / Math.max(nw, nh));
     setLogicalSize({ width: Math.round(nw * s), height: Math.round(nh * s) });
   }
@@ -690,20 +466,15 @@ function ImageViewer({
   const { width: lw, height: lh } = logicalSize;
   const { width: cw, height: ch } = containerSize;
 
-  // fitScale makes the image fill the container at zoom=1
   const fitScale = lw > 0 && cw > 0 && ch > 0 ? Math.min(cw / lw, ch / lh) : 1;
   const totalScale = fitScale * zoom;
   const scaledW = lw * totalScale;
   const scaledH = lh * totalScale;
-
-  // Center offset: when content is smaller than the viewport, push it to the middle.
-  // When content is larger, offset is 0 so scrolling starts from the edge.
   const offsetX = Math.max(0, (cw - scaledW) / 2);
   const offsetY = Math.max(0, (ch - scaledH) / 2);
 
   return (
     <div ref={containerRef} className="flex-1" style={{ overflow: "auto", position: "relative" }}>
-      {/* Invisible probe image: load fires once to capture natural dimensions */}
       {lw === 0 && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -718,16 +489,7 @@ function ImageViewer({
 
       {lw > 0 && cw > 0 && (
         <>
-          {/*
-           * Spacer div — sits in normal flow and defines the scroll area.
-           * flex / justify-content:center + overflow:auto has a known browser
-           * bug where content past the left/top edge is unreachable. Using an
-           * explicit spacer in normal flow and an absolutely positioned content
-           * wrapper avoids that entirely.
-           */}
           <div style={{ width: Math.max(scaledW, cw), height: Math.max(scaledH, ch) }} />
-
-          {/* Content wrapper — absolutely centered when small, top-left when zoomed */}
           <div
             style={{
               position: "absolute",
@@ -737,12 +499,6 @@ function ImageViewer({
               height: scaledH,
             }}
           >
-            {/*
-             * The transform scales image + canvas together from the top-left corner.
-             * Canvas dimensions never change — no Fabric.js reinit on zoom or resize.
-             * Fabric.js uses getBoundingClientRect() for mouse hit-testing which
-             * correctly reflects the CSS transform, so annotations always line up.
-             */}
             <div
               style={{
                 transform: `scale(${totalScale})`,
@@ -778,10 +534,4 @@ function ImageViewer({
       )}
     </div>
   );
-}
-
-function StatusIcon({ status }: { status: string }) {
-  if (status === "graded") return <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />;
-  if (status === "in_progress") return <Clock className="h-3.5 w-3.5 text-yellow-500 shrink-0" />;
-  return <Circle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />;
 }

@@ -1,6 +1,5 @@
 import { notFound } from "next/navigation";
 import { getAssignment } from "@/actions/assignments";
-import { getGradeSheet } from "@/actions/grades";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
@@ -11,22 +10,13 @@ export const dynamic = "force-dynamic";
 
 export default async function AssignmentGradeSheetPage({
   params,
-  searchParams,
 }: {
   params: Promise<{ assignmentId: string }>;
-  searchParams: Promise<{ studentId?: string }>;
 }) {
-  const [{ assignmentId }, { studentId }] = await Promise.all([params, searchParams]);
-  const initialStudentId = studentId ? Number(studentId) : undefined;
-  const [assignment, students] = await Promise.all([
-    getAssignment(Number(assignmentId)),
-    getGradeSheet(Number(assignmentId)),
-  ]);
+  const { assignmentId } = await params;
+  const assignment = await getAssignment(Number(assignmentId));
 
   if (!assignment) notFound();
-
-  const gradedCount = students.filter((s) => s.grade?.status === "graded").length;
-  const inProgressCount = students.filter((s) => s.grade?.status === "in_progress").length;
 
   return (
     <PageContainer>
@@ -65,13 +55,7 @@ export default async function AssignmentGradeSheetPage({
         }
       />
 
-      <GradeSheetClient
-        assignment={assignment}
-        students={students}
-        gradedCount={gradedCount}
-        inProgressCount={inProgressCount}
-        initialStudentId={initialStudentId}
-      />
+      <GradeSheetClient assignment={assignment} />
     </PageContainer>
   );
 }

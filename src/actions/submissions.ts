@@ -4,6 +4,9 @@ import { db } from "@/db";
 import { submissions } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 
+/** A single row from the submissions table, as returned by Drizzle. */
+export type SubmissionRow = typeof submissions.$inferSelect;
+
 export async function getSubmission(assignmentId: number, studentId: number) {
   const rows = await db
     .select()

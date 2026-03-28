@@ -11,6 +11,7 @@ import {
   Home,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isGradingRoute } from "@/lib/grading-routes";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: Home },
@@ -23,6 +24,10 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
+
+  // Hide the permanent sidebar on grading/review pages — those use the
+  // GradingShell layout with a hamburger drawer instead.
+  if (isGradingRoute(pathname)) return null;
 
   return (
     // No border-r — tonal separation via bg-sidebar (#0a0a0a) against bg (#0e0e0e)
