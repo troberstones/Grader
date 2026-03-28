@@ -425,14 +425,15 @@ function ImageViewer({
     const el = containerRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       e.stopPropagation();
       const rect = el.getBoundingClientRect();
       const cx = e.clientX - rect.left;
       const cy = e.clientY - rect.top;
       const prev = zoomRef.current;
-      const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prev * Math.exp(-e.deltaY / 300)));
+      // Trackpad pinch sends ctrlKey with small deltas; plain scroll sends larger deltas
+      const sensitivity = (e.ctrlKey || e.metaKey) ? 300 : 150;
+      const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prev * Math.exp(-e.deltaY / sensitivity)));
       pendingScrollRef.current = { cx, cy, ratio: next / prev };
       onZoomChange(next);
     };

@@ -75,7 +75,7 @@ export function GradingShell({
         {/* Main area: sidebar + page content */}
         <div className="flex flex-1 min-h-0">
           <StudentSidebar />
-          <div className="flex-1 min-w-0 overflow-auto">{children}</div>
+          <div className="flex-1 min-w-0 overflow-hidden">{children}</div>
         </div>
       </div>
     </GradingProvider>
