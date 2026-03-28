@@ -22,8 +22,9 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
-import { GradingProvider } from "./grading-context";
+import { GradingProvider, useGrading } from "./grading-context";
 import { StudentSidebar } from "./student-sidebar";
+import { useSync } from "@/hooks/use-sync";
 import type { StudentWithGrade } from "@/actions/grades";
 
 const navItems = [
@@ -37,6 +38,7 @@ const navItems = [
 
 interface GradingShellProps {
   students: StudentWithGrade[];
+  assignmentId: number;
   children: React.ReactNode;
 }
 
@@ -48,6 +50,7 @@ interface GradingShellProps {
  */
 export function GradingShell({
   students,
+  assignmentId,
   children,
 }: GradingShellProps) {
   const pathname = usePathname();
@@ -66,6 +69,7 @@ export function GradingShell({
       initialStudents={students}
       initialStudentId={initialStudentId}
     >
+      <SyncBridge assignmentId={assignmentId} />
       <div className="flex flex-col h-full">
         {/* Hamburger row */}
         <div className="shrink-0 px-3 py-2 flex items-center gap-2 border-b bg-sidebar">
@@ -80,6 +84,13 @@ export function GradingShell({
       </div>
     </GradingProvider>
   );
+}
+
+/** Rendered inside GradingProvider so it can access context. */
+function SyncBridge({ assignmentId }: { assignmentId: number }) {
+  const { selectedStudentId, selectStudent } = useGrading();
+  useSync(assignmentId, selectedStudentId, selectStudent);
+  return null;
 }
 
 function NavDrawer() {

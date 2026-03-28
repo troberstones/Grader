@@ -10,7 +10,7 @@ import { StudentNavBar } from "@/components/shared/student-nav-bar";
 import { useGrading } from "@/components/shared/grading-context";
 import { useGradeActions } from "@/hooks/use-grade-actions";
 import type { StudentWithGrade } from "@/actions/grades";
-import { toast } from "sonner"; // still needed for markComplete warning
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   Download,
@@ -60,6 +60,9 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
     (selectedStudent as StudentWithGrade | null)?.grade?.feedback ?? "",
   );
   const [dirty, setDirty] = useState(false);
+  // Ref so async callbacks always read current dirty state without stale closures.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
 
   // Load a student's saved grade into local state.
   // Casts students to StudentWithGrade[] to access entries/feedback —
@@ -82,15 +85,40 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
     [students],
   );
 
+  // ── Auto-save ─────────────────────────────────────────────────────────────
+  // handleSaveRef is reassigned every render so timer callbacks always call
+  // the version that closes over the current entryMap/feedback/etc.
+  const handleSaveRef = useRef<(markComplete?: boolean) => Promise<void>>(() => Promise.resolve());
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function scheduleAutoSave() {
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => {
+      autoSaveTimerRef.current = null;
+      void handleSaveRef.current(false);
+    }, 1500);
+  }
+
+  async function flushAutoSave() {
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    if (dirtyRef.current) {
+      await handleSaveRef.current(false);
+    }
+  }
+
   // Keep the latest version of the selection guard in a local ref so the
   // context-level handler wrapper never goes stale without needing re-registration.
   const guardRef = useRef<(id: number) => void>(() => {});
   guardRef.current = (studentId: number) => {
-    if (dirty) {
-      if (!confirm("You have unsaved changes. Discard them?")) return;
-    }
-    setSelectedStudentId(studentId);
-    loadStudent(studentId);
+    // Flush any pending auto-save before switching students.
+    void (async () => {
+      await flushAutoSave();
+      setSelectedStudentId(studentId);
+      loadStudent(studentId);
+    })();
   };
 
   // Register a stable wrapper once on mount; restore the default on unmount.
@@ -125,6 +153,7 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
       return { ...prev, [criteriaId]: { levelId, score } };
     });
     setDirty(true);
+    scheduleAutoSave();
   }
 
   const totalScore = Object.values(entryMap).reduce((sum, e) => sum + e.score, 0);
@@ -167,7 +196,7 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
       entries: entries.map((e) => ({ ...e, comment: null })),
     });
 
-    toast.success(markComplete ? "Graded ✓" : "Saved");
+    if (markComplete) toast.success("Graded ✓");
     setDirty(false);
 
     // Auto-advance to next ungraded student
@@ -180,6 +209,8 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
       }
     }
   }
+  // Always point the ref at the latest render's closure so timers stay fresh.
+  handleSaveRef.current = handleSave;
 
   async function handleClear() {
     if (!selectedStudentId) return;
@@ -340,6 +371,7 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
                       onChange={(e) => {
                         setFeedback(e.target.value);
                         setDirty(true);
+                        scheduleAutoSave();
                       }}
                       placeholder="Overall feedback for this student…"
                       rows={3}
@@ -359,21 +391,19 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
                       </div>
                     </div>
 
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={() => handleSave(false)}
-                        disabled={saving || !dirty}
-                      >
-                        {saving ? "Saving…" : "Save Draft"}
-                      </Button>
+                    <div className="flex items-center gap-3">
+                      {saving && (
+                        <span className="text-xs text-muted-foreground animate-pulse">
+                          Saving…
+                        </span>
+                      )}
                       <Button
                         onClick={() => handleSave(true)}
                         disabled={saving || !allGraded}
                         className="bg-green-600 hover:bg-green-700 text-white"
                       >
                         <CheckCircle2 className="h-4 w-4 mr-1.5" />
-                        {saving ? "Saving…" : "Mark Graded →"}
+                        Mark Graded →
                       </Button>
                     </div>
                   </div>

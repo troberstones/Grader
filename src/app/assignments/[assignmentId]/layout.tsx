@@ -14,7 +14,7 @@ export default async function AssignmentLayout({
   const students = await getGradeSheet(Number(assignmentId));
 
   return (
-    <GradingShell students={students}>
+    <GradingShell students={students} assignmentId={Number(assignmentId)}>
       {children}
     </GradingShell>
   );

@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type RefObject,
 } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -18,6 +19,7 @@ import { UploadZone } from "@/components/review/upload-zone";
 import { AnnotationToolbar, type AnnotationTool } from "@/components/review/annotation-toolbar";
 import { AnnotationCanvas, type AnnotationCanvasHandle } from "@/components/review/annotation-canvas";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/review/video-player";
+import { CanvasVideoPlayer, type CanvasVideoPlayerHandle } from "@/components/review/canvas-video-player";
 import { updateSubmissionMeta, type SubmissionRow } from "@/actions/submissions";
 import type { getAssignment } from "@/actions/assignments";
 
@@ -47,6 +49,8 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
   const [uploading, setUploading] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [mediaSize, setMediaSize] = useState({ width: 0, height: 0 });
+  /** A/B flag: false = original HTML player, true = canvas-transform player */
+  const [useCanvasPlayer, setUseCanvasPlayer] = useState(false);
 
   // Tool state
   const [activeTool, setActiveTool] = useState<AnnotationTool>("pen");
@@ -55,7 +59,24 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
 
   const canvasRef = useRef<AnnotationCanvasHandle>(null);
   const videoRef = useRef<VideoPlayerHandle>(null);
+  // Combined handle for the canvas-based player (satisfies both refs structurally)
+  const canvasVideoRef = useRef<CanvasVideoPlayerHandle>(null);
   const mediaAreaRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Returns the active annotation handle regardless of which player is mounted.
+   * CanvasVideoPlayerHandle is a structural superset of AnnotationCanvasHandle.
+   */
+  function getAnnotationHandle(): AnnotationCanvasHandle | null {
+    return useCanvasPlayer
+      ? (canvasVideoRef.current as unknown as AnnotationCanvasHandle | null)
+      : canvasRef.current;
+  }
+
+  /** Returns the active video control handle. */
+  function getVideoHandle(): VideoPlayerHandle | null {
+    return useCanvasPlayer ? canvasVideoRef.current : videoRef.current;
+  }
 
   const selectedStudent = students.find((s) => s.id === selectedStudentId) ?? null;
   const submission = selectedStudentId ? submissions[selectedStudentId] ?? null : null;
@@ -77,7 +98,12 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
     flushCurrentFrame,
     resetForNewMedia,
     queueAnnotationLoad,
-  } = useAnnotations(canvasRef);
+  // For canvas player the combined ref satisfies AnnotationCanvasHandle structurally
+  } = useAnnotations(
+    useCanvasPlayer
+      ? (canvasVideoRef as unknown as RefObject<AnnotationCanvasHandle | null>)
+      : canvasRef,
+  );
 
   // ── Zoom helpers ──────────────────────────────────────────────────────────
   const handleZoomChange = useCallback((z: number) => {
@@ -134,14 +160,16 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
 
   // ── Video ready (capture logical dimensions for canvas overlay) ───────────
   async function handleVideoReady(width: number, height: number, duration: number, fps: number) {
-    // If dimensions are changing (different video resolution), the AnnotationCanvas
-    // will reinitialize Fabric. Queue the current frame's annotation so it reloads
-    // automatically once onReady fires after Fabric recreates.
-    if (mediaSize.width > 0 && (mediaSize.width !== width || mediaSize.height !== height)) {
-      const json = annotationMap.get(currentFrame) ?? null;
-      queueAnnotationLoad(json);
+    if (!useCanvasPlayer) {
+      // HTML player: AnnotationCanvas may reinitialize Fabric if dimensions change.
+      // Queue the annotation so it reloads once Fabric fires onReady.
+      if (mediaSize.width > 0 && (mediaSize.width !== width || mediaSize.height !== height)) {
+        const json = annotationMap.get(currentFrame) ?? null;
+        queueAnnotationLoad(json);
+      }
+      setMediaSize({ width, height });
     }
-    setMediaSize({ width, height });
+    // Canvas player manages its own Fabric viewport — no mediaSize tracking needed.
     if (submission) {
       await updateSubmissionMeta(submission.id, {
         fps,
@@ -172,7 +200,7 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
       const frame = newSub.mediaType === "video" ? 0 : null;
       setMediaSize({ width: 0, height: 0 });
       resetForNewMedia(frame, newSub.id);
-      await canvasRef.current?.loadFrame(null);
+      await getAnnotationHandle()?.loadFrame(null);
       toast.success("Submission uploaded");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed");
@@ -187,14 +215,14 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
       .filter((k): k is number => k !== null)
       .sort((a, b) => a - b);
     const prev = [...frames].reverse().find((f) => f < (currentFrame ?? 0));
-    if (prev !== undefined) videoRef.current?.seekToFrame(prev);
+    if (prev !== undefined) getVideoHandle()?.seekToFrame(prev);
   }
   function goNextAnnotation() {
     const frames = [...annotationMap.keys()]
       .filter((k): k is number => k !== null)
       .sort((a, b) => a - b);
     const next = frames.find((f) => f > (currentFrame ?? 0));
-    if (next !== undefined) videoRef.current?.seekToFrame(next);
+    if (next !== undefined) getVideoHandle()?.seekToFrame(next);
   }
 
   // ── Navigation (for keyboard handler) ────────────────────────────────────
@@ -224,13 +252,13 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
           if (!isVideo) break;
           e.preventDefault();
           if (e.shiftKey) goPrevAnnotation();
-          else videoRef.current?.seekToFrame(Math.max(0, (currentFrame ?? 0) - 1));
+          else getVideoHandle()?.seekToFrame(Math.max(0, (currentFrame ?? 0) - 1));
           break;
         case "ArrowRight":
           if (!isVideo) break;
           e.preventDefault();
           if (e.shiftKey) goNextAnnotation();
-          else videoRef.current?.seekToFrame((currentFrame ?? 0) + 1);
+          else getVideoHandle()?.seekToFrame((currentFrame ?? 0) + 1);
           break;
         case "[":
           setStrokeWidth((w) => Math.max(1, w - 1));
@@ -289,6 +317,14 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
                     >
                       <ZoomIn className="h-4 w-4" />
                     </button>
+                    {/* A/B renderer toggle */}
+                    <button
+                      onClick={() => setUseCanvasPlayer((p) => !p)}
+                      className="ml-1 pl-1.5 border-l text-xs px-1.5 py-0.5 rounded hover:bg-muted transition-colors text-muted-foreground"
+                      title={useCanvasPlayer ? "Switch to HTML video renderer" : "Switch to canvas renderer (experimental)"}
+                    >
+                      {useCanvasPlayer ? "Canvas" : "HTML5"}
+                    </button>
                   </div>
                 ) : undefined
               }
@@ -324,6 +360,30 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
                 onDirty={markDirty}
                 onCanvasReady={handleCanvasReady}
               />
+            ) : useCanvasPlayer ? (
+              <div className="flex-1 min-h-0">
+                {/* Canvas renderer: draws video + annotations entirely on canvas.
+                    No CSS transforms. Fabric viewport transform aligns strokes. */}
+                <CanvasVideoPlayer
+                  ref={canvasVideoRef}
+                  src={submissionUrl!}
+                  fps={canvasFps}
+                  zoom={zoom}
+                  tool={activeTool}
+                  color={activeColor}
+                  strokeWidth={strokeWidth}
+                  onDirty={markDirty}
+                  onCanvasReady={handleCanvasReady}
+                  annotatedFrames={annotatedFrames}
+                  hasPrevAnnotation={hasPrevAnnotation}
+                  hasNextAnnotation={hasNextAnnotation}
+                  onZoomChange={handleZoomChange}
+                  onPrevAnnotation={goPrevAnnotation}
+                  onNextAnnotation={goNextAnnotation}
+                  onFrameChange={handleFrameChange}
+                  onReady={handleVideoReady}
+                />
+              </div>
             ) : (
               <div className="flex-1 min-h-0">
                 <VideoPlayer
@@ -375,8 +435,8 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
         onToolChange={setActiveTool}
         onColorChange={setActiveColor}
         onStrokeWidthChange={setStrokeWidth}
-        onUndo={() => canvasRef.current?.undo()}
-        onClear={() => { canvasRef.current?.clear(); markDirty(); }}
+        onUndo={() => getAnnotationHandle()?.undo()}
+        onClear={() => { getAnnotationHandle()?.clear(); markDirty(); }}
         onSave={() => submission && handleSave(submission.id)}
       />
     </div>

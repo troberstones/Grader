@@ -125,6 +125,18 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       lastFrameRef.current = -1;
     }, [src]);
 
+    // ── Cached-video fix: loadedmetadata may have fired before React attached ──
+    // When the browser serves the video from cache (readyState ≥ 1 with valid
+    // dimensions), the event fires synchronously before our listener is wired.
+    // This effect is declared AFTER the src-reset effect so it runs after the
+    // state has been zeroed — giving us the real dimensions as the final write.
+    useEffect(() => {
+      const v = videoRef.current;
+      if (!v || v.readyState < 1 || !v.videoWidth) return;
+      handleLoadedMetadata();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // ── Scroll → zoom around cursor ───────────────────────────────────────────
     useEffect(() => {
       const el = videoAreaRef.current;
