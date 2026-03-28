@@ -76,6 +76,7 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
     handleSave,
     flushCurrentFrame,
     resetForNewMedia,
+    queueAnnotationLoad,
   } = useAnnotations(canvasRef);
 
   // ── Zoom helpers ──────────────────────────────────────────────────────────
@@ -101,7 +102,6 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
     if (!selectedStudentId) return;
     const sub = submissions[selectedStudentId] ?? null;
     const frame = sub?.mediaType === "video" ? 0 : null;
-    setMediaSize({ width: 0, height: 0 });
     loadForSubmission(sub?.id ?? null, frame);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -112,7 +112,10 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
     await flushCurrentFrame(submission?.id ?? null);
 
     setSelectedStudentId(studentId);
-    setMediaSize({ width: 0, height: 0 });
+    // Don't reset mediaSize here — keeping AnnotationCanvas mounted prevents
+    // the Fabric reinit flash. If the new video has different dimensions,
+    // handleVideoReady will queue the annotation for reload after Fabric
+    // reinitializes with the new size.
 
     const sub = submissions[studentId] ?? null;
     const frame = sub?.mediaType === "video" ? 0 : null;
@@ -131,6 +134,13 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
 
   // ── Video ready (capture logical dimensions for canvas overlay) ───────────
   async function handleVideoReady(width: number, height: number, duration: number, fps: number) {
+    // If dimensions are changing (different video resolution), the AnnotationCanvas
+    // will reinitialize Fabric. Queue the current frame's annotation so it reloads
+    // automatically once onReady fires after Fabric recreates.
+    if (mediaSize.width > 0 && (mediaSize.width !== width || mediaSize.height !== height)) {
+      const json = annotationMap.get(currentFrame) ?? null;
+      queueAnnotationLoad(json);
+    }
     setMediaSize({ width, height });
     if (submission) {
       await updateSubmissionMeta(submission.id, {

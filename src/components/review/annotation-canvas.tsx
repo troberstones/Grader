@@ -3,6 +3,16 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { AnnotationTool } from "./annotation-toolbar";
 
+// Eagerly load Fabric so that subsequent canvas initializations (e.g. when
+// switching students) don't pay the dynamic-import cost again. The first init
+// is still async but every remount after that is effectively synchronous,
+// eliminating the "black flash" while Fabric starts up.
+let fabricCache: typeof import("fabric") | null = null;
+const loadFabric = (): Promise<typeof import("fabric")> =>
+  fabricCache
+    ? Promise.resolve(fabricCache)
+    : import("fabric").then((m) => { fabricCache = m; return m; });
+
 // ── Ramer–Douglas–Peucker stroke simplification ──────────────────────────────
 function _perpDist(
   p: { x: number; y: number },
@@ -143,7 +153,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCan
       let cancelled = false;
 
       const init = async () => {
-        const fabric = await import("fabric");
+        const fabric = await loadFabric();
 
         if (cancelled || !canvasElRef.current) return;
 
@@ -236,7 +246,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCan
 
       if (tool === "text") {
         canvas.on("mouse:down", async (opt: any) => {
-          const fabric = await import("fabric");
+          const fabric = await loadFabric();
           const ptr = canvas.getViewportPoint(opt.e);
           pushHistory();
           const text = new fabric.IText("Edit text", {
@@ -259,7 +269,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCan
       if (tool === "rect" || tool === "circle" || tool === "arrow") {
         canvas.on("mouse:down", async (opt: any) => {
           if (opt.target) return; // clicked on existing object in select mode
-          const fabric = await import("fabric");
+          const fabric = await loadFabric();
           const ptr = canvas.getViewportPoint(opt.e);
           pushHistory();
           isDrawingShapeRef.current = true;
@@ -332,7 +342,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCan
 
           if (tool === "arrow") {
             // Add arrowhead
-            const fabric = await import("fabric");
+            const fabric = await loadFabric();
             const x1 = shapeStartRef.current.x;
             const y1 = shapeStartRef.current.y;
             const angle = Math.atan2(ptr.y - y1, ptr.x - x1);

@@ -90,7 +90,17 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       },
     }));
 
-    // ── Track video display area size ─────────────────────────────────────────
+    // ── Read container size synchronously on mount ────────────────────────────
+    // Must run before any async events (loadedmetadata) so isReady is never
+    // blocked on the ResizeObserver's first async callback.
+    useLayoutEffect(() => {
+      const el = videoAreaRef.current;
+      if (!el) return;
+      const { width, height } = el.getBoundingClientRect();
+      if (width > 0 && height > 0) setAreaSize({ width, height });
+    }, []);
+
+    // ── Track video display area size (keeps it current on resize) ────────────
     useEffect(() => {
       const el = videoAreaRef.current;
       if (!el) return;
@@ -104,7 +114,18 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       return () => ro.disconnect();
     }, []);
 
-    // ── Ctrl/Cmd-scroll → zoom around cursor ──────────────────────────────────
+    // ── Reset derived state when src changes (student switch) ─────────────────
+    // This hides the old video immediately so we show "Loading…" rather than
+    // a black frame from the previous student's video element state.
+    useEffect(() => {
+      setVideoSize({ width: 0, height: 0 });
+      setCurrentTime(0);
+      setDuration(0);
+      setPlaying(false);
+      lastFrameRef.current = -1;
+    }, [src]);
+
+    // ── Scroll → zoom around cursor ───────────────────────────────────────────
     useEffect(() => {
       const el = videoAreaRef.current;
       if (!el) return;
@@ -188,9 +209,12 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     const totalFrames = Math.round(duration * fps);
     const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
+    // isReady: both layout size and video dimensions are known
+    const isReady = videoSize.width > 0 && areaSize.width > 0;
+
     // Scale to fit area, then apply user zoom
     const fitScale =
-      videoSize.width > 0 && areaSize.width > 0 && areaSize.height > 0
+      isReady
         ? Math.min(areaSize.width / videoSize.width, areaSize.height / videoSize.height)
         : 1;
     const totalScale = fitScale * zoom;
@@ -221,6 +245,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       setVideoSize({ width: cw, height: ch });
       setFps(fpsProp);
       onReady?.(cw, ch, v.duration, fpsProp);
+      // Seek to 0 so the browser decodes the first frame immediately,
+      // eliminating the black-video flash before frame data arrives.
+      v.currentTime = 0;
     }
 
     function handleTimeUpdate() {
@@ -371,17 +398,50 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
           className={cn("flex-1 min-h-0 bg-black", altHeld && !altScrubbing && "cursor-ew-resize")}
           style={{ overflow: "auto", position: "relative" }}
         >
-          {videoSize.width > 0 && areaSize.width > 0 ? (
+          {/*
+           * Single <video> element — always in the DOM at the same tree position.
+           * Keeping one stable element avoids the two-branch switching pattern
+           * that caused a new element to be created on every transition
+           * (which starts black until the browser decodes the first frame).
+           *
+           * When not ready: display:none (hidden but still loading/buffering).
+           * When ready: absolutely positioned with the same transform applied to
+           * the annotation canvas so they stay pixel-perfect in alignment.
+           */}
+          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+          <video
+            ref={videoRef}
+            src={src}
+            onLoadedMetadata={handleLoadedMetadata}
+            onTimeUpdate={handleTimeUpdate}
+            onEnded={handleEnded}
+            onPlay={() => setPlaying(true)}
+            onPause={() => setPlaying(false)}
+            preload="metadata"
+            playsInline
+            style={isReady ? {
+              position: "absolute",
+              left: offsetX,
+              top: offsetY,
+              width: scaledVW,
+              height: scaledVH,
+              display: "block",
+              userSelect: "none",
+            } : { display: "none" }}
+          />
+
+          {/* Annotation overlay + scroll spacer — rendered after video in DOM
+              order so the canvas stacks on top without needing explicit z-index */}
+          {isReady ? (
             <>
-              {/* Spacer in normal flow — defines scroll dimensions without the
-                  flex justify-content:center overflow/clipping bug */}
+              {/* Spacer in normal flow — defines scroll dimensions */}
               <div
                 style={{
                   width: Math.max(scaledVW, areaSize.width),
                   height: Math.max(scaledVH, areaSize.height),
                 }}
               />
-              {/* Content absolutely positioned: centered when smaller, top-left when zoomed */}
+              {/* Annotation canvas, scaled to match the video */}
               <div
                 style={{
                   position: "absolute",
@@ -389,6 +449,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                   top: offsetY,
                   width: scaledVW,
                   height: scaledVH,
+                  pointerEvents: "none", // let video handle its own events; canvas gets events via Fabric
                 }}
               >
                 <div
@@ -398,21 +459,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                     width: videoSize.width,
                     height: videoSize.height,
                     position: "relative",
+                    pointerEvents: "auto",
                   }}
                 >
-                  {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                  <video
-                    ref={videoRef}
-                    src={src}
-                    style={{ width: videoSize.width, height: videoSize.height, display: "block" }}
-                    onLoadedMetadata={handleLoadedMetadata}
-                    onTimeUpdate={handleTimeUpdate}
-                    onEnded={handleEnded}
-                    onPlay={() => setPlaying(true)}
-                    onPause={() => setPlaying(false)}
-                    preload="metadata"
-                    playsInline
-                  />
                   {annotationOverlay && (
                     <div className="absolute inset-0">{annotationOverlay}</div>
                   )}
@@ -420,20 +469,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
               </div>
             </>
           ) : (
-            /* Loading placeholder — video hasn't reported dimensions yet */
-            <>
-              {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-              <video
-                ref={videoRef}
-                src={src}
-                className="hidden"
-                onLoadedMetadata={handleLoadedMetadata}
-                preload="metadata"
-              />
-              <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-xs">
-                Loading…
-              </div>
-            </>
+            <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-xs">
+              Loading…
+            </div>
           )}
 
           {/* Alt/Option-drag scrub overlay — floats on top of annotation canvas */}

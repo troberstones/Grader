@@ -205,6 +205,13 @@ export function useAnnotations(
     [],
   );
 
+  // ── Queue an annotation JSON to load once the canvas next fires onReady ──
+  // Used when video dimensions change between students, which causes Fabric to
+  // dispose and reinitialize, clearing any annotation that was already loaded.
+  const queueAnnotationLoad = useCallback((json: string | null) => {
+    pendingAnnotationRef.current = json;
+  }, []);
+
   // ── Expose markDirty so callers can pass it to the canvas onDirty prop ───
   const markDirty = useCallback(() => setIsDirty(true), []);
 
@@ -249,5 +256,6 @@ export function useAnnotations(
     handleSave,
     flushCurrentFrame,
     resetForNewMedia,
+    queueAnnotationLoad,
   } as const;
 }
