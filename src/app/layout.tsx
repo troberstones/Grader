@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Manrope, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { Sidebar } from "@/components/layout/sidebar";
+import { GlobalSyncProvider } from "@/components/shared/global-sync";
 import "./globals.css";
 
 // Manrope: contemporary sans-serif balancing geometric precision with human warmth
@@ -34,9 +35,11 @@ export default function RootLayout({
       className={`${manrope.variable} ${geistMono.variable} h-full antialiased dark`}
     >
       <body className="h-full flex">
-        <Sidebar />
-        <main className="flex-1 overflow-auto">{children}</main>
-        <Toaster />
+        <GlobalSyncProvider>
+          <Sidebar />
+          <main className="flex-1 overflow-auto">{children}</main>
+          <Toaster />
+        </GlobalSyncProvider>
       </body>
     </html>
   );

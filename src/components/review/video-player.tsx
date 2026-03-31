@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 
 export interface VideoPlayerHandle {
   pause: () => void;
+  play: () => void;
   seekToFrame: (frame: number) => void;
 }
 
@@ -41,6 +42,7 @@ interface VideoPlayerProps {
   onPrevAnnotation?: () => void;
   onNextAnnotation?: () => void;
   onFrameChange?: (frame: number) => void;
+  onPlayStateChange?: (playing: boolean) => void;
   onReady?: (width: number, height: number, duration: number, fps: number) => void;
 }
 
@@ -52,7 +54,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     src, fps: fpsProp = 30, zoom = 1, annotationOverlay,
     annotatedFrames, hasPrevAnnotation, hasNextAnnotation,
     onZoomChange, onPrevAnnotation, onNextAnnotation,
-    onFrameChange, onReady,
+    onFrameChange, onPlayStateChange, onReady,
   }, ref) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const timelineRef = useRef<HTMLDivElement>(null);
@@ -76,6 +78,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
 
     const lastFrameRef = useRef(-1);
 
+    // Notify caller when play/pause state changes (used for cross-device sync)
+    const onPlayStateChangeRef = useRef(onPlayStateChange);
+    onPlayStateChangeRef.current = onPlayStateChange;
+    useEffect(() => { onPlayStateChangeRef.current?.(playing); }, [playing]);
+
     // Zoom ref + pending scroll for zoom-around-cursor
     const zoomRef = useRef(zoom);
     useEffect(() => { zoomRef.current = zoom; }, [zoom]);
@@ -83,6 +90,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
 
     useImperativeHandle(ref, () => ({
       pause: () => { videoRef.current?.pause(); setPlaying(false); },
+      play: () => { void videoRef.current?.play(); setPlaying(true); },
       seekToFrame: (frame: number) => {
         const v = videoRef.current;
         if (!v) return;

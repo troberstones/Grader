@@ -12,6 +12,8 @@ import {
   BarChart3,
   Archive,
   Menu,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -25,6 +27,7 @@ import {
 import { GradingProvider, useGrading } from "./grading-context";
 import { StudentSidebar } from "./student-sidebar";
 import { useSync } from "@/hooks/use-sync";
+import { useGlobalSync } from "./global-sync";
 import type { StudentWithGrade } from "@/actions/grades";
 
 const navItems = [
@@ -74,6 +77,7 @@ export function GradingShell({
         {/* Hamburger row */}
         <div className="shrink-0 px-3 py-2 flex items-center gap-2 border-b bg-sidebar">
           <NavDrawer />
+          <SyncToggle />
         </div>
 
         {/* Main area: sidebar + page content */}
@@ -142,5 +146,23 @@ function NavDrawer() {
         </nav>
       </SheetContent>
     </Sheet>
+  );
+}
+
+function SyncToggle() {
+  const { paused, setPaused } = useGlobalSync();
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      title={paused ? "Sync paused — click to resume" : "Sync active — click to pause"}
+      onClick={() => setPaused((p) => !p)}
+    >
+      {paused ? (
+        <WifiOff className="h-4 w-4 text-muted-foreground" />
+      ) : (
+        <Wifi className="h-4 w-4 text-primary" />
+      )}
+    </Button>
   );
 }

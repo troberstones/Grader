@@ -102,6 +102,7 @@ function rdpSimplify(
 export interface CanvasVideoPlayerHandle {
   // Video operations
   pause(): void;
+  play(): void;
   seekToFrame(frame: number): void;
   // Annotation operations — mirrors AnnotationCanvasHandle so useAnnotations works
   loadFrame(json: string | null): Promise<boolean>;
@@ -129,6 +130,7 @@ interface CanvasVideoPlayerProps {
   onPrevAnnotation?: () => void;
   onNextAnnotation?: () => void;
   onFrameChange?: (frame: number) => void;
+  onPlayStateChange?: (playing: boolean) => void;
   onReady?: (width: number, height: number, duration: number, fps: number) => void;
 }
 
@@ -157,6 +159,7 @@ export const CanvasVideoPlayer = forwardRef<
     onPrevAnnotation,
     onNextAnnotation,
     onFrameChange,
+    onPlayStateChange,
     onReady,
   },
   ref,
@@ -188,6 +191,11 @@ export const CanvasVideoPlayer = forwardRef<
   const [fps, setFps] = useState(fpsProp);
   const [loop, setLoop] = useState(false);
   const [speed, setSpeed] = useState(1);
+
+  // Notify caller when play/pause state changes (used for cross-device sync)
+  const onPlayStateChangeRef = useRef(onPlayStateChange);
+  onPlayStateChangeRef.current = onPlayStateChange;
+  useEffect(() => { onPlayStateChangeRef.current?.(playing); }, [playing]);
   const [scrubbing, setScrubbing] = useState(false);
   const [altHeld, setAltHeld] = useState(false);
   const [altScrubbing, setAltScrubbing] = useState(false);
@@ -301,6 +309,10 @@ export const CanvasVideoPlayer = forwardRef<
     pause: () => {
       hiddenVideoRef.current?.pause();
       setPlaying(false);
+    },
+    play: () => {
+      void hiddenVideoRef.current?.play();
+      setPlaying(true);
     },
     seekToFrame: (frame: number) => {
       const v = hiddenVideoRef.current;

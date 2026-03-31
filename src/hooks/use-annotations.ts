@@ -18,6 +18,7 @@ import type { AnnotationCanvasHandle } from "@/components/review/annotation-canv
  */
 export function useAnnotations(
   canvasRef: React.RefObject<AnnotationCanvasHandle | null>,
+  onSaved?: (submissionId: number) => void,
 ) {
   const [annotationMap, setAnnotationMap] = useState<Map<number | null, string>>(
     new Map(),
@@ -25,6 +26,10 @@ export function useAnnotations(
   const [currentFrame, setCurrentFrame] = useState<number | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Keep onSaved stable in a ref so timer callbacks stay fresh
+  const onSavedRef = useRef(onSaved);
+  onSavedRef.current = onSaved;
 
   // Ref mirrors — used inside timer callbacks and async functions to avoid
   // stale closures without adding them to every dependency array.
@@ -69,6 +74,7 @@ export function useAnnotations(
         );
         await saveAnnotations(subId, frames);
         setIsDirty(false);
+        onSavedRef.current?.(subId);
       } catch {
         // Silent — manual save is always available via handleSave
       }
@@ -179,6 +185,7 @@ export function useAnnotations(
         );
         await saveAnnotations(submissionId, frames);
         setIsDirty(false);
+        onSavedRef.current?.(submissionId);
         toast.success("Annotations saved");
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Save failed");
@@ -203,6 +210,28 @@ export function useAnnotations(
       pendingAnnotationRef.current = null;
     },
     [],
+  );
+
+  // ── Reload annotations from the server without resetting frame/canvas ────
+  // Used when another device saves annotations for the current submission.
+  const reloadAnnotations = useCallback(
+    async (submissionId: number) => {
+      if (submissionId !== autoSaveSubmissionIdRef.current) return; // different student
+      try {
+        const frames = await getAnnotations(submissionId);
+        const map = new Map<number | null, string>();
+        for (const f of frames) map.set(f.frameNumber, f.annotationData);
+        setAnnotationMap(map);
+        annotationMapRef.current = map;
+        // Reload the current frame on the canvas
+        const json = map.get(currentFrameRef.current) ?? null;
+        const loaded = await canvasRef.current?.loadFrame(json);
+        if (!loaded) pendingAnnotationRef.current = json ?? null;
+      } catch {
+        // Ignore — current annotations remain
+      }
+    },
+    [canvasRef],
   );
 
   // ── Queue an annotation JSON to load once the canvas next fires onReady ──
@@ -257,5 +286,6 @@ export function useAnnotations(
     flushCurrentFrame,
     resetForNewMedia,
     queueAnnotationLoad,
+    reloadAnnotations,
   } as const;
 }

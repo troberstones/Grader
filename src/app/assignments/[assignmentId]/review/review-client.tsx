@@ -10,10 +10,11 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ZoomIn, ZoomOut, ClipboardList } from "lucide-react";
+import { ZoomIn, ZoomOut, ClipboardList, Radio } from "lucide-react";
 import { LinkButton } from "@/components/ui/link-button";
 import { StudentNavBar } from "@/components/shared/student-nav-bar";
 import { useGrading } from "@/components/shared/grading-context";
+import { useGlobalSync } from "@/components/shared/global-sync";
 import { useAnnotations } from "@/hooks/use-annotations";
 import { UploadZone } from "@/components/review/upload-zone";
 import { AnnotationToolbar, type AnnotationTool } from "@/components/review/annotation-toolbar";
@@ -44,6 +45,19 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
     setSelectedStudentId,
     selectHandlerRef,
   } = useGrading();
+  const { broadcast, subscribe } = useGlobalSync();
+
+  // Separate flags prevent one remote event from consuming the other's echo guard.
+  // e.g. a remote seek fires pause() → onPlayStateChange, which would consume a
+  // shared flag before seekToFrame → onFrameChange had a chance to check it.
+  const remoteSeekRef = useRef(false);   // guards onFrameChange re-broadcast
+  const remotePlayRef = useRef(false);   // guards onPlayStateChange re-broadcast
+
+  // Master flag: only the master device broadcasts playback events.
+  // Prevents race conditions when both devices try to sync simultaneously.
+  const [isMaster, setIsMaster] = useState(false);
+  const isMasterRef = useRef(isMaster);
+  isMasterRef.current = isMaster;
 
   const [submissions, setSubmissions] = useState<Record<number, SubmissionRow>>(initialSubmissions);
   const [uploading, setUploading] = useState(false);
@@ -74,8 +88,10 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
   }
 
   /** Returns the active video control handle. */
+  const useCanvasPlayerRef = useRef(useCanvasPlayer);
+  useCanvasPlayerRef.current = useCanvasPlayer;
   function getVideoHandle(): VideoPlayerHandle | null {
-    return useCanvasPlayer ? canvasVideoRef.current : videoRef.current;
+    return useCanvasPlayerRef.current ? canvasVideoRef.current : videoRef.current;
   }
 
   const selectedStudent = students.find((s) => s.id === selectedStudentId) ?? null;
@@ -98,11 +114,18 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
     flushCurrentFrame,
     resetForNewMedia,
     queueAnnotationLoad,
+    reloadAnnotations,
   // For canvas player the combined ref satisfies AnnotationCanvasHandle structurally
   } = useAnnotations(
     useCanvasPlayer
       ? (canvasVideoRef as unknown as RefObject<AnnotationCanvasHandle | null>)
       : canvasRef,
+    // After annotations are saved locally, broadcast so other devices reload
+    (submissionId) => {
+      if (!selectedStudentId) return;
+      broadcast({ type: "annotation-saved", assignmentId: assignment.id, studentId: selectedStudentId });
+      void submissionId; // used by the hook internally
+    },
   );
 
   // ── Zoom helpers ──────────────────────────────────────────────────────────
@@ -121,6 +144,66 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
       const next = [...ZOOM_STEPS].reverse().find((z) => z < prev - 0.01);
       return next ?? ZOOM_STEPS[0];
     });
+  }
+
+  // ── Cross-device sync: receive playback + annotation events ──────────────
+  // Keep stable refs so we can access current state inside the subscription
+  const submissionRef = useRef(submission);
+  submissionRef.current = submission;
+
+  useEffect(() => {
+    return subscribe((event) => {
+      if (event.type === "playback-master" && event.assignmentId === assignment.id) {
+        // Another device claimed master — release control here
+        setIsMaster(false);
+        isMasterRef.current = false;
+      } else if (event.type === "playback" && event.assignmentId === assignment.id) {
+        // Only follow remote playback when this device is NOT master
+        if (isMasterRef.current) return;
+        if (event.playing) {
+          remotePlayRef.current = true;
+          getVideoHandle()?.play();
+        } else {
+          // Seek: guard onFrameChange only (don't call pause — that fires
+          // onPlayStateChange and would consume the wrong flag)
+          remoteSeekRef.current = true;
+          getVideoHandle()?.seekToFrame(event.frame);
+        }
+      } else if (event.type === "annotation-saved" && event.assignmentId === assignment.id) {
+        const sub = submissionRef.current;
+        if (sub && event.studentId === selectedStudentId) {
+          void reloadAnnotations(sub.id);
+        }
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subscribe, assignment.id, selectedStudentId, reloadAnnotations]);
+
+  // ── Intercepted video callbacks that broadcast to other devices ───────────
+  function handleFrameChangeWithSync(frame: number) {
+    const isRemote = remoteSeekRef.current;
+    remoteSeekRef.current = false;
+    void handleFrameChange(frame);
+    if (!isRemote && isMasterRef.current) {
+      broadcast({ type: "playback", assignmentId: assignment.id, studentId: selectedStudentId ?? 0, frame, playing: false });
+    }
+  }
+
+  function handlePlayStateChangeWithSync(playing: boolean) {
+    if (remotePlayRef.current) {
+      remotePlayRef.current = false;
+      return;
+    }
+    if (isMasterRef.current) {
+      broadcast({ type: "playback", assignmentId: assignment.id, studentId: selectedStudentId ?? 0, frame: currentFrame ?? 0, playing });
+    }
+  }
+
+  function handleTakeMasterControl() {
+    setIsMaster(true);
+    isMasterRef.current = true;
+    // Tell all other devices to release — they will stop broadcasting
+    broadcast({ type: "playback-master", assignmentId: assignment.id });
   }
 
   // ── On mount: load first student's annotations ────────────────────────────
@@ -317,10 +400,23 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
                     >
                       <ZoomIn className="h-4 w-4" />
                     </button>
+                    {/* Playback master toggle */}
+                    <button
+                      onClick={isMaster ? () => setIsMaster(false) : handleTakeMasterControl}
+                      className={`ml-1 pl-1.5 border-l flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors ${
+                        isMaster
+                          ? "text-primary hover:bg-muted"
+                          : "text-muted-foreground hover:bg-muted"
+                      }`}
+                      title={isMaster ? "You control playback sync — click to release" : "Click to take playback control"}
+                    >
+                      <Radio className={`h-3.5 w-3.5 ${isMaster ? "animate-pulse" : ""}`} />
+                      {isMaster ? "Master" : "Follow"}
+                    </button>
                     {/* A/B renderer toggle */}
                     <button
                       onClick={() => setUseCanvasPlayer((p) => !p)}
-                      className="ml-1 pl-1.5 border-l text-xs px-1.5 py-0.5 rounded hover:bg-muted transition-colors text-muted-foreground"
+                      className="pl-1.5 border-l text-xs px-1.5 py-0.5 rounded hover:bg-muted transition-colors text-muted-foreground"
                       title={useCanvasPlayer ? "Switch to HTML video renderer" : "Switch to canvas renderer (experimental)"}
                     >
                       {useCanvasPlayer ? "Canvas" : "HTML5"}
@@ -380,7 +476,8 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
                   onZoomChange={handleZoomChange}
                   onPrevAnnotation={goPrevAnnotation}
                   onNextAnnotation={goNextAnnotation}
-                  onFrameChange={handleFrameChange}
+                  onFrameChange={handleFrameChangeWithSync}
+                  onPlayStateChange={handlePlayStateChangeWithSync}
                   onReady={handleVideoReady}
                 />
               </div>
@@ -397,7 +494,8 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
                   onZoomChange={handleZoomChange}
                   onPrevAnnotation={goPrevAnnotation}
                   onNextAnnotation={goNextAnnotation}
-                  onFrameChange={handleFrameChange}
+                  onFrameChange={handleFrameChangeWithSync}
+                  onPlayStateChange={handlePlayStateChangeWithSync}
                   onReady={handleVideoReady}
                   annotationOverlay={
                     mediaSize.width > 0 ? (
