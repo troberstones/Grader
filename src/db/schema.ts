@@ -81,6 +81,7 @@ export const assignments = sqliteTable("assignments", {
   submissionType: text("submission_type").notNull().default("image"), // 'image' | 'video' | 'any'
   lmsAssignmentId: text("lms_assignment_id"),
   lmsGradebookId: text("lms_gradebook_id"),
+  lmsDiscussionUrl: text("lms_discussion_url"),
   archived: integer("archived").notNull().default(0),
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
   updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),

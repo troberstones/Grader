@@ -206,64 +206,20 @@ async function getAssignments(subsessionID, gradebookID) {
 /**
  * Get student submissions for an assignment via the LS discussion system.
  *
- * LS stores assignment submissions as discussion posts. Each assignment is
- * linked to a discussion via assignmentIDs map. Student file uploads are
- * comment.files on top-level comments (parentID === null).
+ * lmsDiscussionUrl is the short discussion URL (e.g. "5LB6") stored per assignment
+ * in the grader DB. The user pastes the full LS discussion page URL once and we
+ * extract the short ID from it.
  */
-async function getSubmissionsForAssignment(subsessionID, lmsAssignmentId) {
-  // Step 1: fetch the common discussion data (includes all discussions + assignmentIDs map).
-  // Calling with empty url/discussID returns common data without a specific discussion's comments.
-  let commonData;
-  try {
-    commonData = await lsPost(
-      'pages/discuss/ViewDiscussionVue.php',
-      'discuss',
-      subsessionID,
-      {
-        funcName: 'getAjaxableDiscussionInfo',
-        'funcParams[url]': '',
-        'funcParams[discussID]': '',
-        'funcParams[groupID]': '',
-        'funcParams[studentID]': '',
-      }
-    );
-  } catch (e) {
-    throw new Error(`Could not fetch discussion list from LS: ${e.message}`);
-  }
-
-  // assignmentIDs: { discussionID → assignmentID }
-  const assignmentIDs = commonData.assignmentIDs ?? {};
-  const discussions = Array.isArray(commonData.discussions) ? commonData.discussions : [];
-
-  // Find the discussion linked to our lmsAssignmentId
-  let targetDiscussionId = null;
-  for (const [discussID, assignID] of Object.entries(assignmentIDs)) {
-    if (String(assignID) === String(lmsAssignmentId)) {
-      targetDiscussionId = discussID;
-      break;
-    }
-  }
-
-  if (!targetDiscussionId) {
-    const knownIds = Object.values(assignmentIDs).join(', ') || 'none found';
-    throw new Error(
-      `No LS discussion is linked to assignment ID "${lmsAssignmentId}". ` +
-      `Make sure the assignment was synced from LS. Known assignment IDs: ${knownIds}`
-    );
-  }
-
-  const targetDiscussion = discussions.find((d) => d.id === targetDiscussionId);
-  const discussionUrl = targetDiscussion?.url ?? '';
-
-  // Step 2: fetch the full submission data (comments + students) for this discussion
+async function getSubmissionsForAssignment(subsessionID, lmsDiscussionUrl) {
+  // Fetch all submissions for this specific discussion
   const data = await lsPost(
     'pages/discuss/ViewDiscussionVue.php',
     'discuss',
     subsessionID,
     {
       funcName: 'getAjaxableDiscussionInfo',
-      'funcParams[url]': discussionUrl,
-      'funcParams[discussID]': targetDiscussionId,
+      'funcParams[url]': lmsDiscussionUrl,
+      'funcParams[discussID]': '',
       'funcParams[groupID]': '',
       'funcParams[studentID]': '',
     }
@@ -276,7 +232,7 @@ async function getSubmissionsForAssignment(subsessionID, lmsAssignmentId) {
     if (s.id) sortNameById[String(s.id)] = s.sortName ?? s.fullPreferredName ?? null;
   }
 
-  // Extract top-level submissions (parentID === null) that have attached files
+  // Extract top-level submissions (parentID === null) with attached files
   const comments = Array.isArray(data.comments) ? data.comments : [];
   const submissions = [];
 
@@ -296,8 +252,8 @@ async function getSubmissionsForAssignment(subsessionID, lmsAssignmentId) {
         `&subsessionID=${encodeURIComponent(subsessionID)}&appId=discuss`;
 
       submissions.push({
-        lmsStudentId: ownerID,  // LS user ID — may match DB lmsStudentId if populated
-        sortName,               // used as fallback matching key
+        lmsStudentId: ownerID,
+        sortName,
         fileName: file.filename ?? file.name ?? null,
         fileType: null,
         downloadUrl,
@@ -307,16 +263,6 @@ async function getSubmissionsForAssignment(subsessionID, lmsAssignmentId) {
   }
 
   return submissions;
-
-  const list = Array.isArray(data) ? data : Object.values(data ?? {});
-  return list.map((s) => ({
-    lmsStudentId: String(s.studentID ?? s.userID ?? ''),
-    fileName: s.fileName ?? s.name ?? null,
-    fileType: s.fileType ?? s.mimeType ?? null,
-    // LS likely returns a path or token — try common field names
-    downloadUrl: s.fileURL ?? s.downloadURL ?? s.url ?? s.filePath ?? null,
-    submittedAt: s.submittedAt ?? s.submitDate ?? null,
-  })).filter((s) => s.lmsStudentId && s.downloadUrl);
 }
 
 /**
@@ -416,20 +362,33 @@ async function handleRequest(msg) {
     }
 
     case 'SYNC_SUBMISSIONS': {
-      const { graderOrigin, graderAssignmentId, lmsAssignmentId, studentMap } = msg;
+      const { graderOrigin, graderAssignmentId, lmsDiscussionUrl, studentMap } = msg;
       // studentMap: [{ graderStudentId, lmsStudentId, sortName, netId }, ...]
 
-      const lsSubmissions = await getSubmissionsForAssignment(subsessionID, lmsAssignmentId);
+      const lsSubmissions = await getSubmissionsForAssignment(subsessionID, lmsDiscussionUrl);
 
       const results = [];
       const errors = [];
 
       for (const sub of lsSubmissions) {
-        // Match by lmsStudentId first (if the DB has it), then by sortName as fallback
-        const mapping = studentMap.find((s) =>
+        // 1. Match by lmsStudentId (LS user ID, if stored)
+        // 2. Match by exact sortName
+        // 3. Match by last name only — LS uses different names in roster vs discussion
+        //    (e.g. "Song, Hanna" in gradebook vs "Song, Dain" in discussions)
+        let mapping = studentMap.find((s) =>
           (s.lmsStudentId && s.lmsStudentId === sub.lmsStudentId) ||
           (s.sortName && s.sortName === sub.sortName)
         );
+
+        if (!mapping && sub.sortName) {
+          const lsLastName = sub.sortName.split(',')[0].trim().toLowerCase();
+          const candidates = studentMap.filter((s) => {
+            const last = (s.sortName ?? s.name ?? '').split(',')[0].trim().toLowerCase();
+            return last === lsLastName;
+          });
+          if (candidates.length === 1) mapping = candidates[0];
+        }
+
         if (!mapping) {
           errors.push({ lmsStudentId: sub.lmsStudentId, sortName: sub.sortName, error: 'No matching student in grader' });
           continue;

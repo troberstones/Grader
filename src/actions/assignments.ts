@@ -104,6 +104,7 @@ export async function getAssignment(id: number) {
       pointsPossible: assignments.pointsPossible,
       submissionType: assignments.submissionType,
       lmsAssignmentId: assignments.lmsAssignmentId,
+      lmsDiscussionUrl: assignments.lmsDiscussionUrl,
       archived: assignments.archived,
       createdAt: assignments.createdAt,
       updatedAt: assignments.updatedAt,

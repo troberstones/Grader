@@ -128,9 +128,9 @@ async function handleRequest(action, payload) {
           'This assignment has no Learning Suite ID. Run "Sync Assignments" first to link it.'
         );
       }
-      if (!info.gradebookID) {
+      if (!info.lmsDiscussionUrl) {
         throw new Error(
-          'No gradebookID stored. Run "Sync Assignments" on the LS gradebook page first.'
+          'No discussion URL set for this assignment. Click the link icon next to the fetch button and paste the LS discussion page URL.'
         );
       }
 
@@ -138,9 +138,9 @@ async function handleRequest(action, payload) {
       const result = await sendToBackground({
         action: 'SYNC_SUBMISSIONS',
         lmsAssignmentId: info.lmsAssignmentId,
-        gradebookID: info.gradebookID,
+        lmsDiscussionUrl: info.lmsDiscussionUrl,
         graderAssignmentId,
-        studentMap: info.students, // [{ lmsStudentId, graderStudentId }]
+        studentMap: info.students,
       });
 
       return result;

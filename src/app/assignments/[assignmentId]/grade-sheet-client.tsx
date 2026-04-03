@@ -19,7 +19,16 @@ import {
   Video,
   CloudDownload,
   Upload,
+  Link,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import type { getAssignment } from "@/actions/assignments";
 import { useLsBridge } from "@/hooks/use-ls-bridge";
 
@@ -44,8 +53,32 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
   const { save, clear, exportCsv, saving, exporting } = useGradeActions(assignment.id);
   const { status: lsStatus, busy: lsBusy, syncSubmissions, pushGrades } = useLsBridge();
   const lsReady = lsStatus === "ready";
+  const [discussionDialogOpen, setDiscussionDialogOpen] = useState(false);
+  const [discussionUrlInput, setDiscussionUrlInput] = useState(assignment.lmsDiscussionUrl ?? "");
+  const [savingDiscussionUrl, setSavingDiscussionUrl] = useState(false);
+
+  async function handleSaveDiscussionUrl() {
+    const raw = discussionUrlInput.trim();
+    // Accept full URL or just the short ID (e.g. "5LB6")
+    const shortUrl = raw.match(/\/id-([\w-]+)/)?.[1] ?? raw;
+    if (!shortUrl) return;
+    setSavingDiscussionUrl(true);
+    await fetch(`/api/assignments/${assignment.id}/discussion-url`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lmsDiscussionUrl: shortUrl }),
+    });
+    setSavingDiscussionUrl(false);
+    setDiscussionDialogOpen(false);
+    toast.success("Discussion URL saved");
+    router.refresh();
+  }
 
   async function handleFetchSubmissions() {
+    if (!assignment.lmsDiscussionUrl) {
+      setDiscussionDialogOpen(true);
+      return;
+    }
     const result = await syncSubmissions(assignment.id);
     if (!result) return;
     const { synced, errors } = result;
@@ -297,6 +330,21 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
                             <Button
                               variant="ghost"
                               size="icon-sm"
+                              onClick={() => { setDiscussionUrlInput(assignment.lmsDiscussionUrl ?? ""); setDiscussionDialogOpen(true); }}
+                              title="Set LS discussion URL"
+                            >
+                              <Link className={`h-3.5 w-3.5 ${assignment.lmsDiscussionUrl ? "text-primary" : "text-muted-foreground"}`} />
+                            </Button>
+                          }
+                        />
+                        <TooltipContent>{assignment.lmsDiscussionUrl ? `Discussion: ${assignment.lmsDiscussionUrl}` : "Link LS discussion URL"}</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
                               onClick={handleFetchSubmissions}
                               disabled={lsBusy || saving}
                               title="Fetch submissions from LS"
@@ -504,6 +552,37 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
           </div>
         )}
       </div>
+
+      <Dialog open={discussionDialogOpen} onOpenChange={setDiscussionDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Link LS Discussion</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">
+              In Learning Suite, open the discussion for this assignment and copy the page URL.
+              Paste it below — or just the short ID at the end (e.g.{" "}
+              <code className="text-xs bg-muted px-1 rounded">5LB6</code>).
+            </p>
+            <Input
+              placeholder="https://learningsuite.byu.edu/.../discuss/discussion/id-5LB6"
+              value={discussionUrlInput}
+              onChange={(e) => setDiscussionUrlInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && discussionUrlInput.trim() && handleSaveDiscussionUrl()}
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDiscussionDialogOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!discussionUrlInput.trim() || savingDiscussionUrl}
+              onClick={handleSaveDiscussionUrl}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </TooltipProvider>
   );
 }

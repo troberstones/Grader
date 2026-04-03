@@ -79,6 +79,7 @@ export async function GET(request: NextRequest) {
       name: assignment.name,
       lmsAssignmentId: assignment.lmsAssignmentId,
       gradebookID: assignment.lmsGradebookId,
+      lmsDiscussionUrl: assignment.lmsDiscussionUrl ?? null,
       students: studentMap,
     };
 
