@@ -6,6 +6,7 @@ import { getAssignmentsForCourse } from "@/actions/assignments";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
+import { LsSyncAssignmentsButton } from "@/components/ls-bridge/ls-sync-assignments-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Users, Plus, ClipboardList, Calendar, CheckCircle2, Clock, Circle, Pencil } from "lucide-react";
@@ -38,6 +39,7 @@ export default async function CourseDetailPage({
         description={`${course.code}${course.section ? ` · Section ${course.section}` : ""} · ${course.semester}`}
         actions={
           <div className="flex gap-2">
+            <LsSyncAssignmentsButton courseId={course.id} />
             <LinkButton href={`/courses/${course.id}/roster`} variant="outline">
               <Users className="mr-2 h-4 w-4" />
               Roster ({students.length})

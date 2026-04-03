@@ -7,6 +7,17 @@ import { eq, and } from "drizzle-orm";
 import { getSubmissionDir, getMediaType, getMimeType } from "@/lib/file-storage";
 import { MAX_FILE_SIZE } from "@/lib/constants";
 
+// Allow the LS Bridge extension to upload files directly from the LS tab
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -87,12 +98,12 @@ export async function POST(request: NextRequest) {
       submission = inserted[0];
     }
 
-    return NextResponse.json({ submission });
+    return NextResponse.json({ submission }, { headers: CORS_HEADERS });
   } catch (err) {
     console.error("Upload error:", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Upload failed" },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     );
   }
 }

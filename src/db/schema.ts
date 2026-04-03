@@ -80,6 +80,7 @@ export const assignments = sqliteTable("assignments", {
   pointsPossible: real("points_possible").notNull(),
   submissionType: text("submission_type").notNull().default("image"), // 'image' | 'video' | 'any'
   lmsAssignmentId: text("lms_assignment_id"),
+  lmsGradebookId: text("lms_gradebook_id"),
   archived: integer("archived").notNull().default(0),
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
   updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),

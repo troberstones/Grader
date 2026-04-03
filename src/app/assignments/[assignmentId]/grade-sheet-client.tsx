@@ -17,8 +17,11 @@ import {
   RotateCcw,
   CheckCircle2,
   Video,
+  CloudDownload,
+  Upload,
 } from "lucide-react";
 import type { getAssignment } from "@/actions/assignments";
+import { useLsBridge } from "@/hooks/use-ls-bridge";
 
 type Assignment = NonNullable<Awaited<ReturnType<typeof getAssignment>>>;
 
@@ -39,6 +42,39 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
     selectHandlerRef,
   } = useGrading();
   const { save, clear, exportCsv, saving, exporting } = useGradeActions(assignment.id);
+  const { status: lsStatus, busy: lsBusy, syncSubmissions, pushGrades } = useLsBridge();
+  const lsReady = lsStatus === "ready";
+
+  async function handleFetchSubmissions() {
+    const result = await syncSubmissions(assignment.id);
+    if (!result) return;
+    const { synced, errors } = result;
+    if (synced > 0) {
+      toast.success(`${synced} submission${synced !== 1 ? "s" : ""} downloaded from LS`);
+      router.refresh();
+    } else {
+      toast.info("No new submissions found in Learning Suite");
+    }
+    if (errors.length > 0) {
+      toast.error(`${errors.length} failed — check console for details`);
+      console.error("[LS Bridge] submission errors:", errors);
+    }
+  }
+
+  async function handlePushGrades() {
+    const result = await pushGrades(assignment.id);
+    if (!result) return;
+    const { pushed, errors } = result;
+    if (pushed > 0) {
+      toast.success(`${pushed} grade${pushed !== 1 ? "s" : ""} pushed to Learning Suite`);
+    } else {
+      toast.info("No graded submissions to push");
+    }
+    if (errors.length > 0) {
+      toast.error(`${errors.length} failed — check console for details`);
+      console.error("[LS Bridge] push errors:", errors);
+    }
+  }
 
   const selectedStudent = students.find((s) => s.id === selectedStudentId) ?? null;
   const criteria = assignment.rubric?.criteria ?? [];
@@ -253,6 +289,46 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
                   </Button>
+                  {lsReady && (
+                    <>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={handleFetchSubmissions}
+                              disabled={lsBusy || saving}
+                              title="Fetch submissions from LS"
+                            >
+                              {lsBusy ? (
+                                <CloudDownload className="h-3.5 w-3.5 animate-pulse" />
+                              ) : (
+                                <CloudDownload className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          }
+                        />
+                        <TooltipContent>Fetch submissions from Learning Suite</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={handlePushGrades}
+                              disabled={lsBusy || saving || gradedCount === 0}
+                              title="Push grades to LS"
+                            >
+                              <Upload className="h-3.5 w-3.5" />
+                            </Button>
+                          }
+                        />
+                        <TooltipContent>Push grades to Learning Suite</TooltipContent>
+                      </Tooltip>
+                    </>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
