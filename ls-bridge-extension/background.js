@@ -30,7 +30,7 @@ async function getLSTab() {
  */
 function parseLsState(url) {
   if (!url) return null;
-  const subsessionMatch = url.match(/\/\.([A-Za-z0-9]+)\//);
+  const subsessionMatch = url.match(/\/\.([\w-]+)\//);
   const courseMatch     = url.match(/\/cid-([a-zA-Z0-9-]+)\//);
   if (!subsessionMatch || !courseMatch) return null;
   return { subsessionID: subsessionMatch[1], courseID: courseMatch[1] };
@@ -53,7 +53,15 @@ function sendToTab(tabId, message) {
 async function sendToLS(message) {
   const tab = await getLSTab();
   const graderOrigin = await getGraderOrigin();
-  return sendToTab(tab.id, { ...message, graderOrigin });
+  const lsState = parseLsState(tab.url);
+  if (!lsState) {
+    throw new Error(
+      'Could not detect subsessionID from the Learning Suite tab URL. ' +
+      'Navigate to a course page in Learning Suite and try again.'
+    );
+  }
+  // Inject subsessionID + courseID so content_ls.js doesn't have to re-detect them.
+  return sendToTab(tab.id, { ...message, graderOrigin, ...lsState });
 }
 
 // ─── Persistent port handler (keeps SW alive during sync) ────────────────────

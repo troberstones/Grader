@@ -17,7 +17,7 @@ function detectPageState() {
   const url = window.location.href;
 
   // URL format: /.YN21/cid-0b7-z8GYaOqO/... (subsession IDs may contain lower or uppercase)
-  const subsessionMatch = url.match(/\/\.([A-Za-z0-9]+)\//);
+  const subsessionMatch = url.match(/\/\.([\w-]+)\//);
   const courseMatch = url.match(/\/cid-([a-zA-Z0-9-]+)\//);
 
   const subsessionID = subsessionMatch?.[1] ?? null;
@@ -204,44 +204,109 @@ async function getAssignments(subsessionID, gradebookID) {
 }
 
 /**
- * Get student submissions for an assignment.
+ * Get student submissions for an assignment via the LS discussion system.
  *
- * TODO: Verify the exact funcName and response shape by inspecting LS XHR
- * while on the gradebook page. Common patterns tried below.
- *
- * The response likely contains: studentID, fileURL or downloadURL, fileName, fileType
+ * LS stores assignment submissions as discussion posts. Each assignment is
+ * linked to a discussion via assignmentIDs map. Student file uploads are
+ * comment.files on top-level comments (parentID === null).
  */
-async function getSubmissionsForAssignment(subsessionID, gradebookID, lmsAssignmentId) {
-  // Try the submissions endpoint
-  let data;
+async function getSubmissionsForAssignment(subsessionID, lmsAssignmentId) {
+  // Step 1: fetch the common discussion data (includes all discussions + assignmentIDs map).
+  // Calling with empty url/discussID returns common data without a specific discussion's comments.
+  let commonData;
   try {
-    data = await lsPost(
-      'ajax/models/lsgradebook/submission.php',
-      'gradebook',
+    commonData = await lsPost(
+      'pages/discuss/ViewDiscussionVue.php',
+      'discuss',
       subsessionID,
       {
-        funcName: 'getSubmissions',
-        'funcParams[assignmentID]': lmsAssignmentId,
-        'funcParams[gradebookID]': gradebookID,
+        funcName: 'getAjaxableDiscussionInfo',
+        'funcParams[url]': '',
+        'funcParams[discussID]': '',
+        'funcParams[groupID]': '',
+        'funcParams[studentID]': '',
       }
     );
   } catch (e) {
-    // Fallback: try 'getAll' or 'getStudentSubmissions'
-    try {
-      data = await lsPost(
-        'ajax/models/lsgradebook/submission.php',
-        'gradebook',
-        subsessionID,
-        {
-          funcName: 'getAll',
-          'funcParams[assignmentID]': lmsAssignmentId,
-          'funcParams[gradebookID]': gradebookID,
-        }
-      );
-    } catch {
-      throw new Error('Could not retrieve submissions from LS. The submission endpoint may need verification.');
+    throw new Error(`Could not fetch discussion list from LS: ${e.message}`);
+  }
+
+  // assignmentIDs: { discussionID → assignmentID }
+  const assignmentIDs = commonData.assignmentIDs ?? {};
+  const discussions = Array.isArray(commonData.discussions) ? commonData.discussions : [];
+
+  // Find the discussion linked to our lmsAssignmentId
+  let targetDiscussionId = null;
+  for (const [discussID, assignID] of Object.entries(assignmentIDs)) {
+    if (String(assignID) === String(lmsAssignmentId)) {
+      targetDiscussionId = discussID;
+      break;
     }
   }
+
+  if (!targetDiscussionId) {
+    const knownIds = Object.values(assignmentIDs).join(', ') || 'none found';
+    throw new Error(
+      `No LS discussion is linked to assignment ID "${lmsAssignmentId}". ` +
+      `Make sure the assignment was synced from LS. Known assignment IDs: ${knownIds}`
+    );
+  }
+
+  const targetDiscussion = discussions.find((d) => d.id === targetDiscussionId);
+  const discussionUrl = targetDiscussion?.url ?? '';
+
+  // Step 2: fetch the full submission data (comments + students) for this discussion
+  const data = await lsPost(
+    'pages/discuss/ViewDiscussionVue.php',
+    'discuss',
+    subsessionID,
+    {
+      funcName: 'getAjaxableDiscussionInfo',
+      'funcParams[url]': discussionUrl,
+      'funcParams[discussID]': targetDiscussionId,
+      'funcParams[groupID]': '',
+      'funcParams[studentID]': '',
+    }
+  );
+
+  // Map LS ownerID → sortName from the discussion's student roster
+  const lsStudents = Array.isArray(data.students) ? data.students : [];
+  const sortNameById = {};
+  for (const s of lsStudents) {
+    if (s.id) sortNameById[String(s.id)] = s.sortName ?? s.fullPreferredName ?? null;
+  }
+
+  // Extract top-level submissions (parentID === null) that have attached files
+  const comments = Array.isArray(data.comments) ? data.comments : [];
+  const submissions = [];
+
+  for (const comment of comments) {
+    if (comment.parentID !== null) continue; // skip replies
+    if (!Array.isArray(comment.files) || comment.files.length === 0) continue;
+
+    const ownerID = String(comment.ownerID ?? '');
+    const sortName = sortNameById[ownerID] ?? null;
+
+    for (const file of comment.files) {
+      const downloadUrl =
+        `/plugins/Upload/fileDownload.php` +
+        `?fileId=${encodeURIComponent(file.id)}` +
+        `&discussionId=${encodeURIComponent(comment.discussionID)}` +
+        `&comment=1&downloadSource=discussions&download=true` +
+        `&subsessionID=${encodeURIComponent(subsessionID)}&appId=discuss`;
+
+      submissions.push({
+        lmsStudentId: ownerID,  // LS user ID — may match DB lmsStudentId if populated
+        sortName,               // used as fallback matching key
+        fileName: file.filename ?? file.name ?? null,
+        fileType: null,
+        downloadUrl,
+        submittedAt: comment.timePosted ?? null,
+      });
+    }
+  }
+
+  return submissions;
 
   const list = Array.isArray(data) ? data : Object.values(data ?? {});
   return list.map((s) => ({
@@ -319,8 +384,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 async function handleRequest(msg) {
+  // background.js injects subsessionID + courseID from the tab URL (more reliable).
+  // Fall back to local URL detection only if they weren't provided.
   const pageState = detectPageState();
-  const { subsessionID, courseID } = pageState;
+  const subsessionID = msg.subsessionID ?? pageState.subsessionID;
+  const courseID     = msg.courseID     ?? pageState.courseID;
 
   if (!subsessionID) {
     throw new Error('Could not detect subsessionID from the Learning Suite URL. Navigate to a course page.');
@@ -348,18 +416,22 @@ async function handleRequest(msg) {
     }
 
     case 'SYNC_SUBMISSIONS': {
-      const { graderOrigin, graderAssignmentId, lmsAssignmentId, gradebookID, studentMap } = msg;
-      // studentMap: [{ lmsStudentId, graderStudentId }, ...]
+      const { graderOrigin, graderAssignmentId, lmsAssignmentId, studentMap } = msg;
+      // studentMap: [{ graderStudentId, lmsStudentId, sortName, netId }, ...]
 
-      const lsSubmissions = await getSubmissionsForAssignment(subsessionID, gradebookID, lmsAssignmentId);
+      const lsSubmissions = await getSubmissionsForAssignment(subsessionID, lmsAssignmentId);
 
       const results = [];
       const errors = [];
 
       for (const sub of lsSubmissions) {
-        const mapping = studentMap.find((s) => s.lmsStudentId === sub.lmsStudentId);
+        // Match by lmsStudentId first (if the DB has it), then by sortName as fallback
+        const mapping = studentMap.find((s) =>
+          (s.lmsStudentId && s.lmsStudentId === sub.lmsStudentId) ||
+          (s.sortName && s.sortName === sub.sortName)
+        );
         if (!mapping) {
-          errors.push({ lmsStudentId: sub.lmsStudentId, error: 'No matching student in grader' });
+          errors.push({ lmsStudentId: sub.lmsStudentId, sortName: sub.sortName, error: 'No matching student in grader' });
           continue;
         }
 

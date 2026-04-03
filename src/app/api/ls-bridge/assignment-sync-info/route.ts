@@ -52,11 +52,12 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Load all enrolled students for this course with their LS IDs
+    // Load all enrolled students for this course
     const enrolledStudents = await db
       .select({
         graderStudentId: students.id,
         name: students.name,
+        sortName: students.sortName,
         netId: students.netId,
         lmsStudentId: students.lmsStudentId,
       })
@@ -64,15 +65,14 @@ export async function GET(request: NextRequest) {
       .innerJoin(students, eq(courseEnrollments.studentId, students.id))
       .where(eq(courseEnrollments.courseId, assignment.courseId));
 
-    // Only include students that have LS IDs (required for LS API calls)
-    const studentMap = enrolledStudents
-      .filter((s) => s.lmsStudentId)
-      .map((s) => ({
-        graderStudentId: s.graderStudentId,
-        lmsStudentId: s.lmsStudentId!,
-        name: s.name,
-        netId: s.netId,
-      }));
+    // Include all students — matching by lmsStudentId OR sortName in content_ls.js
+    const studentMap = enrolledStudents.map((s) => ({
+      graderStudentId: s.graderStudentId,
+      lmsStudentId: s.lmsStudentId ?? null,
+      sortName: s.sortName,
+      name: s.name,
+      netId: s.netId,
+    }));
 
     const response: Record<string, unknown> = {
       assignmentId: assignment.id,
