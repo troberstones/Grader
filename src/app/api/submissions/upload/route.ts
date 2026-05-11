@@ -54,26 +54,30 @@ export async function POST(request: NextRequest) {
     // Relative path from project root for storage in DB
     const relPath = path.join("storage", "submissions", String(assignmentId), String(studentId), fileName);
 
-    // Upsert submission record
+    // Deduplicate by original filename — re-syncing the same file replaces it,
+    // but submitting a different file adds a new record (supports multi-file students).
     const existing = await db
-      .select({ id: submissions.id })
+      .select({ id: submissions.id, filePath: submissions.filePath })
       .from(submissions)
-      .where(and(eq(submissions.assignmentId, assignmentId), eq(submissions.studentId, studentId)));
+      .where(
+        and(
+          eq(submissions.assignmentId, assignmentId),
+          eq(submissions.studentId, studentId),
+          eq(submissions.fileName, file.name)
+        )
+      );
 
     let submission;
     if (existing.length > 0) {
-      // Delete old file if different
-      const oldRow = await db.select().from(submissions).where(eq(submissions.id, existing[0].id));
-      if (oldRow[0] && oldRow[0].filePath !== relPath) {
-        const oldAbs = path.join(process.cwd(), oldRow[0].filePath);
+      // Replace the file on disk if it changed
+      if (existing[0].filePath !== relPath) {
+        const oldAbs = path.join(process.cwd(), existing[0].filePath);
         await fs.unlink(oldAbs).catch(() => {});
       }
-
       const updated = await db
         .update(submissions)
         .set({
           filePath: relPath,
-          fileName: file.name,
           fileType: getMimeType(file.name) ?? file.type,
           fileSize: file.size,
           mediaType,

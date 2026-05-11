@@ -15,8 +15,14 @@ export async function getSubmission(assignmentId: number, studentId: number) {
   return rows[0] ?? null;
 }
 
-export async function getSubmissionsForAssignment(assignmentId: number) {
-  return db.select().from(submissions).where(eq(submissions.assignmentId, assignmentId));
+export async function getSubmissionsForAssignment(assignmentId: number): Promise<Record<number, SubmissionRow[]>> {
+  const rows = await db.select().from(submissions).where(eq(submissions.assignmentId, assignmentId));
+  const map: Record<number, SubmissionRow[]> = {};
+  for (const row of rows) {
+    if (!map[row.studentId]) map[row.studentId] = [];
+    map[row.studentId].push(row);
+  }
+  return map;
 }
 
 export async function updateSubmissionMeta(

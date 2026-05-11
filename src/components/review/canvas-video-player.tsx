@@ -396,8 +396,7 @@ export const CanvasVideoPlayer = forwardRef<
       // Resize Fabric canvas to match container
       const fc = fabricRef.current;
       if (fc) {
-        fc.setWidth(width);
-        fc.setHeight(height);
+        fc.setDimensions({ width, height });
         applyViewportTransform();
         fc.renderAll();
       }
@@ -460,8 +459,7 @@ export const CanvasVideoPlayer = forwardRef<
     if (!width || !height || !fabricCanvasElRef.current) return;
     if (fabricRef.current) {
       // Already initialised — just resize + re-apply transform
-      fabricRef.current.setWidth(width);
-      fabricRef.current.setHeight(height);
+      fabricRef.current.setDimensions({ width, height });
       applyViewportTransform();
       fabricRef.current.renderAll();
       return;
@@ -1029,7 +1027,7 @@ export const CanvasVideoPlayer = forwardRef<
     (clientX: number) => {
       const el = timelineRef.current;
       const v = hiddenVideoRef.current;
-      if (!el || !v) return;
+      if (!el || !v || !isFinite(v.duration) || v.duration === 0) return;
       const rect = el.getBoundingClientRect();
       const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
       const newTime = ratio * v.duration;

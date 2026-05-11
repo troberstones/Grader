@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { rubrics, rubricCriteria, rubricLevels } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import type { RubricJSON, RubricCriterion } from "@/types/rubric";
+import type { RubricJSON, RubricCriterion, RubricSettings } from "@/types/rubric";
 
 export async function getRubrics() {
   return db.select().from(rubrics).orderBy(desc(rubrics.updatedAt));
@@ -31,12 +31,17 @@ export async function getRubric(id: number) {
     })
   );
 
-  return { ...rubric[0], criteria: criteriaWithLevels };
+  return {
+    ...rubric[0],
+    settings: rubric[0].settings ? (JSON.parse(rubric[0].settings) as RubricSettings) : undefined,
+    criteria: criteriaWithLevels,
+  };
 }
 
 export async function createRubric(data: {
   name: string;
   description?: string;
+  settings?: RubricSettings;
   criteria: Array<{
     name: string;
     description?: string;
@@ -44,7 +49,11 @@ export async function createRubric(data: {
     levels: Array<{ level: number; label: string; description: string; points: number }>;
   }>;
 }) {
-  const rubric = await db.insert(rubrics).values({ name: data.name, description: data.description }).returning();
+  const rubric = await db.insert(rubrics).values({
+    name: data.name,
+    description: data.description,
+    settings: data.settings ? JSON.stringify(data.settings) : null,
+  }).returning();
   const rubricId = rubric[0].id;
 
   for (let i = 0; i < data.criteria.length; i++) {
@@ -68,6 +77,7 @@ export async function updateRubric(
   data: {
     name: string;
     description?: string;
+    settings?: RubricSettings;
     criteria: Array<{
       id?: number;
       name: string;
@@ -77,7 +87,12 @@ export async function updateRubric(
     }>;
   }
 ) {
-  await db.update(rubrics).set({ name: data.name, description: data.description, updatedAt: new Date().toISOString() }).where(eq(rubrics.id, id));
+  await db.update(rubrics).set({
+    name: data.name,
+    description: data.description,
+    settings: data.settings ? JSON.stringify(data.settings) : null,
+    updatedAt: new Date().toISOString(),
+  }).where(eq(rubrics.id, id));
 
   // Delete existing criteria and re-insert (simplest for reordering)
   const existingCriteria = await db.select().from(rubricCriteria).where(eq(rubricCriteria.rubricId, id));
@@ -118,6 +133,7 @@ export async function duplicateRubric(id: number) {
   return createRubric({
     name: `${original.name} (Copy)`,
     description: original.description ?? undefined,
+    settings: original.settings ?? undefined,
     criteria: original.criteria.map((c) => ({
       name: c.name,
       description: c.description ?? undefined,
@@ -131,6 +147,7 @@ export async function importRubricFromJSON(json: RubricJSON) {
   return createRubric({
     name: json.name,
     description: json.description,
+    settings: json.settings,
     criteria: json.criteria.map((c) => ({
       name: c.name,
       description: c.description,
@@ -146,6 +163,7 @@ export async function exportRubricToJSON(id: number): Promise<RubricJSON | null>
   return {
     name: rubric.name,
     description: rubric.description ?? undefined,
+    settings: rubric.settings ?? undefined,
     criteria: rubric.criteria.map((c) => ({
       name: c.name,
       description: c.description ?? undefined,

@@ -125,6 +125,7 @@ export async function getAssignment(id: number) {
   let rubric: {
     id: number;
     name: string;
+    settings?: { gradingMode?: "v3"; bandEdges?: [number, number, number] };
     criteria: {
       id: number;
       name: string;
@@ -155,7 +156,14 @@ export async function getAssignment(id: number) {
         })
       );
 
-      rubric = { id: rubricRow[0].id, name: rubricRow[0].name, criteria: criteriaWithLevels };
+      rubric = {
+        id: rubricRow[0].id,
+        name: rubricRow[0].name,
+        settings: rubricRow[0].settings
+          ? (JSON.parse(rubricRow[0].settings) as { gradingMode?: "v3"; bandEdges?: [number, number, number] })
+          : undefined,
+        criteria: criteriaWithLevels,
+      };
     }
   }
 

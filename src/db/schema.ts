@@ -46,6 +46,7 @@ export const rubrics = sqliteTable("rubrics", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
   description: text("description"),
+  settings: text("settings"),
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
   updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),
 });
@@ -103,9 +104,7 @@ export const submissions = sqliteTable("submissions", {
   fps: real("fps"),
   duration: real("duration"),
   submittedAt: text("submitted_at").notNull().default(sql`(datetime('now'))`),
-}, (table) => [
-  uniqueIndex("submission_unique_idx").on(table.assignmentId, table.studentId),
-]);
+});
 
 // ─── Grades ─────────────────────────────────────────────
 

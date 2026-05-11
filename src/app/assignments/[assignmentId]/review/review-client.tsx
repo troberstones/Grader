@@ -28,7 +28,7 @@ type Assignment = NonNullable<Awaited<ReturnType<typeof getAssignment>>>;
 
 interface ReviewClientProps {
   assignment: Assignment;
-  initialSubmissions: Record<number, SubmissionRow>;
+  initialSubmissions: Record<number, SubmissionRow[]>;
 }
 
 // Used only by the +/- buttons; trackpad pinch uses continuous exponential zoom
@@ -59,7 +59,8 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
   const isMasterRef = useRef(isMaster);
   isMasterRef.current = isMaster;
 
-  const [submissions, setSubmissions] = useState<Record<number, SubmissionRow>>(initialSubmissions);
+  const [submissions, setSubmissions] = useState<Record<number, SubmissionRow[]>>(initialSubmissions);
+  const [fileIndex, setFileIndex] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [mediaSize, setMediaSize] = useState({ width: 0, height: 0 });
@@ -95,7 +96,8 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
   }
 
   const selectedStudent = students.find((s) => s.id === selectedStudentId) ?? null;
-  const submission = selectedStudentId ? submissions[selectedStudentId] ?? null : null;
+  const studentFiles = selectedStudentId ? (submissions[selectedStudentId] ?? []) : [];
+  const submission = studentFiles[fileIndex] ?? null;
 
   // ── Annotation state — all owned by the hook ─────────────────────────────
   const {
@@ -209,7 +211,7 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
   // ── On mount: load first student's annotations ────────────────────────────
   useEffect(() => {
     if (!selectedStudentId) return;
-    const sub = submissions[selectedStudentId] ?? null;
+    const sub = submissions[selectedStudentId]?.[0] ?? null;
     const frame = sub?.mediaType === "video" ? 0 : null;
     loadForSubmission(sub?.id ?? null, frame);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -221,12 +223,9 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
     await flushCurrentFrame(submission?.id ?? null);
 
     setSelectedStudentId(studentId);
-    // Don't reset mediaSize here — keeping AnnotationCanvas mounted prevents
-    // the Fabric reinit flash. If the new video has different dimensions,
-    // handleVideoReady will queue the annotation for reload after Fabric
-    // reinitializes with the new size.
+    setFileIndex(0);
 
-    const sub = submissions[studentId] ?? null;
+    const sub = submissions[studentId]?.[0] ?? null;
     const frame = sub?.mediaType === "video" ? 0 : null;
     await loadForSubmission(sub?.id ?? null, frame);
   }
@@ -278,7 +277,20 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
         throw new Error(err.error ?? "Upload failed");
       }
       const { submission: newSub } = await res.json();
-      setSubmissions((prev) => ({ ...prev, [selectedStudentId]: newSub }));
+      setSubmissions((prev) => {
+        const existing = prev[selectedStudentId] ?? [];
+        const idx = existing.findIndex((s) => s.fileName === newSub.fileName);
+        const updated = idx >= 0
+          ? existing.map((s, i) => (i === idx ? newSub : s))
+          : [...existing, newSub];
+        return { ...prev, [selectedStudentId]: updated };
+      });
+      const newIdx = (() => {
+        const files = submissions[selectedStudentId] ?? [];
+        const i = files.findIndex((s) => s.fileName === newSub.fileName);
+        return i >= 0 ? i : files.length;
+      })();
+      setFileIndex(newIdx);
 
       const frame = newSub.mediaType === "video" ? 0 : null;
       setMediaSize({ width: 0, height: 0 });
@@ -308,10 +320,21 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
     if (next !== undefined) getVideoHandle()?.seekToFrame(next);
   }
 
-  // ── Navigation (for keyboard handler) ────────────────────────────────────
+  // ── Navigation ─────────────────────────────────────────────────────────────
   const currentIdx = students.findIndex((s) => s.id === selectedStudentId);
   const prevStudent = currentIdx > 0 ? students[currentIdx - 1] : null;
   const nextStudent = currentIdx < students.length - 1 ? students[currentIdx + 1] : null;
+
+  async function goToFile(index: number) {
+    const files = selectedStudentId ? (submissions[selectedStudentId] ?? []) : [];
+    if (index < 0 || index >= files.length) return;
+    await flushCurrentFrame(submission?.id ?? null);
+    setFileIndex(index);
+    const sub = files[index];
+    const frame = sub.mediaType === "video" ? 0 : null;
+    setMediaSize({ width: 0, height: 0 });
+    await loadForSubmission(sub.id, frame);
+  }
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
@@ -342,6 +365,14 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
           e.preventDefault();
           if (e.shiftKey) goNextAnnotation();
           else getVideoHandle()?.seekToFrame((currentFrame ?? 0) + 1);
+          break;
+        case ",":
+          e.preventDefault();
+          void goToFile(fileIndex - 1);
+          break;
+        case ".":
+          e.preventDefault();
+          void goToFile(fileIndex + 1);
           break;
         case "[":
           setStrokeWidth((w) => Math.max(1, w - 1));
@@ -377,6 +408,25 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
               actions={
                 submission ? (
                   <div className="flex items-center gap-0.5">
+                    {studentFiles.length > 1 && (
+                      <div className="flex items-center gap-0.5 pr-1.5 mr-0.5 border-r">
+                        <button
+                          onClick={() => void goToFile(fileIndex - 1)}
+                          disabled={fileIndex === 0}
+                          className="p-1 rounded hover:bg-muted disabled:opacity-25 transition-colors text-xs"
+                          title="Previous file (,)"
+                        >‹</button>
+                        <span className="text-xs tabular-nums text-muted-foreground w-10 text-center">
+                          {fileIndex + 1} / {studentFiles.length}
+                        </span>
+                        <button
+                          onClick={() => void goToFile(fileIndex + 1)}
+                          disabled={fileIndex === studentFiles.length - 1}
+                          className="p-1 rounded hover:bg-muted disabled:opacity-25 transition-colors text-xs"
+                          title="Next file (.)"
+                        >›</button>
+                      </div>
+                    )}
                     <button
                       onClick={zoomOut}
                       disabled={zoom <= ZOOM_STEPS[0]}
@@ -445,7 +495,7 @@ export function ReviewClient({ assignment, initialSubmissions }: ReviewClientPro
               />
             ) : submission.mediaType === "image" ? (
               <ImageViewer
-                key={selectedStudentId ?? 0}
+                key={`${selectedStudentId ?? 0}-${fileIndex}`}
                 src={submissionUrl!}
                 zoom={zoom}
                 onZoomChange={handleZoomChange}

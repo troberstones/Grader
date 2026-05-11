@@ -12,8 +12,14 @@ export interface RubricCriterion {
   levels: RubricLevel[];
 }
 
+export interface RubricSettings {
+  gradingMode?: "v3";
+  bandEdges?: [number, number, number];
+}
+
 export interface RubricJSON {
   name: string;
   description?: string;
+  settings?: RubricSettings;
   criteria: RubricCriterion[];
 }

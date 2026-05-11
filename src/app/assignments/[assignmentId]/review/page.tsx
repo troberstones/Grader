@@ -18,12 +18,10 @@ export default async function ReviewPage({
 
   if (!assignment) notFound();
 
-  const submissionMap = Object.fromEntries(submissions.map((s) => [s.studentId, s]));
-
   return (
     <ReviewClient
       assignment={assignment}
-      initialSubmissions={submissionMap}
+      initialSubmissions={submissions}
     />
   );
 }
