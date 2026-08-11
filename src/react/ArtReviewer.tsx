@@ -43,6 +43,8 @@ export interface ArtReviewerProps {
 }
 
 const LASER_LIFETIME_MS = 1200;
+/** The artwork is the point; the control stack never squeezes it to a strip. */
+const STAGE_MIN_HEIGHT = 320;
 
 export function ArtReviewer({
   items,
@@ -668,6 +670,12 @@ export function ArtReviewer({
         display: "flex",
         flexDirection: "column",
         height: "100%",
+        // When the window is genuinely too short for a usable stage plus the
+        // controls, scroll. The alternative is what used to happen: the stage
+        // refused to shrink past its minimum, overflowed its own row, and
+        // painted straight over the timeline and the transport bar.
+        minHeight: 0,
+        overflowY: "auto",
         background: C.bg,
         color: C.text,
         gap: 8,
@@ -707,16 +715,16 @@ export function ArtReviewer({
       />
 
       {/* stage */}
-      <div style={{ display: "flex", gap: 8, flex: 1, minHeight: 0 }}>
+      {/* The floor lives here, on the flex row, not on the stage inside it.
+          On the inner box the flex algorithm never sees it: the row shrinks,
+          the stage refuses, and it overflows across everything below. */}
+      <div style={{ display: "flex", gap: 8, flex: 1, minHeight: STAGE_MIN_HEIGHT }}>
         <div
           ref={containerRef}
           style={{
             position: "relative",
             flex: 1,
             minWidth: 0,
-            // The artwork is the point; never let the control stack squeeze the
-            // stage down to a strip.
-            minHeight: 320,
             background: C.lowest,
             borderRadius: 8,
             overflow: "hidden",
