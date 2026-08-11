@@ -50,10 +50,13 @@ it flashes past in 42 ms during playback — `[` and `]` jump between annotated
 frames, and "Stop on notes" pauses playback when one is hit. Those are how you
 read notes back, not the playhead.
 
-**Palm and stylus** — rest your hand on the glass while writing with the Pencil.
-The touch is ignored: it does not start a stroke, does not end the one in
-flight, and does not drag its own coordinates into your line. Two fingers still
-pinch-zoom, but only when you are not already drawing.
+**Stylus and fingers** — they do not share jobs. The Pencil draws and only
+draws: it never pans, never pinches, and does nothing at all with the select
+tool. Fingers navigate and only navigate: one drags, two pinch-zoom, and no
+finger can lay down a stroke. There is no palm-rejection heuristic to get
+wrong — a palm is a touch, and a touch cannot draw.
+
+On a desktop the mouse keeps doing both, since there is no stylus to take over.
 
 **PSD layers** — open the PSD, switch the panel from Composite to Stack, toggle
 layers, hit `S` on a layer to solo it. The `≉` marker means a blend mode that

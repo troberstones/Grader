@@ -282,18 +282,35 @@ export function ArtReviewer({
         // Capture is an optimisation, not a requirement — a pointer that has
         // already been released (or a synthetic one) must not abort the stroke.
       }
+      // Fingers navigate, the stylus draws, and neither does the other's job.
+      // Palm rejection then needs no heuristic at all: a palm is a touch, and a
+      // touch cannot draw, whatever else is happening on the glass.
+      if (e.pointerType === "touch") {
+        pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pointersRef.current.size === 2) {
+          const [a, b] = [...pointersRef.current.values()];
+          pinchRef.current = {
+            dist: Math.hypot(a.x - b.x, a.y - b.y),
+            zoom: state.zoom,
+            cx: (a.x + b.x) / 2,
+            cy: (a.y + b.y) / 2,
+            panX: state.panX,
+            panY: state.panY,
+          };
+          panStateRef.current = null;
+        } else if (pointersRef.current.size === 1) {
+          panStateRef.current = { x: e.clientX, y: e.clientY, panX: state.panX, panY: state.panY };
+        }
+        return;
+      }
+
+      // Pen and mouse from here. A stylus never pans and never pinches — it has
+      // exactly one job.
       const inFlight = drawingRef.current;
       if (inFlight && inFlight.pointerId !== e.pointerId) {
-        // A finger or palm landing while the pen is drawing. Ignore it outright
-        // — do not track it, do not end the stroke. Resting your hand must not
-        // cost you the letter you are in the middle of.
-        if (e.pointerType === "touch" && inFlight.pointerType === "pen") return;
-
-        // Otherwise the previous pointer's release never reached us: capture was
-        // refused, or it came up over the rail. Close that stroke out and take
-        // this one. Treating it as a second finger instead is what dropped a
-        // letter in the middle of a word — and then recovered, because the next
-        // pointer down usually reused the stale id.
+        // The previous pointer's release never reached us: capture was refused,
+        // or it came up over the rail. Close that stroke out and take this one,
+        // rather than losing both.
         finishStrokeRef.current?.();
       }
 
@@ -302,22 +319,6 @@ export function ArtReviewer({
         pointersRef.current.clear();
       }
       pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-      // Two fingers: pinch-zoom and pan together, iPad style. Touch only; a pen
-      // never pinches.
-      if (pointersRef.current.size === 2 && e.pointerType !== "pen") {
-        const [a, b] = [...pointersRef.current.values()];
-        pinchRef.current = {
-          dist: Math.hypot(a.x - b.x, a.y - b.y),
-          zoom: state.zoom,
-          cx: (a.x + b.x) / 2,
-          cy: (a.y + b.y) / 2,
-          panX: state.panX,
-          panY: state.panY,
-        };
-        drawingRef.current = null;
-        return;
-      }
 
       // Laser: transient, broadcast, never stored.
       if (e.altKey) {
@@ -330,11 +331,17 @@ export function ArtReviewer({
         return;
       }
 
-      // Pan: space-drag, middle button, or the select tool.
-      if (spaceRef.current || e.button === 1 || tools.tool === "select") {
+      // Pan: space-drag, middle button, or the select tool. Mouse only — a
+      // stylus does not pan even when the select tool is active.
+      if (e.pointerType !== "pen" && (spaceRef.current || e.button === 1 || tools.tool === "select")) {
         panStateRef.current = { x: e.clientX, y: e.clientY, panX: state.panX, panY: state.panY };
         return;
       }
+
+      // The select tool is the pan tool. A stylus does not pan, so with it
+      // chosen a stylus does nothing at all — it must not fall through and
+      // start a stroke whose tool is "select".
+      if (tools.tool === "select") return;
 
       const p = toMediaNorm(e.clientX, e.clientY);
 
@@ -370,9 +377,13 @@ export function ArtReviewer({
         pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
       }
 
+      // A stylus neither pans nor pinches, so it skips both branches outright.
+      // Without this it would drive a pan that a finger had started.
+      const navigates = e.pointerType !== "pen";
+
       // Pinch
       const pinch = pinchRef.current;
-      if (pinch && pointersRef.current.size >= 2 && !drawingRef.current) {
+      if (navigates && pinch && pointersRef.current.size >= 2) {
         const [a, b] = [...pointersRef.current.values()];
         const dist = Math.hypot(a.x - b.x, a.y - b.y);
         const cx = (a.x + b.x) / 2;
@@ -393,7 +404,7 @@ export function ArtReviewer({
 
       // Pan
       const pan = panStateRef.current;
-      if (pan) {
+      if (navigates && pan) {
         dispatch({
           a: "view",
           panX: pan.panX + (e.clientX - pan.x),
@@ -414,9 +425,12 @@ export function ArtReviewer({
         return;
       }
 
+      // A finger has no other business here; it cannot draw.
+      if (e.pointerType === "touch") return;
+
       const d = drawingRef.current;
-      // Same ownership rule as pointerup: a palm sliding about must not have its
-      // coordinates appended to the pen's line.
+      // A stroke belongs to the pointer that began it — nothing else may extend
+      // it, whatever stray events arrive.
       if (!d || d.pointerId !== e.pointerId) return;
 
       const raw = toMediaNorm(e.clientX, e.clientY);
@@ -488,16 +502,25 @@ export function ArtReviewer({
       pointersRef.current.delete(e.pointerId);
       if (pointersRef.current.size < 2) pinchRef.current = null;
 
-      // Only the pointer that started the stroke may end it. Otherwise a palm
-      // touching down and lifting again mid-word commits the pen's stroke where
-      // it stands, and the rest of the letter is drawn into nothing.
+      if (e.pointerType === "touch") {
+        // Lifting one of two fingers: keep panning from the one still down,
+        // re-anchored, rather than stopping dead until both are lifted.
+        const rest = [...pointersRef.current.values()];
+        panStateRef.current =
+          rest.length === 1
+            ? { x: rest[0].x, y: rest[0].y, panX: state.panX, panY: state.panY }
+            : null;
+        return; // a finger never ends a stroke
+      }
+
+      // Only the pointer that started the stroke may end it.
       const d = drawingRef.current;
       if (d && d.pointerId !== e.pointerId) return;
 
       panStateRef.current = null;
       void finishStroke();
     },
-    [finishStroke],
+    [finishStroke, state.panX, state.panY],
   );
 
   /**

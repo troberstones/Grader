@@ -427,7 +427,13 @@ display on `frame_in` like everything else.
 Pen, highlighter (multiply blend), line, arrow, rect, ellipse, text, eraser (stroke-level,
 not pixel — stays vector and stays cheap), stamps. 8–10 colours, 4 widths, opacity.
 Apple Pencil pressure and tilt via `PointerEvent.pressure` — the iPad is a stated device,
-so this is cheap and disproportionately nice. Pen-only mode for palm rejection.
+so this is cheap and disproportionately nice.
+
+Input is split by `pointerType` rather than by heuristic: a stylus draws and never navigates,
+a touch navigates and never draws, and a mouse does both because a desktop has no stylus to
+take over. Palm rejection then needs no code — a palm is a touch. Trying to be clever about
+it instead (ignore the second contact, cancel on two pointers) is what dropped whole letters
+out of the middle of a word.
 
 Input smoothing (one-euro filter) before RDP simplification: RDP alone reduces point count
 but doesn't fix shaky touch input.
