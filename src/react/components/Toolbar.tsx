@@ -18,7 +18,6 @@ export interface ToolState {
   tool: StrokeTool | "erase" | "select";
   color: string;
   width: number;
-  guides: GuideKind;
 }
 
 interface TransportBarProps {

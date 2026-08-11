@@ -1,6 +1,7 @@
 import type {
   ColorState,
   FitMode,
+  GuideKind,
   LoopMode,
   Role,
   Rotation,
@@ -44,6 +45,7 @@ export type Action =
   | { a: "rotate"; deg: Rotation }
   | { a: "view"; zoom?: number; panX?: number; panY?: number; fit?: FitMode }
   | { a: "color"; patch: Partial<ColorState> }
+  | { a: "guides"; mode: GuideKind }
   | {
       a: "layers";
       visible?: Record<string, boolean>;
@@ -91,14 +93,31 @@ export type Action =
 
 export type ActionKind = Action["a"];
 
-/** Envelope as it appears on the channel. */
+/**
+ * Envelope as it appears on the channel.
+ *
+ * `sender`, `ctx` and `kind` are reserved: the transport spreads the action and
+ * then stamps these on top, so an action field sharing one of those names is
+ * silently overwritten in flight. That is how the guides action first shipped —
+ * its payload was `kind`, and every follower received the string "art-review"
+ * where a guide name should have been.
+ */
 export type Envelope = Action & { sender: string; ctx: string };
 
 /**
- * Actions a master broadcasts. View actions are deliberately excluded — they
- * ride only when the follower has opted into "follow view", because the
- * projector should mirror zoom while an iPad in someone's lap probably should
- * not. Tool and colour selection never travel at all.
+ * Actions a master broadcasts.
+ *
+ * The line that matters is *what the image looks like* against *where you are
+ * looking at it*. Flip, rotate, desaturate, isolate a channel, put thirds over
+ * it, hide a PSD layer — those change the thing under discussion, and a room
+ * that disagrees about them is a room talking past itself. They follow the
+ * master exactly like transport does.
+ *
+ * Zoom and pan are the other kind. The projector should mirror them; an iPad in
+ * someone's lap probably should not, which is what "follow view" is for.
+ *
+ * Tool and colour selection never travel at all — that is your pen, not the
+ * room's.
  */
 export const TRANSPORT_ACTIONS: ReadonlySet<ActionKind> = new Set<ActionKind>([
   "goto",
@@ -111,13 +130,17 @@ export const TRANSPORT_ACTIONS: ReadonlySet<ActionKind> = new Set<ActionKind>([
   "fps",
 ]);
 
-export const VIEW_ACTIONS: ReadonlySet<ActionKind> = new Set<ActionKind>([
+/** Appearance of the image itself. Follows the master unconditionally. */
+export const PRESENTATION_ACTIONS: ReadonlySet<ActionKind> = new Set<ActionKind>([
   "flip",
   "rotate",
-  "view",
   "color",
+  "guides",
   "layers",
 ]);
+
+/** Framing only — zoom, pan, fit. Gated on "follow view". */
+export const VIEW_ACTIONS: ReadonlySet<ActionKind> = new Set<ActionKind>(["view"]);
 
 /** Annotation and presence traffic reaches every peer regardless of role. */
 export const ALWAYS_ACTIONS: ReadonlySet<ActionKind> = new Set<ActionKind>([
@@ -136,7 +159,7 @@ export const ALWAYS_ACTIONS: ReadonlySet<ActionKind> = new Set<ActionKind>([
 export function isBroadcast(kind: ActionKind, opts: { isMaster: boolean; followView: boolean }): boolean {
   if (ALWAYS_ACTIONS.has(kind)) return true;
   if (!opts.isMaster) return false;
-  if (TRANSPORT_ACTIONS.has(kind)) return true;
+  if (TRANSPORT_ACTIONS.has(kind) || PRESENTATION_ACTIONS.has(kind)) return true;
   return opts.followView && VIEW_ACTIONS.has(kind);
 }
 
@@ -147,6 +170,6 @@ export function shouldApply(
 ): boolean {
   if (ALWAYS_ACTIONS.has(kind)) return true;
   if (opts.role !== "follower") return false;
-  if (TRANSPORT_ACTIONS.has(kind)) return true;
+  if (TRANSPORT_ACTIONS.has(kind) || PRESENTATION_ACTIONS.has(kind)) return true;
   return opts.followView && VIEW_ACTIONS.has(kind);
 }

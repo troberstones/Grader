@@ -473,8 +473,23 @@ type Action =
   | { a:'claim'|'release'; client:string; name:string }
 ```
 
-Per-field sync policy: transport always; view opt-in ("Follow view" toggle — the projector
-should mirror zoom, an iPad in someone's lap maybe shouldn't); tools/colours never.
+Per-field sync policy, in three tiers:
+
+- **Transport** — always. Play, pause, seek, item, rate, loop, fps.
+- **Presentation** — always. Flip, rotate, Value/saturation, channel, guides, PSD layer
+  visibility. These change *what the image is*, and a room that disagrees about them is
+  talking past itself: "look at the shoulder line" means nothing if half the room is
+  looking at an unflipped copy. Originally these sat with view, behind the toggle, which
+  made the common case — flip to check a drawing — silently private.
+- **View** — opt-in via "Follow view". Zoom and pan only: *where* you are looking rather
+  than what at. The projector should mirror it, an iPad in someone's lap maybe shouldn't.
+
+Tools and colours never travel — that is your pen, not the room's.
+
+One trap worth naming: the channel envelope stamps `sender`, `ctx` and `kind` over the
+action, so an action field named any of those is destroyed in flight. The guides action
+first shipped with its payload in `kind` and every follower received the literal string
+"art-review" where a guide name should have been.
 
 ### 8.3 Don't stream frame numbers
 Broadcasting the playhead every frame produces jitter and floods the channel. Instead the

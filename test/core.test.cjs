@@ -414,9 +414,23 @@ test("policy: only a master broadcasts transport", () => {
   assert.equal(isBroadcast("seek", { isMaster: false, followView: false }), false);
 });
 
-test("policy: view actions ride only when follow-view is on", () => {
+test("policy: zoom and pan ride only when follow-view is on", () => {
   assert.equal(isBroadcast("view", { isMaster: true, followView: false }), false);
   assert.equal(isBroadcast("view", { isMaster: true, followView: true }), true);
+  assert.equal(shouldApply("view", { role: "follower", followView: false }), false);
+  assert.equal(shouldApply("view", { role: "follower", followView: true }), true);
+});
+
+test("policy: what the image looks like follows the master, follow-view or not", () => {
+  // Flip, rotate, desaturate, channel, guides, PSD layers. A room that
+  // disagrees about these is a room talking past itself.
+  for (const kind of ["flip", "rotate", "color", "guides", "layers"]) {
+    assert.equal(isBroadcast(kind, { isMaster: true, followView: false }), true, kind);
+    assert.equal(shouldApply(kind, { role: "follower", followView: false }), true, kind);
+    // Still only the master drives, and only a follower obeys.
+    assert.equal(isBroadcast(kind, { isMaster: false, followView: true }), false, kind);
+    assert.equal(shouldApply(kind, { role: "free", followView: true }), false, kind);
+  }
 });
 
 test("policy: annotation and presence always travel, whatever the role", () => {
@@ -424,6 +438,14 @@ test("policy: annotation and presence always travel, whatever the role", () => {
     assert.equal(isBroadcast(kind, { isMaster: false, followView: false }), true, kind);
     assert.equal(shouldApply(kind, { role: "free", followView: false }), true, kind);
   }
+});
+
+test("reducer: guides are viewer state, so they travel like any other action", () => {
+  const withGrid = reduceViewer(DEFAULT_VIEWER_STATE, { a: "guides", mode: "grid" }, { items: [] });
+  assert.equal(withGrid.guides, "grid");
+  assert.equal(DEFAULT_VIEWER_STATE.guides, "none", "no mutation of the default");
+  const back = reduceViewer(withGrid, { a: "guides", mode: "none" }, { items: [] });
+  assert.equal(back.guides, "none");
 });
 
 test("policy: a free peer ignores remote transport", () => {

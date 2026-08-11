@@ -78,9 +78,13 @@ on screen; only below the floor does the panel scroll.
 5. Draw on either device — annotation is independent of who holds control, so a
    follower can mark up the projector feed.
 6. `Alt + drag` is the laser pointer: transient, broadcast, never stored.
-7. **Follow view** (checkbox) additionally mirrors zoom and pan. Leave it off
-   for the iPad, on for a projector.
-8. **Break away** browses independently; **Rejoin** snaps back.
+7. Flip, rotate, Value, the channel picker and the guides overlay follow the
+   master on every screen, with or without "Follow view". They change what the
+   image *is*, and a room that disagrees about that is talking past itself.
+8. **Follow view** (checkbox) additionally mirrors zoom and pan — *where* you
+   are looking rather than what at. Leave it off for the iPad, on for a
+   projector.
+9. **Break away** browses independently; **Rejoin** snaps back.
 
 Only tick **Audio** on one machine, or the room echoes.
 
@@ -171,6 +175,8 @@ Multi-client sync, verified with two browser tabs:
 - Scrubbing on the master moves the follower to the same frame.
 - Play/pause propagates, and follower transport controls disable.
 - Switching file switches it on the follower too, layer panel and all.
+- Flip, rotate, Value, channel and guides all mirror with "Follow view" off;
+  zoom stays at the follower's own setting, which is the point of the checkbox.
 
 - Continuous playback: a follower advanced 63 → 88 → 113 over two seconds on a
   25 fps clip — exactly 25 frames per second — while the master's tab was

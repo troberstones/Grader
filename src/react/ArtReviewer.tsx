@@ -71,7 +71,6 @@ export function ArtReviewer({
     tool: "pen",
     color: "#ef4444",
     width: 4,
-    guides: "none",
   });
   const [showHelp, setShowHelp] = useState(false);
   const [audioOwner, setAudioOwner] = useState(false);
@@ -106,6 +105,12 @@ export function ArtReviewer({
   const pointersRef = useRef(new Map<number, { x: number; y: number }>());
   const pinchRef = useRef<{ dist: number; zoom: number; cx: number; cy: number; panX: number; panY: number } | null>(null);
   const spaceRef = useRef(false);
+  /**
+   * drawOverlay is built before `viewer` exists, so it cannot close over
+   * `state`. The render loop reinstalls the callback every render, so a ref
+   * read at draw time is current.
+   */
+  const guidesRef = useRef<GuideKind>("none");
 
   const inkColor = useMemo(() => hexToRgba(tools.color), [tools.color]);
 
@@ -120,7 +125,7 @@ export function ArtReviewer({
       if (!ctx) return;
 
       clearOverlay(ctx, params);
-      drawGuides(ctx, tools.guides, params);
+      drawGuides(ctx, guidesRef.current, params);
 
       const committed = annotations.visibleOn(frame);
       drawStrokes(ctx, committed, params, {
@@ -163,7 +168,7 @@ export function ArtReviewer({
         );
       }
     },
-    [annotations, tools.guides, tools.width, inkColor],
+    [annotations, tools.width, inkColor],
   );
 
   const viewer = useViewer({
@@ -179,6 +184,7 @@ export function ArtReviewer({
   });
 
   const { state, dispatch, item, source, stats } = viewer;
+  guidesRef.current = state.guides;
 
   useEffect(() => setItemIndex(state.itemIndex), [state.itemIndex]);
   useEffect(
@@ -605,7 +611,7 @@ export function ArtReviewer({
           return;
         case "g": {
           const order: GuideKind[] = ["none", "thirds", "golden", "center", "diagonals", "grid"];
-          setTools((t) => ({ ...t, guides: order[(order.indexOf(t.guides) + 1) % order.length] }));
+          dispatch({ a: "guides", mode: order[(order.indexOf(state.guides) + 1) % order.length] });
           return;
         }
         case "o":
@@ -881,13 +887,13 @@ export function ArtReviewer({
         <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 2 }}>
           <ViewBar
             state={state}
-            guides={tools.guides}
+            guides={state.guides}
             onFlip={(h, v) => dispatch({ a: "flip", h, v })}
             onRotate={() =>
               dispatch({ a: "rotate", deg: (((state.rotate + 90) % 360) as 0 | 90 | 180 | 270) })
             }
             onZoom={setZoom}
-            onGuides={(g) => setTools((t) => ({ ...t, guides: g }))}
+            onGuides={(mode) => dispatch({ a: "guides", mode })}
             onColor={(patch) => dispatch({ a: "color", patch })}
           />
         </div>

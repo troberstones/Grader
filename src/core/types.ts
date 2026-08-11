@@ -101,6 +101,8 @@ export interface ColorState {
 
 export type FitMode = "fit" | "fill" | "actual" | "free";
 
+export type GuideKind = "none" | "thirds" | "golden" | "center" | "diagonals" | "grid";
+
 export interface ViewerState {
   itemIndex: number;
   frame: number;
@@ -117,6 +119,8 @@ export interface ViewerState {
   panY: number;
   fit: FitMode;
   color: ColorState;
+  /** Composition overlay. Viewer state, not tool state — the room shares it. */
+  guides: GuideKind;
   /** PSD layer visibility overrides, keyed by layer id. */
   layers: Record<string, boolean>;
   soloLayer: string | null;
@@ -154,6 +158,7 @@ export const DEFAULT_VIEWER_STATE: ViewerState = {
   panY: 0,
   fit: "fit",
   color: DEFAULT_COLOR_STATE,
+  guides: "none",
   layers: {},
   soloLayer: null,
   composite: true,

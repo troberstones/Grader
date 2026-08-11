@@ -1,5 +1,5 @@
 import { rgbaToCss } from "../core/strokes";
-import type { Stroke } from "../core/types";
+import type { GuideKind, Stroke } from "../core/types";
 import type { ViewParams } from "./gl";
 
 /**
@@ -329,7 +329,10 @@ export function drawLaser(
 }
 
 /** Composition guides — the classic critique overlays. */
-export type GuideKind = "none" | "thirds" | "golden" | "center" | "diagonals" | "grid";
+// GuideKind lives in core/types now: it is part of ViewerState, so the reducer
+// needs it, and the reducer never imports the renderer. Re-exported here so
+// existing importers do not have to care.
+export type { GuideKind };
 
 export function drawGuides(
   ctx: CanvasRenderingContext2D,

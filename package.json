@@ -11,10 +11,13 @@
     "./server": "./src/server/index.ts",
     "./core": "./src/core/index.ts"
   },
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/*.test.cjs"
+    "test": "node --test test/*.test.cjs",
+    "pretest": "bash scripts/build-test.sh"
   },
   "peerDependencies": {
     "react": ">=19",

@@ -103,6 +103,9 @@ export function reduceViewer(
     case "color":
       return { ...state, color: { ...state.color, ...action.patch } };
 
+    case "guides":
+      return { ...state, guides: action.mode };
+
     case "layers": {
       const next = { ...state };
       if (action.visible) next.layers = { ...state.layers, ...action.visible };
