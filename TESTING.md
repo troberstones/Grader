@@ -50,6 +50,11 @@ it flashes past in 42 ms during playback — `[` and `]` jump between annotated
 frames, and "Stop on notes" pauses playback when one is hit. Those are how you
 read notes back, not the playhead.
 
+**Palm and stylus** — rest your hand on the glass while writing with the Pencil.
+The touch is ignored: it does not start a stroke, does not end the one in
+flight, and does not drag its own coordinates into your line. Two fingers still
+pinch-zoom, but only when you are not already drawing.
+
 **PSD layers** — open the PSD, switch the panel from Composite to Stack, toggle
 layers, hit `S` on a layer to solo it. The `≉` marker means a blend mode that
 cannot be reproduced in the shader; `fx` means an adjustment layer baked into

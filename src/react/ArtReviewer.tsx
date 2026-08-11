@@ -94,6 +94,9 @@ export function ArtReviewer({
   // re-subscribing every stroke point.
   const drawingRef = useRef<{
     id: string;
+    /** Which pointer owns this stroke; another one lifting must not end it. */
+    pointerId: number;
+    pointerType: string;
     points: number[];
     pressure: number[];
     sent: number;
@@ -105,6 +108,8 @@ export function ArtReviewer({
   const pointersRef = useRef(new Map<number, { x: number; y: number }>());
   const pinchRef = useRef<{ dist: number; zoom: number; cx: number; cy: number; panX: number; panY: number } | null>(null);
   const spaceRef = useRef(false);
+  /** finishStroke is defined below onPointerDown; a ref sidesteps the ordering. */
+  const finishStrokeRef = useRef<(() => void) | null>(null);
   /**
    * drawOverlay is built before `viewer` exists, so it cannot close over
    * `state`. The render loop reinstalls the callback every render, so a ref
@@ -277,10 +282,30 @@ export function ArtReviewer({
         // Capture is an optimisation, not a requirement — a pointer that has
         // already been released (or a synthetic one) must not abort the stroke.
       }
+      const inFlight = drawingRef.current;
+      if (inFlight && inFlight.pointerId !== e.pointerId) {
+        // A finger or palm landing while the pen is drawing. Ignore it outright
+        // — do not track it, do not end the stroke. Resting your hand must not
+        // cost you the letter you are in the middle of.
+        if (e.pointerType === "touch" && inFlight.pointerType === "pen") return;
+
+        // Otherwise the previous pointer's release never reached us: capture was
+        // refused, or it came up over the rail. Close that stroke out and take
+        // this one. Treating it as a second finger instead is what dropped a
+        // letter in the middle of a word — and then recovered, because the next
+        // pointer down usually reused the stale id.
+        finishStrokeRef.current?.();
+      }
+
+      // Belt and braces: with nothing in flight, nothing should still be tracked.
+      if (!drawingRef.current && !panStateRef.current && !pinchRef.current) {
+        pointersRef.current.clear();
+      }
       pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-      // Two fingers: pinch-zoom and pan together, iPad style.
-      if (pointersRef.current.size === 2) {
+      // Two fingers: pinch-zoom and pan together, iPad style. Touch only; a pen
+      // never pinches.
+      if (pointersRef.current.size === 2 && e.pointerType !== "pen") {
         const [a, b] = [...pointersRef.current.values()];
         pinchRef.current = {
           dist: Math.hypot(a.x - b.x, a.y - b.y),
@@ -327,6 +352,8 @@ export function ArtReviewer({
       const [sx, sy] = smoother.current.push(p.x, p.y);
       drawingRef.current = {
         id: `${author.id}-${Date.now().toString(36)}`,
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
         points: [sx, sy],
         pressure: e.pointerType === "pen" ? [e.pressure] : [],
         sent: 0,
@@ -345,7 +372,7 @@ export function ArtReviewer({
 
       // Pinch
       const pinch = pinchRef.current;
-      if (pinch && pointersRef.current.size >= 2) {
+      if (pinch && pointersRef.current.size >= 2 && !drawingRef.current) {
         const [a, b] = [...pointersRef.current.values()];
         const dist = Math.hypot(a.x - b.x, a.y - b.y);
         const cx = (a.x + b.x) / 2;
@@ -388,7 +415,9 @@ export function ArtReviewer({
       }
 
       const d = drawingRef.current;
-      if (!d) return;
+      // Same ownership rule as pointerup: a palm sliding about must not have its
+      // coordinates appended to the pen's line.
+      if (!d || d.pointerId !== e.pointerId) return;
 
       const raw = toMediaNorm(e.clientX, e.clientY);
       // Freehand accumulates; shapes only ever need start and current point.
@@ -452,14 +481,36 @@ export function ArtReviewer({
     viewer.invalidate();
   }, [annotations, holdRange, state, inkColor, tools.width, viewer]);
 
+  finishStrokeRef.current = () => void finishStroke();
+
   const onPointerUp = useCallback(
     (e: React.PointerEvent) => {
       pointersRef.current.delete(e.pointerId);
       if (pointersRef.current.size < 2) pinchRef.current = null;
+
+      // Only the pointer that started the stroke may end it. Otherwise a palm
+      // touching down and lifting again mid-word commits the pen's stroke where
+      // it stands, and the rest of the letter is drawn into nothing.
+      const d = drawingRef.current;
+      if (d && d.pointerId !== e.pointerId) return;
+
       panStateRef.current = null;
       void finishStroke();
     },
     [finishStroke],
+  );
+
+  /**
+   * Capture taken away mid-gesture — iPadOS does this when it decides a touch
+   * belongs to the system. Drop the pointer so it cannot haunt the next stroke;
+   * the stroke itself is finished normally rather than abandoned.
+   */
+  const onLostCapture = useCallback(
+    (e: React.PointerEvent) => {
+      pointersRef.current.delete(e.pointerId);
+      if (pointersRef.current.size < 2) pinchRef.current = null;
+    },
+    [],
   );
 
   // Wheel: pinch-zoom around the cursor, two-finger scroll pans.
@@ -776,6 +827,7 @@ export function ArtReviewer({
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
+            onLostPointerCapture={onLostCapture}
             onContextMenu={(e) => e.preventDefault()}
             style={{
               position: "absolute",
