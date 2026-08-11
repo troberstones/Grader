@@ -43,8 +43,15 @@ export interface ArtReviewerProps {
 }
 
 const LASER_LIFETIME_MS = 1200;
-/** The artwork is the point; the control stack never squeezes it to a strip. */
-const STAGE_MIN_HEIGHT = 320;
+/**
+ * The artwork is the point, so the stage has a floor — but a low one.
+ *
+ * Above this the stage absorbs every bit of shortfall and the transport stays
+ * on screen, which is the trade a tablet needs: a smaller image you can still
+ * scrub beats a bigger one whose play button is below the fold. Only under this
+ * does the panel start to scroll.
+ */
+const STAGE_MIN_HEIGHT = 220;
 
 export function ArtReviewer({
   items,
