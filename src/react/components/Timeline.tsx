@@ -20,9 +20,9 @@ interface TimelineProps {
 /**
  * Scrub bar with annotation ticks and cache-fill state.
  *
- * The hold bars matter as much as the ticks: an annotation pinned to one frame
- * is invisible during playback, so the timeline shows how long each note stays
- * on screen, not just where it starts.
+ * Ticks mark the frames carrying notes. A note lives on exactly one frame, so
+ * a tick is a point, not a span — during playback they flash past, which is
+ * what `[` / `]` and "Stop on notes" are for.
  */
 export function Timeline({
   frame,
@@ -106,22 +106,6 @@ export function Timeline({
               top: 0,
               bottom: 0,
               background: "rgba(255,255,255,0.055)",
-            }}
-          />
-        ))}
-
-        {/* annotation hold ranges */}
-        {markers.map((m, i) => (
-          <div
-            key={`h${i}`}
-            style={{
-              position: "absolute",
-              left: `${pct(m.frameIn)}%`,
-              width: `${Math.max(0.35, pct(m.frameOut) - pct(m.frameIn))}%`,
-              top: 6,
-              height: 8,
-              background: "rgba(255,144,105,0.28)",
-              borderRadius: 2,
             }}
           />
         ))}

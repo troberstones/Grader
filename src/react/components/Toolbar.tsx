@@ -10,7 +10,6 @@ export interface ToolState {
   color: string;
   width: number;
   guides: GuideKind;
-  holdFrames: number;
 }
 
 interface TransportBarProps {
@@ -310,7 +309,6 @@ interface InkBarProps {
   onTool: (t: ToolState["tool"]) => void;
   onColorPick: (c: string) => void;
   onWidth: (w: number) => void;
-  onHold: (frames: number) => void;
   onUndo: () => void;
   onRedo: () => void;
   onClear: () => void;
@@ -325,7 +323,6 @@ export function InkBar({
   onTool,
   onColorPick,
   onWidth,
-  onHold,
   onUndo,
   onRedo,
   onClear,
@@ -392,23 +389,6 @@ export function InkBar({
 
       {frameCount > 1 && (
         <>
-          <Divider />
-          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <span style={label} title="How many frames a new note stays on screen">
-              Hold
-            </span>
-            <select
-              value={tools.holdFrames}
-              onChange={(e) => onHold(Number(e.target.value))}
-              style={select}
-            >
-              <option value={0}>1 frame</option>
-              <option value={12}>12 frames</option>
-              <option value={24}>24 frames</option>
-              <option value={48}>48 frames</option>
-              <option value={-1}>Whole clip</option>
-            </select>
-          </div>
         </>
       )}
 

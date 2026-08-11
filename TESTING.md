@@ -33,9 +33,8 @@ Derivatives land in `storage/review/` and are reused forever after.
 **Formats** — step through the four files with the file chips at the top, or
 PgUp/PgDn. Video, PSD, PDF and JPEG should each open without a reload.
 
-**Timeline** — scrub the video. Ticks are annotated frames; the faint bar behind
-a tick is that note's hold range. The grey fill shows how much of the clip is
-cached.
+**Timeline** — scrub the video. Ticks are annotated frames. The grey fill shows
+how much of the clip is cached.
 
 **Loop / bounce** — press `L` to cycle off → loop → bounce. Bounce should play
 forward then backward smoothly, not stutter. If it stutters, the WebCodecs path
@@ -44,10 +43,11 @@ failed and it fell back to `<video>` — a notice appears bottom-left saying so.
 **Flip while playing** — press `F` mid-playback. The image mirrors instantly and
 playback never pauses. `Shift+F` flips vertically, `R` rotates.
 
-**Annotate** — draw with the pen. Change colour and width in the ink bar. Set
-"Hold" to control how many frames a note stays on screen (a 1-frame note at
-24 fps is visible for 42 ms, which is why the default is 24 frames). `[` and `]`
-jump between annotated frames. "Stop on notes" pauses playback when one is hit.
+**Annotate** — draw with the pen. Change colour and width in the ink bar. A note
+belongs to the frame it was drawn on and shows on that frame only, so at 24 fps
+it flashes past in 42 ms during playback — `[` and `]` jump between annotated
+frames, and "Stop on notes" pauses playback when one is hit. Those are how you
+read notes back, not the playhead.
 
 **PSD layers** — open the PSD, switch the panel from Composite to Stack, toggle
 layers, hit `S` on a layer to solo it. The `≉` marker means a blend mode that

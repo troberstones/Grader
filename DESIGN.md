@@ -381,7 +381,7 @@ CREATE TABLE review_strokes (
   item_id TEXT NOT NULL,          -- submission id (+ page, for multi-page)
   seq INTEGER NOT NULL,           -- monotonic per item; the sync cursor
   frame_in INTEGER NOT NULL,      -- 0 for stills
-  frame_out INTEGER NOT NULL,     -- hold range, see below
+  frame_out INTEGER NOT NULL,     -- == frame_in; see 7.4
   author_id TEXT NOT NULL,
   data BLOB NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -403,14 +403,25 @@ Append-only buys four things at once:
 Migration: existing Fabric JSON rows convert to strokes on first open (paths → polylines,
 shapes → their primitives), original rows retained until it's proven.
 
-### 7.4 Frame hold — the thing that's easy to get wrong
-Requirement 10 says annotations must be visible *during playback*. A stroke pinned to one
-frame at 24 fps is on screen for 42 ms — effectively invisible. So every stroke carries
-`frame_in`/`frame_out` with a default hold (~0.75 s, settable, and `∞` for stills/pages).
-The timeline draws a tick at `frame_in` and a faint bar across the hold range.
+### 7.4 Frame hold — tried it, removed it
+Requirement 10 says annotations must be visible *during playback*, and a stroke pinned to
+one frame at 24 fps is on screen for 42 ms. The first answer was a hold range: every stroke
+carried `frame_in`/`frame_out` with a settable default of ~0.75 s, and the timeline drew a
+bar across it.
 
-Related: a **"pause on annotated frames"** toggle for playback, and `[` / `]` to jump to
-the previous/next annotated frame (requirement 10's "cycle").
+In use that was wrong. A note is about *a frame* — this pose, this silhouette, this
+in-between — and smearing it across the next 24 makes it look like a note about a shot.
+Notes from adjacent frames overlap and turn into a mess. **A note now shows on the frame it
+was drawn on and nowhere else.**
+
+Which puts the whole weight of requirement 10 on navigation rather than on dwell time: the
+**"stop on annotated frames"** toggle, and `[` / `]` to jump to the previous/next annotated
+frame (requirement 10's "cycle"). That is how notes get read back.
+
+`frame_out` stays in the table and in the codec — it costs one varint and re-widening a
+note later is a schema-free change — but it is written equal to `frame_in`, and the
+renderer does not consult it. Strokes saved before this still carry their old ranges; they
+display on `frame_in` like everything else.
 
 ### 7.5 Tools
 Pen, highlighter (multiply blend), line, arrow, rect, ellipse, text, eraser (stroke-level,
@@ -548,7 +559,7 @@ clipping/false-colour overlay.
 |---|---|---|
 | **0** | Range requests; ingest pipeline (ffprobe/ffmpeg/sharp/pdf/psd); all-intra proxies; `review_media` | Everything else assumes media that actually plays, known fps, and cheap random access |
 | **1** | `MediaSource` + Still/Page/Sequence; **WebCodecs frame cache + VRAM texture pool**; WebGL2 renderer; playlist; timeline + scrub; loop/bounce; fps; flip/rotate; keymap | Requirements 1,2,3,5,11,12,13 — and bounce/scrub are only honest with the frame cache |
-| **2** | Stroke codec; append-only tables; hold ranges; markers; prev/next annotated; undo/redo; colours/widths; pressure | Requirements 7,8,9,10 |
+| **2** | Stroke codec; append-only tables; markers; prev/next annotated; undo/redo; colours/widths; pressure | Requirements 7,8,9,10 |
 | **3** | Session + roles; one action set; clock-synced transport; live ink; laser; presence | Requirement 6 |
 | **4** | ICC ingest; view transforms; LUTs; scopes | Requirement 4 |
 | **5** | Compare/wipe; onion skin; export to PDF/MP4; session recording; tiled pyramid for huge stills | Upgrades that need the rest to exist first |

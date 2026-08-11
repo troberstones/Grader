@@ -33,7 +33,7 @@ export interface AnnotationApi {
   error: string | null;
   hiddenAuthors: Set<string>;
   toggleAuthor: (id: string) => void;
-  /** Strokes visible on a given frame, honouring hold ranges. */
+  /** Strokes drawn on exactly this frame. */
   visibleOn: (frame: number) => Stroke[];
   /** Distinct frames carrying annotations, for prev/next navigation. */
   annotatedFrames: number[];
@@ -407,11 +407,16 @@ export function useAnnotations(
     });
   }, []);
 
+  /**
+   * A note shows on the frame it was drawn on and nowhere else.
+   *
+   * Strokes still carry a `frameOut` — the column is there, and older notes
+   * still hold whatever range they were saved with — but it no longer affects
+   * what you see. Reinstating hold means restoring the range test here.
+   */
   const visibleOn = useCallback(
     (frame: number) =>
-      strokes.filter(
-        (s) => s.frameIn <= frame && s.frameOut >= frame && !hiddenAuthors.has(s.authorId),
-      ),
+      strokes.filter((s) => s.frameIn === frame && !hiddenAuthors.has(s.authorId)),
     [strokes, hiddenAuthors],
   );
 
@@ -466,7 +471,7 @@ function distToSegment(
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
-/** One marker per start frame, holding to the furthest note that starts there. */
+/** One marker per frame carrying notes, counting how many are on it. */
 function markersFrom(strokes: Stroke[]): FrameMarker[] {
   const byFrame = new Map<number, FrameMarker>();
   for (const s of strokes) {

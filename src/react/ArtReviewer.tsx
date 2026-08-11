@@ -63,7 +63,6 @@ export function ArtReviewer({
     color: "#ef4444",
     width: 4,
     guides: "none",
-    holdFrames: 24,
   });
   const [showHelp, setShowHelp] = useState(false);
   const [audioOwner, setAudioOwner] = useState(false);
@@ -243,13 +242,13 @@ export function ArtReviewer({
     [viewer],
   );
 
+  /**
+   * A note belongs to the frame it was drawn on. `frameOut` stays in the shape
+   * because the codec and the table both carry it, but nothing spans any more.
+   */
   const holdRange = useCallback(
-    (frame: number): [number, number] => {
-      if (frameCount <= 1) return [0, 0];
-      if (tools.holdFrames === -1) return [0, frameCount - 1];
-      return [frame, Math.min(frameCount - 1, frame + tools.holdFrames)];
-    },
-    [frameCount, tools.holdFrames],
+    (frame: number): [number, number] => (frameCount <= 1 ? [0, 0] : [frame, frame]),
+    [frameCount],
   );
 
   // ── Pointer handling ────────────────────────────────────────────────────────
@@ -864,7 +863,6 @@ export function ArtReviewer({
           onTool={(t) => setTools((s) => ({ ...s, tool: t }))}
           onColorPick={(c) => setTools((s) => ({ ...s, color: c }))}
           onWidth={(w) => setTools((s) => ({ ...s, width: w }))}
-          onHold={(h) => setTools((s) => ({ ...s, holdFrames: h }))}
           onUndo={() => void annotations.undo()}
           onRedo={() => void annotations.redo()}
           onClear={() => void annotations.clearFrame(state.frame)}
