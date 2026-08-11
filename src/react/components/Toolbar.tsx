@@ -300,9 +300,8 @@ export function ViewBar({
   );
 }
 
-interface InkBarProps {
+interface InkRailProps {
   tools: ToolState;
-  frameCount: number;
   canUndo: boolean;
   canRedo: boolean;
   saving: boolean;
@@ -314,9 +313,26 @@ interface InkBarProps {
   onClear: () => void;
 }
 
-export function InkBar({
+const TOOLS = ["pen", "highlight", "arrow", "line", "rect", "ellipse", "text", "erase"] as const;
+
+/** Two columns, so eight tools and eight colours cost four rows instead of eight. */
+const grid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, 1fr)",
+  gap: 3,
+  width: "100%",
+};
+
+/**
+ * Drawing controls as a vertical rail beside the stage, the way v1 had them.
+ *
+ * As a horizontal bar under the transport these were the first thing to fall
+ * off the bottom of an iPad — the one control set you need continuously during
+ * a critique, reachable only by scrolling. Down the side they cost width, which
+ * a landscape tablet has, instead of height, which it does not.
+ */
+export function InkRail({
   tools,
-  frameCount,
   canUndo,
   canRedo,
   saving,
@@ -326,35 +342,46 @@ export function InkBar({
   onUndo,
   onRedo,
   onClear,
-}: InkBarProps) {
+}: InkRailProps) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-      <div style={{ display: "flex", gap: 2 }}>
-        {(["pen", "highlight", "arrow", "line", "rect", "ellipse", "text", "erase"] as const).map(
-          (t) => (
-            <button
-              key={t}
-              title={TOOL_LABELS[t]}
-              onClick={() => onTool(t)}
-              style={iconButton(tools.tool === t)}
-            >
-              {TOOL_ICONS[t]}
-            </button>
-          ),
-        )}
+    <div
+      style={{
+        width: 64,
+        flexShrink: 0,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 6,
+        padding: 6,
+        background: C.container,
+        borderRadius: 8,
+        // A short window shortens the rail rather than pushing it off-screen.
+        overflowY: "auto",
+      }}
+    >
+      <div style={grid}>
+        {TOOLS.map((t) => (
+          <button
+            key={t}
+            title={TOOL_LABELS[t]}
+            onClick={() => onTool(t)}
+            style={{ ...iconButton(tools.tool === t), width: "100%" }}
+          >
+            {TOOL_ICONS[t]}
+          </button>
+        ))}
       </div>
 
-      <Divider />
+      <Rule />
 
-      <div style={{ display: "flex", gap: 3 }}>
+      <div style={grid}>
         {INK_COLORS.map((c) => (
           <button
             key={c}
             onClick={() => onColorPick(c)}
             title={c}
             style={{
-              width: 20,
-              height: 20,
+              height: 22,
               borderRadius: 4,
               background: c,
               border:
@@ -366,13 +393,15 @@ export function InkBar({
         ))}
       </div>
 
-      <div style={{ display: "flex", gap: 2 }}>
+      <Rule />
+
+      <div style={grid}>
         {INK_WIDTHS.map((w) => (
           <button
             key={w}
             onClick={() => onWidth(w)}
             title={`${w} px`}
-            style={{ ...iconButton(tools.width === w), width: 28 }}
+            style={{ ...iconButton(tools.width === w), width: "100%" }}
           >
             <span
               style={{
@@ -387,25 +416,32 @@ export function InkBar({
         ))}
       </div>
 
-      {frameCount > 1 && (
-        <>
-        </>
-      )}
+      <Rule />
 
-      <Divider />
-
-      <button onClick={onUndo} disabled={!canUndo} style={iconButton(false, !canUndo)} title="Undo">
-        ↶
-      </button>
-      <button onClick={onRedo} disabled={!canRedo} style={iconButton(false, !canRedo)} title="Redo">
-        ↷
-      </button>
-      <button onClick={onClear} style={textButton()} title="Clear your notes on this frame">
+      <div style={grid}>
+        <button onClick={onUndo} disabled={!canUndo} style={{ ...iconButton(false, !canUndo), width: "100%" }} title="Undo  ⌘Z">
+          ↶
+        </button>
+        <button onClick={onRedo} disabled={!canRedo} style={{ ...iconButton(false, !canRedo), width: "100%" }} title="Redo  ⇧⌘Z">
+          ↷
+        </button>
+      </div>
+      <button
+        onClick={onClear}
+        style={{ ...textButton(), width: "100%", padding: 0, fontSize: 11 }}
+        title="Clear your notes on this frame"
+      >
         Clear
       </button>
-      {saving && <span style={{ ...label, color: C.faint }}>saving…</span>}
+
+      {saving && <span style={{ ...label, color: C.faint, fontSize: 9 }}>saving…</span>}
     </div>
   );
+}
+
+/** Horizontal rule for the rail; Divider is the vertical one for the bars. */
+function Rule() {
+  return <div style={{ width: "80%", height: 1, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />;
 }
 
 function Divider() {

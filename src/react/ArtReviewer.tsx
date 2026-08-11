@@ -23,7 +23,7 @@ import { LayerPanel } from "./components/LayerPanel";
 import { Playlist } from "./components/Playlist";
 import { Presence } from "./components/Presence";
 import { Timeline } from "./components/Timeline";
-import { InkBar, TransportBar, ViewBar, type ToolState } from "./components/Toolbar";
+import { InkRail, TransportBar, ViewBar, type ToolState } from "./components/Toolbar";
 import { isTypingTarget } from "./keymap";
 import { C, label, textButton } from "./styles";
 import { useAnnotations } from "./useAnnotations";
@@ -668,14 +668,8 @@ export function ArtReviewer({
     <div
       style={{
         display: "flex",
-        flexDirection: "column",
         height: "100%",
-        // When the window is genuinely too short for a usable stage plus the
-        // controls, scroll. The alternative is what used to happen: the stage
-        // refused to shrink past its minimum, overflowed its own row, and
-        // painted straight over the timeline and the transport bar.
         minHeight: 0,
-        overflowY: "auto",
         background: C.bg,
         color: C.text,
         gap: 8,
@@ -684,11 +678,31 @@ export function ArtReviewer({
           "ui-sans-serif, system-ui, -apple-system, 'Manrope', 'Segoe UI', sans-serif",
       }}
     >
-      {/* header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          minWidth: 0,
+          // When the window is genuinely too short for a usable stage plus the
+          // controls, scroll. The alternative is what used to happen: the stage
+          // refused to shrink past its minimum, overflowed its own row, and
+          // painted straight over the timeline and the transport bar.
+          minHeight: 0,
+          overflowY: "auto",
+          gap: 8,
+        }}
+      >
+      {/* Header. It used to wrap to three rows at tablet widths and every one
+          of them came off the stage. Two items left now — session state and
+          which student — so one row is the normal case. It still wraps rather
+          than clipping: a hidden "Follow view" is worse than a shorter stage. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0, flexWrap: "wrap" }}>
         <Presence session={session} />
+        {/* Beside "Follow view" on purpose: both answer "what does this screen
+            do in the room", as opposed to what the clip does. */}
         <label
-          style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}
+          style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", flexShrink: 0 }}
           title="Only one machine in the room should play audio"
         >
           <input
@@ -700,9 +714,16 @@ export function ArtReviewer({
           <span style={label}>Audio</span>
         </label>
         <MemoryReadout />
-        <div style={{ flex: 1 }} />
-        {headerSlot}
-        <button onClick={() => setShowHelp(true)} style={textButton()} title="Shortcuts  ?">
+        <div style={{ flex: 1, minWidth: 8 }} />
+        {/* Shrinkable: the host's slot (assignment name, student nav) is wider
+            than the panel once a sidebar is open, and an unshrinkable child
+            overflows the header no matter how willing the header is to wrap. */}
+        <div style={{ minWidth: 0, overflowX: "auto" }}>{headerSlot}</div>
+        <button
+          onClick={() => setShowHelp(true)}
+          style={{ ...textButton(), flexShrink: 0 }}
+          title="Shortcuts  ?"
+        >
           ?
         </button>
       </div>
@@ -862,20 +883,21 @@ export function ArtReviewer({
             onColor={(patch) => dispatch({ a: "color", patch })}
           />
         </div>
-        <InkBar
-          tools={tools}
-          frameCount={frameCount}
-          canUndo={annotations.canUndo}
-          canRedo={annotations.canRedo}
-          saving={annotations.saving}
-          onTool={(t) => setTools((s) => ({ ...s, tool: t }))}
-          onColorPick={(c) => setTools((s) => ({ ...s, color: c }))}
-          onWidth={(w) => setTools((s) => ({ ...s, width: w }))}
-          onUndo={() => void annotations.undo()}
-          onRedo={() => void annotations.redo()}
-          onClear={() => void annotations.clearFrame(state.frame)}
-        />
       </div>
+      </div>
+
+      <InkRail
+        tools={tools}
+        canUndo={annotations.canUndo}
+        canRedo={annotations.canRedo}
+        saving={annotations.saving}
+        onTool={(t: ToolState["tool"]) => setTools((s) => ({ ...s, tool: t }))}
+        onColorPick={(c: string) => setTools((s) => ({ ...s, color: c }))}
+        onWidth={(w: number) => setTools((s) => ({ ...s, width: w }))}
+        onUndo={() => void annotations.undo()}
+        onRedo={() => void annotations.redo()}
+        onClear={() => void annotations.clearFrame(state.frame)}
+      />
 
       {showHelp && <HelpSheet onClose={() => setShowHelp(false)} />}
     </div>
@@ -911,9 +933,10 @@ function MemoryReadout() {
         ...label,
         color: pressure > 0.9 ? C.primary : C.faint,
         fontVariantNumeric: "tabular-nums",
+        flexShrink: 0,
       }}
     >
-      cache {usedMb.toFixed(0)}/{limitMb.toFixed(0)} MB
+      {usedMb.toFixed(0)}/{limitMb.toFixed(0)} MB
     </span>
   );
 }

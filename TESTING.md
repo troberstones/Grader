@@ -43,7 +43,8 @@ failed and it fell back to `<video>` — a notice appears bottom-left saying so.
 **Flip while playing** — press `F` mid-playback. The image mirrors instantly and
 playback never pauses. `Shift+F` flips vertically, `R` rotates.
 
-**Annotate** — draw with the pen. Change colour and width in the ink bar. A note
+**Annotate** — draw with the pen. Tools, colours, widths and undo are in the
+rail down the right-hand side, where they stay reachable on a tablet. A note
 belongs to the frame it was drawn on and shows on that frame only, so at 24 fps
 it flashes past in 42 ms during playback — `[` and `]` jump between annotated
 frames, and "Stop on notes" pauses playback when one is hit. Those are how you
@@ -55,6 +56,11 @@ cannot be reproduced in the shader; `fx` means an adjustment layer baked into
 the composite.
 
 **Value check** — `V` desaturates. `G` cycles composition guides.
+
+**Layout** — the drawing rail is pinned to the right of the stage, so it never
+scrolls away the way a bar under the transport did. Resize the window and watch
+the stage: it grows and shrinks, keeps a 320 px floor, and nothing is allowed to
+paint over the timeline. Below the floor the panel scrolls rather than overlap.
 
 ## Multi-device / master mode
 
