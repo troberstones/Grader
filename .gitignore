@@ -51,3 +51,8 @@ testData/**/*.mp4
 testData/**/*.mov
 testData/**/*.gif
 testData/**/*.webm
+
+# pdf.js worker — copied from node_modules by `npm run sync:pdf-worker`
+# (runs on predev/prebuild). Not committed so it cannot drift from the
+# installed pdfjs-dist version.
+/public/pdf.worker.min.mjs

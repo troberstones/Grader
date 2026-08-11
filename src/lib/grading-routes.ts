@@ -7,6 +7,7 @@
 export const GRADING_ROUTE_PATTERNS = [
   /^\/assignments\/\d+$/,
   /^\/assignments\/\d+\/review$/,
+  /^\/assignments\/\d+\/review-v2$/,
 ] as const;
 
 export function isGradingRoute(pathname: string): boolean {

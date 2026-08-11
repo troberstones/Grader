@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, blob, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 // ─── Courses ────────────────────────────────────────────
@@ -153,3 +153,65 @@ export const annotationHistory = sqliteTable("annotation_history", {
   annotationData: text("annotation_data").notNull(),
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
 });
+
+// ─── Art Review module ──────────────────────────────────────────────────
+// Derivatives produced at ingest. Originals stay in `submissions`; these are
+// the web-safe files the viewer actually opens (all-intra proxies, flattened
+// PSD composites, layer rasters, posters).
+
+export const reviewMedia = sqliteTable("review_media", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  submissionId: integer("submission_id").notNull().references(() => submissions.id, { onDelete: "cascade" }),
+  variant: text("variant").notNull(), // 'proxy' | 'poster' | 'composite' | 'layer' | 'page'
+  idx: integer("idx").notNull().default(0),
+  path: text("path").notNull(),
+  mime: text("mime").notNull(),
+  kind: text("kind"), // 'video' | 'still' | 'layered' | 'pages'
+  width: integer("width"),
+  height: integer("height"),
+  fps: real("fps"),
+  frameCount: integer("frame_count"),
+  duration: real("duration"),
+  colorPrimaries: text("color_primaries"),
+  colorTransfer: text("color_transfer"),
+  status: text("status").notNull().default("ready"), // 'pending' | 'ready' | 'failed'
+  warnings: text("warnings"),
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index("review_media_submission_idx").on(table.submissionId, table.variant, table.idx),
+]);
+
+// Append-only stroke log with soft deletes.
+//
+// Not a replace-all blob per submission like `annotations`: two devices drawing
+// on the same file must not clobber each other, a reconnecting device needs to
+// fetch only what it missed (seq), and per-author undo needs the individual
+// records. Soft delete keeps `seq` monotonic so the sync cursor stays valid.
+
+export const reviewStrokes = sqliteTable("review_strokes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  itemId: text("item_id").notNull(),
+  seq: integer("seq").notNull(),
+  localId: text("local_id").notNull(),
+  frameIn: integer("frame_in").notNull().default(0),
+  frameOut: integer("frame_out").notNull().default(0),
+  authorId: text("author_id").notNull(),
+  data: blob("data", { mode: "buffer" }).notNull(),
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+  deletedAt: text("deleted_at"),
+}, (table) => [
+  index("review_strokes_item_frame_idx").on(table.itemId, table.frameIn),
+  index("review_strokes_item_seq_idx").on(table.itemId, table.seq),
+  // Makes an append idempotent: a retried POST cannot duplicate a stroke.
+  uniqueIndex("review_strokes_local_idx").on(table.itemId, table.localId),
+]);
+
+// Per-user viewer preferences (fps, loop mode, flips) scoped to a context.
+export const reviewPrefs = sqliteTable("review_prefs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  contextId: text("context_id").notNull(),
+  data: text("data").notNull(),
+  updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  uniqueIndex("review_prefs_context_idx").on(table.contextId),
+]);
