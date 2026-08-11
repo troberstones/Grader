@@ -58,6 +58,32 @@ wrong — a palm is a touch, and a touch cannot draw.
 
 On a desktop the mouse keeps doing both, since there is no stylus to take over.
 
+**Input log** — press `D`. A floating panel tails every pointer event with the
+decision the handler made:
+
+```
+   0ms  down    #901  pen   b1  p0.31  0.221,0.200  → START pen
+   1ms  move×5  #901  pen   b1  p0.65  0.260,0.235
+   1ms  up      #901  pen   b0  p0.00  0.260,0.235  → END 6 pts
+   2ms  down    #902  touch b1  p0.00  0.221,0.358  → pan · touch never draws
+   3ms  cancel  #903  pen   b0  p0.00  0.225,0.463  → system took gesture
+```
+
+Time is relative to the first line; `#n` is the pointer id, `b` is the button
+mask, `p` is pressure, and the coordinates are media-normalised — the same space
+strokes are stored in. Runs of moves fold into one line with a count, so the
+downs, ups and cancels stay legible. **Copy** puts the whole buffer on the
+clipboard.
+
+Read it for a stroke that never appeared. `START` with no matching `END` means
+the release never arrived. `cancel` means iPadOS took the gesture away.
+`drop · …` means an event was deliberately ignored, and says why. Nothing at all
+between two strokes means the events never reached the canvas.
+
+The panel costs nothing while closed — no event is recorded — and never
+re-renders per event, so it does not change the timing of what it is measuring.
+It also cannot intercept a stroke: only its buttons take pointer events.
+
 **PSD layers** — open the PSD, switch the panel from Composite to Stack, toggle
 layers, hit `S` on a layer to solo it. The `≉` marker means a blend mode that
 cannot be reproduced in the shader; `fx` means an adjustment layer baked into

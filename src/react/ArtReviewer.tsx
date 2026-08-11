@@ -19,6 +19,7 @@ import { VideoElementSource } from "../sources/video-element";
 import type { ReviewChannel, ReviewDataAdapter } from "../adapter/types";
 import type { ReviewItem } from "../core/types";
 import { HelpSheet } from "./components/HelpSheet";
+import { InputLog, type InputEntry } from "./components/InputLog";
 import { LayerPanel } from "./components/LayerPanel";
 import { Playlist } from "./components/Playlist";
 import { Presence } from "./components/Presence";
@@ -110,6 +111,69 @@ export function ArtReviewer({
   const spaceRef = useRef(false);
   /** finishStroke is defined below onPointerDown; a ref sidesteps the ordering. */
   const finishStrokeRef = useRef<(() => void) | null>(null);
+  const onPointerUpRef = useRef<((e: React.PointerEvent) => void) | null>(null);
+
+  // ── Input log (D) ───────────────────────────────────────────────────────────
+  /** toMediaNorm is defined further down; the log only needs it at event time. */
+  const toMediaNormRef = useRef<(x: number, y: number) => { x: number; y: number }>(() => ({
+    x: 0,
+    y: 0,
+  }));
+  const [showLog, setShowLog] = useState(false);
+  const showLogRef = useRef(showLog);
+  showLogRef.current = showLog;
+  const logRef = useRef<InputEntry[]>([]);
+  const [logEntries, setLogEntries] = useState<InputEntry[]>([]);
+
+  /**
+   * Costs nothing while the panel is closed, and never re-renders per event —
+   * a pointermove at 120 Hz through React state would change the timing of the
+   * very thing being measured.
+   */
+  const logInput = useCallback(
+    (phase: InputEntry["phase"], e: React.PointerEvent, note?: string) => {
+      if (!showLogRef.current) return;
+      const buf = logRef.current;
+      const p = toMediaNormRef.current(e.clientX, e.clientY);
+      const last = buf[buf.length - 1];
+      if (
+        phase === "move" &&
+        !note &&
+        last &&
+        last.phase === "move" &&
+        last.pointerId === e.pointerId &&
+        !last.note
+      ) {
+        last.count += 1;
+        last.t = Date.now();
+        last.x = p.x;
+        last.y = p.y;
+        last.pressure = e.pressure;
+        return;
+      }
+      buf.push({
+        t: Date.now(),
+        phase,
+        pointerId: e.pointerId,
+        type: e.pointerType,
+        pressure: e.pressure,
+        x: p.x,
+        y: p.y,
+        buttons: e.buttons,
+        note,
+        count: 1,
+      });
+      if (buf.length > 600) buf.splice(0, buf.length - 600);
+    },
+    [],
+  );
+
+  // Repaint the panel on a timer rather than per event.
+  useEffect(() => {
+    if (!showLog) return;
+    const timer = setInterval(() => setLogEntries([...logRef.current]), 120);
+    return () => clearInterval(timer);
+  }, [showLog]);
   /**
    * drawOverlay is built before `viewer` exists, so it cannot close over
    * `state`. The render loop reinstalls the callback every render, so a ref
@@ -271,6 +335,8 @@ export function ArtReviewer({
     [frameCount],
   );
 
+  toMediaNormRef.current = toMediaNorm;
+
   // ── Pointer handling ────────────────────────────────────────────────────────
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -287,6 +353,7 @@ export function ArtReviewer({
       // touch cannot draw, whatever else is happening on the glass.
       if (e.pointerType === "touch") {
         pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        logInput("down", e, pointersRef.current.size === 2 ? "pinch" : "pan · touch never draws");
         if (pointersRef.current.size === 2) {
           const [a, b] = [...pointersRef.current.values()];
           pinchRef.current = {
@@ -311,6 +378,7 @@ export function ArtReviewer({
         // The previous pointer's release never reached us: capture was refused,
         // or it came up over the rail. Close that stroke out and take this one,
         // rather than losing both.
+        logInput("down", e, `closing orphan #${inFlight.pointerId}`);
         finishStrokeRef.current?.();
       }
 
@@ -328,6 +396,7 @@ export function ArtReviewer({
           { ...p, color: author.color, at: Date.now(), client: "self" },
         ];
         session.send({ a: "laser", x: p.x, y: p.y, client: channel.clientId });
+        logInput("down", e, "laser");
         return;
       }
 
@@ -335,23 +404,29 @@ export function ArtReviewer({
       // stylus does not pan even when the select tool is active.
       if (e.pointerType !== "pen" && (spaceRef.current || e.button === 1 || tools.tool === "select")) {
         panStateRef.current = { x: e.clientX, y: e.clientY, panX: state.panX, panY: state.panY };
+        logInput("down", e, "pan (mouse)");
         return;
       }
 
       // The select tool is the pan tool. A stylus does not pan, so with it
       // chosen a stylus does nothing at all — it must not fall through and
       // start a stroke whose tool is "select".
-      if (tools.tool === "select") return;
+      if (tools.tool === "select") {
+        logInput("down", e, "ignored · select tool, stylus never pans");
+        return;
+      }
 
       const p = toMediaNorm(e.clientX, e.clientY);
 
       if (tools.tool === "erase") {
         void annotations.eraseAt(state.frame, p.x, p.y, 0.02);
+        logInput("down", e, "erase");
         return;
       }
 
       if (tools.tool === "text") {
         setTextPrompt({ x: p.x, y: p.y, value: "" });
+        logInput("down", e, "text");
         return;
       }
 
@@ -366,9 +441,10 @@ export function ArtReviewer({
         sent: 0,
         tool: tools.tool as StrokeTool,
       };
+      logInput("down", e, `START ${tools.tool}`);
       viewer.invalidate();
     },
-    [state, tools.tool, toMediaNorm, annotations, author, session, channel.clientId, viewer],
+    [state, tools.tool, toMediaNorm, annotations, author, session, channel.clientId, viewer, logInput],
   );
 
   const onPointerMove = useCallback(
@@ -399,6 +475,7 @@ export function ArtReviewer({
           const panY = oy - cc.y - (oy - cc.y - pinch.panY) * k + (cy - pinch.cy);
           dispatch({ a: "view", zoom: pinch.zoom * k, panX, panY });
         }
+        logInput("move", e, "pinch");
         return;
       }
 
@@ -410,6 +487,7 @@ export function ArtReviewer({
           panX: pan.panX + (e.clientX - pan.x),
           panY: pan.panY + (e.clientY - pan.y),
         });
+        logInput("move", e, "pan");
         return;
       }
 
@@ -426,12 +504,22 @@ export function ArtReviewer({
       }
 
       // A finger has no other business here; it cannot draw.
-      if (e.pointerType === "touch") return;
+      if (e.pointerType === "touch") {
+        logInput("move", e, "drop · touch cannot draw");
+        return;
+      }
 
       const d = drawingRef.current;
       // A stroke belongs to the pointer that began it — nothing else may extend
       // it, whatever stray events arrive.
-      if (!d || d.pointerId !== e.pointerId) return;
+      if (!d) {
+        logInput("move", e, "drop · nothing in flight");
+        return;
+      }
+      if (d.pointerId !== e.pointerId) {
+        logInput("move", e, `drop · stroke is #${d.pointerId}`);
+        return;
+      }
 
       const raw = toMediaNorm(e.clientX, e.clientY);
       // Freehand accumulates; shapes only ever need start and current point.
@@ -443,6 +531,8 @@ export function ArtReviewer({
         if (d.points.length >= 4) d.points.length = 2;
         d.points.push(raw.x, raw.y);
       }
+
+      logInput("move", e);
 
       // Stream the tail of the stroke so followers watch it appear live.
       const tail = d.points.slice(d.sent);
@@ -458,7 +548,7 @@ export function ArtReviewer({
       }
       viewer.invalidate();
     },
-    [dispatch, toMediaNorm, annotations, inkColor, tools.width, author.color, session, channel.clientId, viewer],
+    [dispatch, toMediaNorm, annotations, inkColor, tools.width, author.color, session, channel.clientId, viewer, logInput],
   );
 
   const finishStroke = useCallback(async () => {
@@ -497,12 +587,26 @@ export function ArtReviewer({
 
   finishStrokeRef.current = () => void finishStroke();
 
+  /**
+   * Cancel is the interesting one: the system taking a gesture away is exactly
+   * how a stroke disappears without anybody doing anything wrong. It must not
+   * be logged as an ordinary release.
+   */
+  const onPointerCancel = useCallback(
+    (e: React.PointerEvent) => {
+      logInput("cancel", e, "system took gesture");
+      onPointerUpRef.current?.(e);
+    },
+    [logInput],
+  );
+
   const onPointerUp = useCallback(
     (e: React.PointerEvent) => {
       pointersRef.current.delete(e.pointerId);
       if (pointersRef.current.size < 2) pinchRef.current = null;
 
       if (e.pointerType === "touch") {
+        logInput("up", e, "touch · nav only");
         // Lifting one of two fingers: keep panning from the one still down,
         // re-anchored, rather than stopping dead until both are lifted.
         const rest = [...pointersRef.current.values()];
@@ -515,12 +619,16 @@ export function ArtReviewer({
 
       // Only the pointer that started the stroke may end it.
       const d = drawingRef.current;
-      if (d && d.pointerId !== e.pointerId) return;
+      if (d && d.pointerId !== e.pointerId) {
+        logInput("up", e, `ignored · stroke is #${d.pointerId}`);
+        return;
+      }
+      logInput("up", e, d ? `END ${d.points.length / 2} pts` : "no stroke in flight");
 
       panStateRef.current = null;
       void finishStroke();
     },
-    [finishStroke, state.panX, state.panY],
+    [finishStroke, state.panX, state.panY, logInput],
   );
 
   /**
@@ -530,11 +638,14 @@ export function ArtReviewer({
    */
   const onLostCapture = useCallback(
     (e: React.PointerEvent) => {
+      logInput("lost", e, "capture taken away");
       pointersRef.current.delete(e.pointerId);
       if (pointersRef.current.size < 2) pinchRef.current = null;
     },
-    [],
+    [logInput],
   );
+
+  onPointerUpRef.current = onPointerUp;
 
   // Wheel: pinch-zoom around the cursor, two-finger scroll pans.
   useEffect(() => {
@@ -712,6 +823,10 @@ export function ArtReviewer({
         case "x":
           setTools((t) => ({ ...t, tool: "erase" }));
           return;
+        case "d":
+          setShowLog((v) => !v);
+          break;
+
         case "m":
           session.isMaster ? session.release() : session.claim();
           return;
@@ -849,7 +964,7 @@ export function ArtReviewer({
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
-            onPointerCancel={onPointerUp}
+            onPointerCancel={onPointerCancel}
             onLostPointerCapture={onLostCapture}
             onContextMenu={(e) => e.preventDefault()}
             style={{
@@ -891,6 +1006,17 @@ export function ArtReviewer({
           )}
           {annotations.error && <Notice tone="error">{annotations.error}</Notice>}
           {stats?.error && <Notice tone="error">{stats.error}</Notice>}
+
+          {showLog && (
+            <InputLog
+              entries={logEntries}
+              onClear={() => {
+                logRef.current = [];
+                setLogEntries([]);
+              }}
+              onClose={() => setShowLog(false)}
+            />
+          )}
 
           {textPrompt && (
             <TextEntry

@@ -41,6 +41,7 @@ export const KEYMAP: KeyBinding[] = [
   { keys: "Alt + drag", label: "Laser pointer", group: "Annotation" },
 
   { keys: "M", label: "Take / release master", group: "Session" },
+  { keys: "D", label: "Input log — every pointer event and what it did", group: "Session" },
   { keys: "?", label: "This help", group: "Session" },
 ];
 
