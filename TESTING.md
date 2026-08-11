@@ -168,7 +168,22 @@ Multi-client sync, verified with two browser tabs:
   every `hello` replied with a `hello`, so two peers volleyed at network speed
   and real transport events queued behind the noise.)
 
-**Still not verified: live ink and the laser pointer across devices.**
+Annotation across clients, verified with two browser windows:
+
+- Live ink: the line appears on the other screen *while* it is being drawn,
+  unbroken. On release it becomes a committed stroke in place, with no gap and
+  no duplicate.
+- Committed strokes cross in both directions, and land on a paused screen —
+  they no longer wait for the next thing to repaint the canvas.
+- Erase and undo propagate, and actually delete: erase on one screen removes the
+  note on the other, the timeline tick goes with it, and it stays gone after a
+  reload.
+- The laser pointer (`Alt + drag`) tracks on the other screen and fades on its
+  own.
+
+Note that one instructor signed in on two devices is the normal case, not an
+edge case — the iPad and the Mac are the same account. Anything that identifies
+a *device* has to use the client id, never the author id.
 
 One submission in assignment 22 (`MailenCruz_SkinSculpt.mp4`) is a corrupt
 upload from April — truncated, no `moov` atom. It now shows an explicit

@@ -14,7 +14,7 @@
   "files": ["src"],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.cjs"
   },
   "peerDependencies": {
     "react": ">=19",

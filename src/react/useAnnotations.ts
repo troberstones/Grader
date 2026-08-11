@@ -60,7 +60,6 @@ export function useAnnotations(
   subscribe: (h: (e: Envelope) => void) => () => void,
 ): AnnotationApi {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
-  const [markers, setMarkers] = useState<FrameMarker[]>([]);
   const [liveInk, setLiveInk] = useState<LiveInk[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -73,6 +72,14 @@ export function useAnnotations(
   const [undoDepth, setUndoDepth] = useState(0);
   const [redoDepth, setRedoDepth] = useState(0);
   const lastInkSent = useRef(0);
+  const inkPending = useRef<{
+    id: string;
+    tool: StrokeTool;
+    color: number;
+    width: number;
+    pts: number[];
+  } | null>(null);
+  const inkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const itemRef = useRef(itemId);
   itemRef.current = itemId;
 
@@ -80,16 +87,12 @@ export function useAnnotations(
   const reload = useCallback(async () => {
     if (!itemId) {
       setStrokes([]);
-      setMarkers([]);
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      const [{ strokes: rows, head }, marks] = await Promise.all([
-        adapter.getStrokes(itemId),
-        adapter.getMarkers(itemId),
-      ]);
+      const { strokes: rows, head } = await adapter.getStrokes(itemId);
       if (itemRef.current !== itemId) return; // navigated away mid-flight
       headSeq.current = head;
       setStrokes(
@@ -105,7 +108,6 @@ export function useAnnotations(
           }),
         ),
       );
-      setMarkers(marks);
       undoStack.current = [];
       redoStack.current = [];
       setUndoDepth(0);
@@ -138,10 +140,13 @@ export function useAnnotations(
         setStrokes((prev) =>
           prev.some((s) => s.localId === decoded.localId) ? prev : [...prev, decoded],
         );
-        setMarkers((prev) => mergeMarker(prev, decoded));
         setLiveInk((prev) => prev.filter((l) => l.id !== e.s.localId));
       } else if (e.a === "ink") {
-        if (e.author === author.id) return; // our own echo
+        // No author check here. `author.id` is the signed-in instructor, not the
+        // device — one instructor on an iPad and a Mac has the same id on both,
+        // so filtering on it threw away every remote stroke as a false echo.
+        // Real self-echo is already dropped by the transport, which compares the
+        // sender's client id before any of this runs.
         setLiveInk((prev) => {
           const existing = prev.find((l) => l.id === e.id);
           if (e.done) return prev.filter((l) => l.id !== e.id);
@@ -167,10 +172,15 @@ export function useAnnotations(
         });
       } else if (e.a === "erase") {
         if (e.itemId !== itemRef.current) return;
-        setStrokes((prev) => prev.filter((s) => !s.id || !e.ids.includes(s.id)));
+        const localIds = new Set(e.localIds ?? []);
+        setStrokes((prev) =>
+          prev.filter(
+            (s) => !localIds.has(s.localId) && !(typeof s.id === "number" && e.ids.includes(s.id)),
+          ),
+        );
       }
     });
-  }, [subscribe, author.id]);
+  }, [subscribe]);
 
   // Drop live ink from a peer that vanished mid-stroke.
   useEffect(() => {
@@ -195,7 +205,6 @@ export function useAnnotations(
 
       // Optimistic: the stroke appears instantly, then reconciles with its id.
       setStrokes((prev) => [...prev, stroke]);
-      setMarkers((prev) => mergeMarker(prev, stroke));
       undoStack.current.push(stroke);
       redoStack.current = [];
       setUndoDepth(undoStack.current.length);
@@ -223,6 +232,14 @@ export function useAnnotations(
           setStrokes((prev) =>
             prev.map((s) => (s.localId === localId ? { ...s, id: saved.id, seq: saved.seq } : s)),
           );
+          // The undo stack holds the pre-save object, so without this an undo
+          // of the stroke you just drew has no server id to delete: it vanished
+          // from your screen and stayed in the database and on every peer.
+          const pending = undoStack.current.find((s) => s.localId === localId);
+          if (pending) {
+            pending.id = saved.id;
+            pending.seq = saved.seq;
+          }
           headSeq.current = Math.max(headSeq.current, saved.seq);
         }
       } catch (e) {
@@ -238,18 +255,17 @@ export function useAnnotations(
     async (targets: Stroke[]) => {
       if (!itemId || targets.length === 0) return;
       const ids = targets.map((s) => s.id).filter((v): v is number => typeof v === "number");
-      const localIds = new Set(targets.map((s) => s.localId));
-      setStrokes((prev) => prev.filter((s) => !localIds.has(s.localId)));
+      const localIds = targets.map((s) => s.localId);
+      const gone = new Set(localIds);
+      setStrokes((prev) => prev.filter((s) => !gone.has(s.localId)));
+      send({ a: "erase", ids, localIds, itemId });
       if (ids.length) {
-        send({ a: "erase", ids, itemId });
         try {
           await adapter.deleteStrokes(itemId, ids);
         } catch (e) {
           setError(e instanceof Error ? e.message : "failed to erase");
         }
       }
-      const marks = await adapter.getMarkers(itemId).catch(() => null);
-      if (marks && itemRef.current === itemId) setMarkers(marks);
     },
     [adapter, itemId, send],
   );
@@ -260,8 +276,14 @@ export function useAnnotations(
       const hits = strokes.filter((s) => {
         if (s.frameIn > frame || s.frameOut < frame) return false;
         if (s.authorId !== author.id) return false; // never erase someone else's
-        for (let i = 0; i < s.points.length; i += 2) {
-          if (Math.hypot(s.points[i] - x, s.points[i + 1] - y) <= radius) return true;
+        if (s.points.length === 2) return Math.hypot(s.points[0] - x, s.points[1] - y) <= radius;
+        // Against segments, not points. `simplify` reduces a straight stroke to
+        // its two endpoints, so a point test cannot touch the middle of a long
+        // line — you click straight through it.
+        for (let i = 0; i + 3 < s.points.length; i += 2) {
+          if (distToSegment(x, y, s.points[i], s.points[i + 1], s.points[i + 2], s.points[i + 3]) <= radius) {
+            return true;
+          }
         }
         return false;
       });
@@ -302,26 +324,66 @@ export function useAnnotations(
   }, [commit]);
 
   // ── Live ink ────────────────────────────────────────────────────────────────
+  /**
+   * Ink is throttled, but the caller hands over each tail exactly once — the
+   * old code *dropped* anything arriving inside the window, so the room watched
+   * a line with holes in it. Buffer instead and flush on the next tick: same
+   * message rate, no lost points.
+   */
+  const flushInk = useCallback(() => {
+    if (inkTimer.current !== null) {
+      clearTimeout(inkTimer.current);
+      inkTimer.current = null;
+    }
+    const p = inkPending.current;
+    inkPending.current = null;
+    if (!p || p.pts.length === 0) return;
+    lastInkSent.current = Date.now();
+    send({
+      a: "ink",
+      id: p.id,
+      author: author.id,
+      tool: p.tool,
+      color: p.color,
+      width: p.width,
+      pts: p.pts,
+    });
+  }, [send, author.id]);
+
   const streamInk = useCallback(
     (ink: Omit<LiveInk, "updatedAt" | "author">) => {
-      const now = Date.now();
-      if (now - lastInkSent.current < INK_THROTTLE_MS) return;
-      lastInkSent.current = now;
-      send({
-        a: "ink",
-        id: ink.id,
-        author: author.id,
-        tool: ink.tool,
-        color: ink.color,
-        width: ink.width,
-        pts: ink.points,
-      });
+      // A new stroke started before the old one drained: never merge two
+      // strokes' tails into one message.
+      if (inkPending.current && inkPending.current.id !== ink.id) flushInk();
+
+      const pending = inkPending.current;
+      if (pending) pending.pts.push(...ink.points);
+      else {
+        inkPending.current = {
+          id: ink.id,
+          tool: ink.tool,
+          color: ink.color,
+          width: ink.width,
+          pts: [...ink.points],
+        };
+      }
+
+      const wait = INK_THROTTLE_MS - (Date.now() - lastInkSent.current);
+      if (wait <= 0) flushInk();
+      else if (inkTimer.current === null) inkTimer.current = setTimeout(flushInk, wait);
     },
-    [send, author.id],
+    [flushInk],
   );
+
+  useEffect(() => () => {
+    if (inkTimer.current !== null) clearTimeout(inkTimer.current);
+  }, []);
 
   const endInk = useCallback(
     (id: string) => {
+      // Drain the tail before the terminator, or the last few points arrive
+      // after the receiver has already dropped the stroke.
+      flushInk();
       send({
         a: "ink",
         id,
@@ -333,7 +395,7 @@ export function useAnnotations(
         done: true,
       });
     },
-    [send, author.id],
+    [flushInk, send, author.id],
   );
 
   const toggleAuthor = useCallback((id: string) => {
@@ -353,12 +415,17 @@ export function useAnnotations(
     [strokes, hiddenAuthors],
   );
 
-  const annotatedFrames = useMemo(() => {
-    const set = new Set<number>();
-    for (const m of markers) set.add(m.frameIn);
-    for (const s of strokes) set.add(s.frameIn);
-    return [...set].sort((a, b) => a - b);
-  }, [markers, strokes]);
+  // Markers used to be their own state, maintained incrementally on the way in
+  // and refetched on the way out — which meant every path that removed a stroke
+  // had to remember to fix them, and the remote erase path did not. They are a
+  // group-by over strokes and nothing more, so derive them and the drift is
+  // structurally impossible.
+  const markers = useMemo(() => markersFrom(strokes), [strokes]);
+
+  const annotatedFrames = useMemo(
+    () => [...new Set(strokes.map((s) => s.frameIn))].sort((a, b) => a - b),
+    [strokes],
+  );
 
   return {
     strokes,
@@ -384,16 +451,32 @@ export function useAnnotations(
   };
 }
 
-function mergeMarker(markers: FrameMarker[], s: Stroke): FrameMarker[] {
-  const existing = markers.find((m) => m.frameIn === s.frameIn);
-  if (existing) {
-    return markers.map((m) =>
-      m.frameIn === s.frameIn
-        ? { ...m, count: m.count + 1, frameOut: Math.max(m.frameOut, s.frameOut) }
-        : m,
-    );
+function distToSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = dx * dx + dy * dy;
+  const t = len === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/** One marker per start frame, holding to the furthest note that starts there. */
+function markersFrom(strokes: Stroke[]): FrameMarker[] {
+  const byFrame = new Map<number, FrameMarker>();
+  for (const s of strokes) {
+    const m = byFrame.get(s.frameIn);
+    if (m) {
+      m.count += 1;
+      m.frameOut = Math.max(m.frameOut, s.frameOut);
+    } else {
+      byFrame.set(s.frameIn, { frameIn: s.frameIn, frameOut: s.frameOut, count: 1 });
+    }
   }
-  return [...markers, { frameIn: s.frameIn, frameOut: s.frameOut, count: 1 }].sort(
-    (a, b) => a.frameIn - b.frameIn,
-  );
+  return [...byFrame.values()].sort((a, b) => a.frameIn - b.frameIn);
 }

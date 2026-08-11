@@ -67,7 +67,12 @@ export type Action =
       pts: number[];
       done?: boolean;
     }
-  | { a: "erase"; ids: number[]; itemId: string }
+  /**
+   * Both keys travel. `ids` are server ids, which a peer may not have yet — it
+   * sees a stroke the moment it is drawn, a beat before the database assigns
+   * one. `localIds` are minted client-side and are on every copy from birth.
+   */
+  | { a: "erase"; ids: number[]; localIds: string[]; itemId: string }
   // ── ephemeral ───────────────────────────────────────────────────────────────
   | { a: "laser"; x: number; y: number; client: string }
   // ── session ─────────────────────────────────────────────────────────────────

@@ -181,6 +181,14 @@ export function ArtReviewer({
   const canControl = session.role !== "follower";
   const frameCount = item?.frameCount ?? 1;
 
+  // Remote strokes and live ink land outside the render loop, and the loop only
+  // paints when something marks the frame dirty. On a paused screen — which is
+  // most of a critique — nothing else ever would, so a peer's drawing arrived
+  // in state and was never shown.
+  useEffect(() => {
+    viewer.invalidate();
+  }, [viewer.invalidate, annotations.strokes, annotations.liveInk, annotations.hiddenAuthors]);
+
   // Laser events from peers.
   useEffect(() => {
     return session.subscribe((e) => {
@@ -191,7 +199,9 @@ export function ArtReviewer({
       ];
       viewer.invalidate();
     });
-  }, [session, viewer, author.color]);
+    // Deliberately not depending on `viewer`: it is a fresh object every render,
+    // and resubscribing that often drops messages that land in the gap.
+  }, [session.subscribe, viewer.invalidate, author.color]);
 
   // Only one host in the room should make noise.
   useEffect(() => {
