@@ -23,7 +23,11 @@ export default async function ReviewV2Page({
   };
 
   return (
-    <div style={{ height: "calc(100vh - 3.5rem)", minHeight: 480 }}>
+    // dvh, not vh. On iPadOS Safari `vh` is the viewport with the browser
+    // chrome hidden, so with the tab bar showing this box was about 50pt taller
+    // than the screen and the transport bar sat below the bottom edge, where
+    // nothing could scroll it back into view.
+    <div style={{ height: "calc(100dvh - 3.5rem)", minHeight: 480 }}>
       <ReviewV2Client
         assignmentId={assignment.id}
         assignmentName={assignment.name}
