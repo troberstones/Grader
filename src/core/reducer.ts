@@ -4,6 +4,8 @@ import type { ReviewItem, ViewerState } from "./types";
 
 export interface ReduceContext {
   items: ReviewItem[];
+  /** This device's answer to "mirror the master's zoom and pan". */
+  followView?: boolean;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -120,6 +122,32 @@ export function reduceViewer(
     case "opts":
       return { ...state, ...action.patch };
 
+    case "sync": {
+      const s = action.s;
+      const item = clamp(s.itemIndex, 0, Math.max(0, ctx.items.length - 1));
+      const next: ViewerState = {
+        ...state,
+        itemIndex: item,
+        frame: item === state.itemIndex ? state.frame : clamp(state.frame, 0, frameCountAt(ctx, item) - 1),
+        flipH: s.flipH,
+        flipV: s.flipV,
+        rotate: s.rotate,
+        color: s.color,
+        guides: s.guides,
+        layers: s.layers,
+        soloLayer: s.soloLayer,
+        composite: s.composite,
+        // The playhead is deliberately absent: it is clock-projected, and a
+        // snapshot arriving 5 s late would drag a follower backwards.
+        ...(ctx.followView
+          ? { zoom: s.zoom, panX: s.panX, panY: s.panY, fit: s.fit }
+          : null),
+      };
+      // A heartbeat that always returned a new object would redraw and
+      // re-render every peer on every beat, forever.
+      return sameViewerState(state, next) ? state : next;
+    }
+
     default:
       return state;
   }
@@ -141,4 +169,35 @@ export function initialStateFor(
     frame: clamp(merged.frame ?? 0, 0, Math.max(0, (item?.frameCount ?? 1) - 1)),
     fps: item?.fps && item.fps > 0 ? item.fps : merged.fps,
   };
+}
+
+/** Shallow, with the two nested objects compared field-wise. */
+function sameViewerState(a: ViewerState, b: ViewerState): boolean {
+  for (const k of Object.keys(b) as (keyof ViewerState)[]) {
+    if (k === "color") {
+      const x = a.color;
+      const y = b.color;
+      if (
+        x.transform !== y.transform ||
+        x.exposure !== y.exposure ||
+        x.saturation !== y.saturation ||
+        x.blur !== y.blur ||
+        x.channel !== y.channel ||
+        x.lut !== y.lut
+      ) {
+        return false;
+      }
+      continue;
+    }
+    if (k === "layers") {
+      const x = a.layers;
+      const y = b.layers;
+      const xs = Object.keys(x);
+      const ys = Object.keys(y);
+      if (xs.length !== ys.length || ys.some((id) => x[id] !== y[id])) return false;
+      continue;
+    }
+    if (a[k] !== b[k]) return false;
+  }
+  return true;
 }

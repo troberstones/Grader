@@ -43,7 +43,12 @@ export function useSession(channel: ReviewChannel, author: Author): SessionApi {
   // to `follower` locked a lone reviewer out of their own transport when there
   // was no master in the room to follow.
   const [role, setRole] = useState<Role>("free");
-  const [followView, setFollowView] = useState(false);
+  /**
+   * On by default: "the other screen doesn't zoom" reads as broken, not as a
+   * setting. Untick it on a device that wants to look around on its own —
+   * or use Break away, which drops the whole transport too.
+   */
+  const [followView, setFollowView] = useState(true);
   const [peers, setPeers] = useState<Peer[]>([]);
   const [connected, setConnected] = useState(channel.connected);
   const [rttMs, setRttMs] = useState<number | null>(null);
@@ -242,16 +247,27 @@ export function useSession(channel: ReviewChannel, author: Author): SessionApi {
 
   useEffect(() => channel.onConnectionChange(setConnected), [channel]);
 
-  // A machine that slept has a stale clock estimate; re-measure on wake.
+  /**
+   * Coming back to the foreground: re-measure the clock, and announce.
+   *
+   * The announcement is the important half. A master answers `hello` with a
+   * full state snapshot, and that path is event-driven — it works even when
+   * both tabs are backgrounded, where the master's heartbeat does not, because
+   * browsers throttle timers in hidden tabs to roughly once a minute.
+   *
+   * Which is the right shape anyway: a screen nobody is looking at cannot be
+   * visibly out of date. Ask at the moment someone looks again.
+   */
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
       clock.reset();
       measureClock();
+      send({ a: "hello", client: channel.clientId, name: author.name, role: roleRef.current });
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [clock, measureClock]);
+  }, [clock, measureClock, send, channel.clientId, author.name]);
 
   const claim = useCallback(() => {
     setRole("master");

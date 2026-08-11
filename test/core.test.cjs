@@ -409,14 +409,71 @@ test("budget: frames-per-gigabyte reflects RGBA storage", () => {
 
 // ── broadcast policy ──────────────────────────────────────────────────────────
 
-test("policy: only a master broadcasts transport", () => {
-  assert.equal(isBroadcast("seek", { isMaster: true, followView: false }), true);
-  assert.equal(isBroadcast("seek", { isMaster: false, followView: false }), false);
+
+const SNAPSHOT = {
+  itemIndex: 0,
+  flipH: true,
+  flipV: false,
+  rotate: 90,
+  color: { transform: "srgb", exposure: 0, saturation: 0, blur: 0, channel: "b", lut: null },
+  guides: "grid",
+  layers: {},
+  soloLayer: null,
+  composite: true,
+  zoom: 3,
+  panX: 40,
+  panY: -20,
+  fit: "actual",
+};
+
+test("sync: a snapshot recovers a follower that missed the deltas", () => {
+  const out = reduceViewer(DEFAULT_VIEWER_STATE, { a: "sync", s: SNAPSHOT }, { items: [] });
+  assert.equal(out.flipH, true);
+  assert.equal(out.rotate, 90);
+  assert.equal(out.guides, "grid");
+  assert.equal(out.color.channel, "b");
+  assert.equal(out.color.saturation, 0);
 });
 
-test("policy: zoom and pan ride only when follow-view is on", () => {
-  assert.equal(isBroadcast("view", { isMaster: true, followView: false }), false);
-  assert.equal(isBroadcast("view", { isMaster: true, followView: true }), true);
+test("sync: framing rides only for a follower with follow-view on", () => {
+  const off = reduceViewer(DEFAULT_VIEWER_STATE, { a: "sync", s: SNAPSHOT }, { items: [] });
+  assert.equal(off.zoom, DEFAULT_VIEWER_STATE.zoom, "zoom held");
+  assert.equal(off.panX, DEFAULT_VIEWER_STATE.panX, "pan held");
+  assert.equal(off.flipH, true, "but appearance still applied");
+
+  const on = reduceViewer(
+    DEFAULT_VIEWER_STATE,
+    { a: "sync", s: SNAPSHOT },
+    { items: [], followView: true },
+  );
+  assert.equal(on.zoom, 3);
+  assert.equal(on.panX, 40);
+  assert.equal(on.fit, "actual");
+});
+
+test("sync: an unchanged heartbeat is not a state change", () => {
+  // Five seconds apart, forever. If each beat produced a new object every peer
+  // would re-render and repaint on every one of them.
+  const settled = reduceViewer(
+    DEFAULT_VIEWER_STATE,
+    { a: "sync", s: SNAPSHOT },
+    { items: [], followView: true },
+  );
+  const again = reduceViewer(settled, { a: "sync", s: SNAPSHOT }, { items: [], followView: true });
+  assert.equal(again, settled, "same object identity");
+});
+
+test("policy: only a master broadcasts transport", () => {
+  assert.equal(isBroadcast("seek", { isMaster: true }), true);
+  assert.equal(isBroadcast("seek", { isMaster: false }), false);
+});
+
+test("policy: follow-view is the receiver's call, not the sender's", () => {
+  // The master always sends its framing. Reading its own follow-view here meant
+  // zoom crossed only when both machines had the box ticked, so ticking it on
+  // the follower — the only side it means anything on — did nothing.
+  assert.equal(isBroadcast("view", { isMaster: true }), true);
+  assert.equal(isBroadcast("view", { isMaster: false }), false);
   assert.equal(shouldApply("view", { role: "follower", followView: false }), false);
   assert.equal(shouldApply("view", { role: "follower", followView: true }), true);
 });
@@ -424,18 +481,18 @@ test("policy: zoom and pan ride only when follow-view is on", () => {
 test("policy: what the image looks like follows the master, follow-view or not", () => {
   // Flip, rotate, desaturate, channel, guides, PSD layers. A room that
   // disagrees about these is a room talking past itself.
-  for (const kind of ["flip", "rotate", "color", "guides", "layers"]) {
-    assert.equal(isBroadcast(kind, { isMaster: true, followView: false }), true, kind);
+  for (const kind of ["flip", "rotate", "color", "guides", "layers", "sync"]) {
+    assert.equal(isBroadcast(kind, { isMaster: true }), true, kind);
     assert.equal(shouldApply(kind, { role: "follower", followView: false }), true, kind);
     // Still only the master drives, and only a follower obeys.
-    assert.equal(isBroadcast(kind, { isMaster: false, followView: true }), false, kind);
+    assert.equal(isBroadcast(kind, { isMaster: false }), false, kind);
     assert.equal(shouldApply(kind, { role: "free", followView: true }), false, kind);
   }
 });
 
 test("policy: annotation and presence always travel, whatever the role", () => {
   for (const kind of ["stroke", "ink", "laser", "hello", "ping"]) {
-    assert.equal(isBroadcast(kind, { isMaster: false, followView: false }), true, kind);
+    assert.equal(isBroadcast(kind, { isMaster: false }), true, kind);
     assert.equal(shouldApply(kind, { role: "free", followView: false }), true, kind);
   }
 });

@@ -81,10 +81,25 @@ on screen; only below the floor does the panel scroll.
 7. Flip, rotate, Value, the channel picker and the guides overlay follow the
    master on every screen, with or without "Follow view". They change what the
    image *is*, and a room that disagrees about that is talking past itself.
-8. **Follow view** (checkbox) additionally mirrors zoom and pan — *where* you
-   are looking rather than what at. Leave it off for the iPad, on for a
-   projector.
+8. **Follow view** (checkbox, on by default) additionally mirrors zoom and pan
+   — *where* you are looking rather than what at. It is the receiving screen's
+   choice: the master always sends its framing, and each screen decides whether
+   to take it. Untick it on a device that wants to look around on its own.
 9. **Break away** browses independently; **Rejoin** snaps back.
+
+**Recovering a screen that fell behind.** Every action is a delta, so a dropped
+message would otherwise strand a follower on the wrong flip until that same
+control moved again. The master sends its whole visible state to anyone who says
+hello, and a screen says hello whenever it comes back to the foreground — so
+waking the iPad, or switching back to the tab, pulls it level immediately. There
+is a 5 s heartbeat as well, but do not lean on it: browsers throttle timers in
+hidden tabs to about once a minute. That is fine, because a screen nobody is
+looking at cannot be visibly out of date.
+
+To see it work, use the sync toggle in grader's nav (the ⌁ icon): pause it on the
+follower, change flip/guides/channel on the master, resume — the follower is
+still stale — then switch tabs away and back. It lands on the master's state in
+one hop.
 
 Only tick **Audio** on one machine, or the room echoes.
 
@@ -176,7 +191,10 @@ Multi-client sync, verified with two browser tabs:
 - Play/pause propagates, and follower transport controls disable.
 - Switching file switches it on the follower too, layer panel and all.
 - Flip, rotate, Value, channel and guides all mirror with "Follow view" off;
-  zoom stays at the follower's own setting, which is the point of the checkbox.
+  zoom mirrors when it is on, which is the point of the checkbox.
+- Recovery: with the follower's sync paused, the master changed guides, channel
+  and zoom; the follower stayed stale through the resume, then matched all three
+  the instant it came back to the foreground.
 
 - Continuous playback: a follower advanced 63 → 88 → 113 over two seconds on a
   25 fps clip — exactly 25 frames per second — while the master's tab was

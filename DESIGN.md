@@ -481,8 +481,22 @@ Per-field sync policy, in three tiers:
   talking past itself: "look at the shoulder line" means nothing if half the room is
   looking at an unflipped copy. Originally these sat with view, behind the toggle, which
   made the common case — flip to check a drawing — silently private.
-- **View** — opt-in via "Follow view". Zoom and pan only: *where* you are looking rather
-  than what at. The projector should mirror it, an iPad in someone's lap maybe shouldn't.
+- **View** — zoom and pan only: *where* you are looking rather than what at. The master
+  always sends it; each receiving screen decides whether to apply it, via "Follow view"
+  (default on). That gating belongs to the receiver and only the receiver — reading the
+  sender's copy of the flag meant zoom crossed only when both machines happened to have
+  the box ticked, so ticking it on the follower, the one place it means anything, did
+  nothing at all.
+
+Deltas alone are not enough. Every action above is a delta, so one dropped message leaves a
+follower wrong until that same field changes again — which for a flip might be never. The
+master therefore also sends a `sync` snapshot of its whole visible state: on a 5 s
+heartbeat, and to anyone who says `hello`. A screen says hello when it returns to the
+foreground, which makes recovery event-driven rather than timer-driven — browsers throttle
+timers in hidden tabs to roughly once a minute, and the hello path keeps working there.
+That ordering is right on its own terms: a screen nobody is looking at cannot be visibly
+stale, so the moment to reconcile is the moment someone looks. The snapshot returns the
+identical state object when nothing changed, so an idle heartbeat costs no render.
 
 Tools and colours never travel — that is your pen, not the room's.
 

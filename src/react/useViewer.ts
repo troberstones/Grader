@@ -14,6 +14,9 @@ import type { CacheStats, FrameSource, SourceContext } from "../sources/types";
 import { LayeredSource } from "../sources/layered";
 import type { SessionApi } from "./useSession";
 
+/** Master heartbeat. Cheap: one small message, and idle beats change nothing. */
+const SYNC_INTERVAL_MS = 5_000;
+
 export interface ViewerApi {
   state: ViewerState;
   item: ReviewItem | null;
@@ -238,7 +241,10 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   const dispatch = useCallback(
     (action: Action, dispatchOpts: { broadcast?: boolean } = {}) => {
       const before = stateRef.current;
-      const next = reduceViewer(before, action, { items: itemsRef.current });
+      const next = reduceViewer(before, action, {
+        items: itemsRef.current,
+        followView: sessionRef.current.followView,
+      });
 
       if (next !== before) {
         stateRef.current = next;
@@ -274,7 +280,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
 
       const shouldSend =
         dispatchOpts.broadcast !== false &&
-        isBroadcast(action.a, { isMaster: session.isMaster, followView: session.followView });
+        isBroadcast(action.a, { isMaster: session.isMaster });
 
       if (shouldSend) {
         // Transport travels as a clock-anchored snapshot rather than a bare
@@ -299,17 +305,60 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   const dispatchRef = useRef(dispatch);
   dispatchRef.current = dispatch;
 
+  /**
+   * The master's state, whole. Every other action is a delta, so one dropped
+   * message strands a follower on the wrong flip or channel until that field
+   * happens to change again. Sent on a heartbeat and to anyone who joins.
+   */
+  const sendSnapshot = useCallback(() => {
+    const s = sessionRef.current;
+    if (!s.isMaster) return;
+    const st = stateRef.current;
+    s.send({
+      a: "sync",
+      s: {
+        itemIndex: st.itemIndex,
+        flipH: st.flipH,
+        flipV: st.flipV,
+        rotate: st.rotate,
+        color: st.color,
+        guides: st.guides,
+        layers: st.layers,
+        soloLayer: st.soloLayer,
+        composite: st.composite,
+        zoom: st.zoom,
+        panX: st.panX,
+        panY: st.panY,
+        fit: st.fit,
+      },
+    });
+  }, []);
+
+  /**
+   * Backstop only. Browsers throttle timers in a hidden tab to about once a
+   * minute, so this is not the mechanism to rely on — the one that matters is
+   * `hello` → snapshot, which is event-driven and fires the moment a screen
+   * comes back to the foreground.
+   */
+  useEffect(() => {
+    const timer = setInterval(sendSnapshot, SYNC_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [sendSnapshot]);
+
   // ── Remote actions ──────────────────────────────────────────────────────────
   useEffect(() => {
     return session.subscribe((e: Envelope) => {
       const s = sessionRef.current;
+      // Someone just joined, or came back from a suspended tab. Do not make
+      // them wait up to a heartbeat to find out what they are looking at.
+      if (e.a === "hello" && s.isMaster) sendSnapshot();
       if (!shouldApply(e.a, { role: s.role, followView: s.followView })) return;
       dispatchRef.current(e as Action, { broadcast: false });
     });
     // subscribe is stable; role/followView are read live from the ref so a
     // role change does not resubscribe (and drop queued events).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.subscribe]);
+  }, [session.subscribe, sendSnapshot]);
 
   const stepFrame = useCallback(
     (delta: number) => {

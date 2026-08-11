@@ -30,6 +30,24 @@ export interface WireStroke {
   b: string;
 }
 
+/** Everything a follower needs to match the master, independent of history. */
+export interface SyncSnapshot {
+  itemIndex: number;
+  flipH: boolean;
+  flipV: boolean;
+  rotate: Rotation;
+  color: ColorState;
+  guides: GuideKind;
+  layers: Record<string, boolean>;
+  soloLayer: string | null;
+  composite: boolean;
+  /** Applied only by a follower with "follow view" on. */
+  zoom: number;
+  panX: number;
+  panY: number;
+  fit: FitMode;
+}
+
 export type Action =
   // ── transport ───────────────────────────────────────────────────────────────
   | { a: "goto"; item: number; frame: number }
@@ -46,6 +64,13 @@ export type Action =
   | { a: "view"; zoom?: number; panX?: number; panY?: number; fit?: FitMode }
   | { a: "color"; patch: Partial<ColorState> }
   | { a: "guides"; mode: GuideKind }
+  /**
+   * The master's whole visible state, sent on a heartbeat and to anyone who
+   * says hello. Every other action is a delta, so a single dropped message
+   * leaves a follower wrong until that same field changes again — which for a
+   * flip or a channel might be never. This is the floor under all of them.
+   */
+  | { a: "sync"; s: SyncSnapshot }
   | {
       a: "layers";
       visible?: Record<string, boolean>;
@@ -137,6 +162,7 @@ export const PRESENTATION_ACTIONS: ReadonlySet<ActionKind> = new Set<ActionKind>
   "color",
   "guides",
   "layers",
+  "sync",
 ]);
 
 /** Framing only — zoom, pan, fit. Gated on "follow view". */
@@ -156,11 +182,21 @@ export const ALWAYS_ACTIONS: ReadonlySet<ActionKind> = new Set<ActionKind>([
   "pong",
 ]);
 
-export function isBroadcast(kind: ActionKind, opts: { isMaster: boolean; followView: boolean }): boolean {
+/**
+ * A master broadcasts everything it does. It does *not* consult its own
+ * "follow view" — that setting is the receiver's answer to "do I mirror the
+ * master's framing", and a master follows nobody.
+ *
+ * Reading it here meant zoom crossed only when both machines happened to have
+ * the box ticked, so ticking it on the follower — the only place it reads as
+ * meaningful — did nothing at all.
+ */
+export function isBroadcast(kind: ActionKind, opts: { isMaster: boolean }): boolean {
   if (ALWAYS_ACTIONS.has(kind)) return true;
   if (!opts.isMaster) return false;
-  if (TRANSPORT_ACTIONS.has(kind) || PRESENTATION_ACTIONS.has(kind)) return true;
-  return opts.followView && VIEW_ACTIONS.has(kind);
+  return (
+    TRANSPORT_ACTIONS.has(kind) || PRESENTATION_ACTIONS.has(kind) || VIEW_ACTIONS.has(kind)
+  );
 }
 
 /** Should an incoming action be applied, given this peer's role? */
