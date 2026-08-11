@@ -922,6 +922,14 @@ export function ArtReviewer({
             than the panel once a sidebar is open, and an unshrinkable child
             overflows the header no matter how willing the header is to wrap. */}
         <div style={{ minWidth: 0, overflowX: "auto" }}>{headerSlot}</div>
+        {/* The keyboard shortcut is no use on the device this is for. */}
+        <button
+          onClick={() => setShowLog((v) => !v)}
+          style={{ ...textButton(showLog), flexShrink: 0 }}
+          title="Input log — every pointer event and what it did  D"
+        >
+          ⌁
+        </button>
         <button
           onClick={() => setShowHelp(true)}
           style={{ ...textButton(), flexShrink: 0 }}

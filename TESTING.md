@@ -58,8 +58,9 @@ wrong — a palm is a touch, and a touch cannot draw.
 
 On a desktop the mouse keeps doing both, since there is no stylus to take over.
 
-**Input log** — press `D`. A floating panel tails every pointer event with the
-decision the handler made:
+**Input log** — tap the **⌁** button in the header, next to `?`, or press `D`
+on a machine with a keyboard. A floating panel tails every pointer event with
+the decision the handler made:
 
 ```
    0ms  down    #901  pen   b1  p0.31  0.221,0.200  → START pen
