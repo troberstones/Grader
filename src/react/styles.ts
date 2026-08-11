@@ -37,6 +37,28 @@ export const INK_COLORS = [
 
 export const INK_WIDTHS = [2, 4, 8, 16];
 
+/**
+ * Chrome is for pressing, not for selecting.
+ *
+ * On a tablet every drag that starts on a label selected text, and a long press
+ * on a button raised the callout menu instead of holding the button — both of
+ * which land constantly when you are drawing with a stylus next to a toolbar.
+ * Applied at the panel root; text fields opt back in.
+ */
+export const noSelect: CSSProperties = {
+  userSelect: "none",
+  WebkitUserSelect: "none",
+  WebkitTouchCallout: "none",
+  WebkitTapHighlightColor: "transparent",
+};
+
+/** For the few controls you genuinely type into. */
+export const selectableText: CSSProperties = {
+  userSelect: "text",
+  WebkitUserSelect: "text",
+  WebkitTouchCallout: "default",
+};
+
 export const panel: CSSProperties = {
   background: C.container,
   borderRadius: 8,

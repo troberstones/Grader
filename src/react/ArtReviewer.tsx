@@ -25,7 +25,7 @@ import { Presence } from "./components/Presence";
 import { Timeline } from "./components/Timeline";
 import { InkRail, TransportBar, ViewBar, type ToolState } from "./components/Toolbar";
 import { isTypingTarget } from "./keymap";
-import { C, label, textButton } from "./styles";
+import { C, label, noSelect, selectableText, textButton } from "./styles";
 import { useAnnotations } from "./useAnnotations";
 import { useSession } from "./useSession";
 import { useViewer } from "./useViewer";
@@ -674,6 +674,7 @@ export function ArtReviewer({
   return (
     <div
       style={{
+        ...noSelect,
         display: "flex",
         height: "100%",
         minHeight: 0,
@@ -1015,6 +1016,7 @@ function TextEntry({
           }}
           rows={3}
           style={{
+            ...selectableText,
             width: "100%",
             background: C.lowest,
             color: C.text,

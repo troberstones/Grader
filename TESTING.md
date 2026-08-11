@@ -57,10 +57,15 @@ the composite.
 
 **Value check** — `V` desaturates. `G` cycles composition guides.
 
+**Selection** — nothing in the panel selects. Drag across a label, long-press a
+button: no blue highlight, no callout menu, no tap flash. The fps field and the
+text-note box still select and edit normally, because you type into those.
+
 **Layout** — the drawing rail is pinned to the right of the stage, so it never
 scrolls away the way a bar under the transport did. Resize the window and watch
-the stage: it grows and shrinks, keeps a 320 px floor, and nothing is allowed to
-paint over the timeline. Below the floor the panel scrolls rather than overlap.
+the stage: it grows and shrinks, keeps a 220 px floor, and nothing is allowed to
+paint over the timeline. The stage absorbs the shortfall so the transport stays
+on screen; only below the floor does the panel scroll.
 
 ## Multi-device / master mode
 

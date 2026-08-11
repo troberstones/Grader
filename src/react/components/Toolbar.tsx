@@ -3,7 +3,16 @@
 import type { CSSProperties } from "react";
 import type { LoopMode, StrokeTool, ViewerState } from "../../core/types";
 import type { GuideKind } from "../../render/overlay";
-import { C, iconButton, INK_COLORS, INK_WIDTHS, label, select, textButton } from "../styles";
+import {
+  C,
+  iconButton,
+  INK_COLORS,
+  INK_WIDTHS,
+  label,
+  select,
+  selectableText,
+  textButton,
+} from "../styles";
 
 export interface ToolState {
   tool: StrokeTool | "erase" | "select";
@@ -147,7 +156,7 @@ export function TransportBar({
           value={Math.round(state.fps)}
           disabled={dim}
           onChange={(e) => onFps(Number(e.target.value))}
-          style={{ ...select, width: 58 }}
+          style={{ ...select, ...selectableText, width: 58 }}
         />
         <select
           value={state.rate}
