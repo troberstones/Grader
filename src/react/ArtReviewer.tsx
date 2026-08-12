@@ -138,7 +138,18 @@ export function ArtReviewer({
    * very thing being measured.
    */
   const logInput = useCallback(
-    (phase: InputEntry["phase"], e: React.PointerEvent, note?: string) => {
+    (
+      phase: InputEntry["phase"],
+      e: {
+        clientX: number;
+        clientY: number;
+        pointerId: number;
+        pointerType: string;
+        pressure: number;
+        buttons: number;
+      },
+      note?: string,
+    ) => {
       if (!showLogRef.current) return;
       const buf = logRef.current;
       const p = toMediaNormRef.current(e.clientX, e.clientY);
@@ -174,6 +185,40 @@ export function ArtReviewer({
     },
     [],
   );
+
+  /**
+   * Anything the canvas never saw.
+   *
+   * When a stroke goes missing there are two very different explanations —
+   * Safari never delivered the events, or it delivered them somewhere else —
+   * and from inside the canvas handler they look identical. This watches the
+   * document in the capture phase and records only pen events whose target is
+   * not the overlay, which is exactly the difference between them.
+   */
+  useEffect(() => {
+    if (!showLog) return;
+    const seen = (e: PointerEvent) => {
+      if (e.pointerType !== "pen") return;
+      if (e.target === overlayRef.current) return; // already logged in full
+      const el = e.target as HTMLElement | null;
+      const what = el?.tagName?.toLowerCase() ?? "?";
+      const phase: InputEntry["phase"] =
+        e.type === "pointerdown"
+          ? "down"
+          : e.type === "pointerup"
+            ? "up"
+            : e.type === "pointercancel"
+              ? "cancel"
+              : "move";
+      logInput(phase, e, `elsewhere · ${what}`);
+    };
+    const types = ["pointerdown", "pointermove", "pointerup", "pointercancel"] as const;
+    const listener = seen as EventListener;
+    for (const t of types) document.addEventListener(t, listener, true);
+    return () => {
+      for (const t of types) document.removeEventListener(t, listener, true);
+    };
+  }, [showLog, logInput]);
 
   // Repaint the panel on a timer rather than per event.
   useEffect(() => {
@@ -559,8 +604,18 @@ export function ArtReviewer({
         return;
       }
       if (d.pointerId !== e.pointerId) {
-        logInput("move", e, `drop · stroke is #${d.pointerId}`);
-        return;
+        // iPadOS gives hover and contact *different* pointer ids — hover comes
+        // in as #1, contact as some large number — so an id switch mid-stroke
+        // is a real possibility rather than a stray event. A pen move with the
+        // tip down, while a pen stroke is in flight, is that stroke: adopt it
+        // rather than dropping the rest of the letter on the floor.
+        if (e.buttons !== 0 && d.pointerType === "pen") {
+          logInput("move", e, `adopted · id changed from #${d.pointerId}`);
+          d.pointerId = e.pointerId;
+        } else {
+          logInput("move", e, `drop · stroke is #${d.pointerId}`);
+          return;
+        }
       }
 
       const raw = toMediaNorm(e.clientX, e.clientY);
