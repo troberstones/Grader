@@ -573,6 +573,23 @@ between colour management and hoping.
 **Display.** `canvas.getContext('webgl2')` with `drawingBufferColorSpace = 'display-p3'`
 where supported (Chrome, Safari), sRGB otherwise; the OS applies the monitor profile.
 
+Whether the request took has to be read back and fed to the shader, because the shader
+encodes into whatever the buffer actually is. Asking for P3 and then writing sRGB-encoded
+values is not a subtle error: the compositor reads those numbers as P3, and every image is
+oversaturated by the ratio between the two gamuts. That was the shipped behaviour until
+2026-08-12 — the buffer was set to P3 unconditionally while the shader always encoded sRGB,
+and because `transform` defaults to `srgb` and has no UI, the one branch that applied the
+gamut matrix never ran. Fixed by `uOutputP3`, which is set from the value the context
+reports back rather than the value we asked for.
+
+**Status.** Decode (`colorSpaceConversion: 'none'`), the linear-light working space, exposure,
+saturation, channel isolation and the buffer-space encode above are built. What is not:
+ingest still calls `toColourspace("srgb")` on anything carrying a profile (§ingest below is
+the intent, not the current behaviour), so wide-gamut submissions are flattened before they
+reach the browser and `ReviewItem.colorSpace` is populated but never read by the renderer.
+View transforms and `.cube` LUTs are unbuilt — `uTransform` is currently optimised out of
+the program because nothing references it.
+
 **View transforms** in the UI: `Native` / `sRGB` / `Display P3` / `Rec.709`, plus exposure
 and gamma, plus optional `.cube` 3D LUT upload (per assignment) for anyone reviewing
 film-pipeline work.

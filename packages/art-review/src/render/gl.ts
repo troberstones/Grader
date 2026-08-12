@@ -62,6 +62,12 @@ export class GLRenderer {
   private restoredHandler: (() => void) | null = null;
   private onLost: (() => void) | null = null;
   private textureBytes = 0;
+  /**
+   * True when the drawing buffer really is Display-P3, so the shader has to
+   * encode into P3 primaries rather than sRGB. Read back from the context
+   * rather than assumed — see init().
+   */
+  private outputP3 = false;
 
   /** Bytes of texture memory to keep resident before evicting. */
   vramBudget = 1024 * 1024 * 1024;
@@ -84,11 +90,21 @@ export class GLRenderer {
     this.gl = gl;
 
     // Display-P3 where the browser supports it; sRGB is the silent fallback.
+    //
+    // Whether it took has to be read back, not assumed: the shader encodes into
+    // whatever space this ends up being, and guessing wrong stretches the whole
+    // gamut. Asking for P3 and then writing sRGB-encoded values is exactly the
+    // bug this flag exists to prevent — it renders every image oversaturated on
+    // the machines that support the wider gamut, which is all of them here.
     try {
       const withSpace = gl as WebGL2RenderingContext & { drawingBufferColorSpace?: string };
-      if ("drawingBufferColorSpace" in gl) withSpace.drawingBufferColorSpace = "display-p3";
+      if ("drawingBufferColorSpace" in gl) {
+        withSpace.drawingBufferColorSpace = "display-p3";
+        this.outputP3 = withSpace.drawingBufferColorSpace === "display-p3";
+      }
     } catch {
       // Not supported — sRGB it is.
+      this.outputP3 = false;
     }
 
     this.lostHandler = () => {
@@ -150,7 +166,7 @@ export class GLRenderer {
     for (const name of [
       "uView", "uRect", "uFlip", "uRotate", "uMediaSize", "uTex", "uLut", "uHasLut",
       "uOpacity", "uExposure", "uGamma", "uSaturation", "uChannel", "uTransform",
-      "uFlipY", "uBlend", "uPremultiplied",
+      "uOutputP3", "uFlipY", "uBlend", "uPremultiplied",
     ]) {
       this.uniforms[name] = gl.getUniformLocation(prog, name);
     }
@@ -396,7 +412,13 @@ export class GLRenderer {
     gl.uniform1f(u.uGamma!, p.color.gamma);
     gl.uniform1f(u.uSaturation!, p.color.saturation);
     gl.uniform1i(u.uChannel!, CHANNEL_INDEX[p.color.channel] ?? 0);
+    // uTransform is currently optimised out of the program — the shader stopped
+    // referencing it when the buffer-space conversion replaced the branch that
+    // used to stand in for it, so getUniformLocation returns null and this call
+    // is a no-op. Kept because view-transform simulation is the next slice of
+    // the colour work and it will read this again; see shaders.ts.
     gl.uniform1i(u.uTransform!, TRANSFORM_INDEX[p.color.transform] ?? 1);
+    gl.uniform1i(u.uOutputP3!, this.outputP3 ? 1 : 0);
     gl.uniform1i(u.uTex!, 0);
     gl.uniform1i(u.uLut!, 1);
     gl.uniform1i(u.uHasLut!, this.lutTexture ? 1 : 0);

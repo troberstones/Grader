@@ -52,6 +52,7 @@ uniform float uGamma;
 uniform float uSaturation;
 uniform int uChannel;        // 0 rgb, 1 r, 2 g, 3 b, 4 a, 5 luma
 uniform int uTransform;      // 0 native, 1 srgb, 2 display-p3, 3 rec709
+uniform bool uOutputP3;      // the drawing buffer really is Display-P3
 uniform bool uFlipY;         // texture origin differs between sources
 uniform int uBlend;          // see BLEND_* below
 uniform bool uPremultiplied;
@@ -100,16 +101,22 @@ void main() {
 
   lin *= pow(2.0, uExposure);
 
-  if (uTransform == 2) {
-    lin = SRGB_TO_P3 * lin;
-  } else if (uTransform == 3) {
-    // Rec.709 shares sRGB primaries; the difference is the transfer curve,
-    // handled on the way back out.
-    lin = lin;
-  }
-
   float luma = dot(lin, vec3(0.2126, 0.7152, 0.0722));
   lin = mix(vec3(luma), lin, uSaturation);
+
+  // Encode into whatever the drawing buffer actually is. Sources decode as
+  // sRGB primaries today (ingest tags everything sRGB), so a P3 buffer needs
+  // the gamut conversion here — without it the compositor reads sRGB numbers
+  // as P3 ones and every image comes out oversaturated. Display-P3 shares the
+  // sRGB transfer curve, so the encode below is the same either way.
+  //
+  // uTransform is the *simulation* target (show me this on an sRGB display,
+  // on a Rec.709 monitor) and is not wired to anything yet — it has no UI and
+  // defaults to "srgb". It must not be confused with the buffer's own space,
+  // which is what this conversion is about.
+  if (uOutputP3) {
+    lin = SRGB_TO_P3 * lin;
+  }
 
   vec3 outRgb = toSrgb3(max(lin, 0.0));
 
