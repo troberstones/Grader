@@ -119,6 +119,7 @@ export function ArtReviewer({
   /** finishStroke is defined below onPointerDown; a ref sidesteps the ordering. */
   const finishStrokeRef = useRef<(() => void) | null>(null);
   const onPointerUpRef = useRef<((e: React.PointerEvent) => void) | null>(null);
+  const onPointerMoveRef = useRef<((e: React.PointerEvent) => void) | null>(null);
 
   // ── Input log (D) ───────────────────────────────────────────────────────────
   /** toMediaNorm is defined further down; the log only needs it at event time. */
@@ -204,6 +205,12 @@ export function ArtReviewer({
     const seen = (e: PointerEvent) => {
       if (e.pointerType !== "pen") return;
       if (e.target === overlayRef.current) return; // already logged in full
+      // With a stroke in flight the fallback below re-dispatches these into the
+      // normal handler, which logs them properly. Logging here as well would
+      // double every line of a stroke that wandered off the stage. The case
+      // worth recording is the other one: events going somewhere else while
+      // nothing is in flight, which is what a missing letter looks like.
+      if (drawingRef.current) return;
       const el = e.target as HTMLElement | null;
       const what = el?.tagName?.toLowerCase() ?? "?";
       const phase: InputEntry["phase"] =
@@ -427,16 +434,31 @@ export function ArtReviewer({
     (e: React.PointerEvent) => {
       const el = overlayRef.current;
       if (!el) return;
-      // Tell the browser this gesture is ours. Without it iPadOS can decide a
-      // drag belongs to the page — the stage sits inside a scrollable column —
-      // and hand it to scrolling, which arrives here as pointercancel and takes
-      // the rest of the stroke with it.
+      // Tell the browser this gesture is ours.
       if (e.pointerType !== "touch" && e.cancelable) e.preventDefault();
-      try {
-        el.setPointerCapture(e.pointerId);
-      } catch {
-        // Capture is an optimisation, not a requirement — a pointer that has
-        // already been released (or a synthetic one) must not abort the stroke.
+
+      /**
+       * No pointer capture for a stylus, deliberately.
+       *
+       * Capture is the one piece of browser state this code held from one
+       * stroke to the next, and the symptom was every other letter going
+       * missing with no events delivered for it at all — which nothing in a
+       * handler can cause, only something left behind for the next gesture.
+       * It has been here since the first version, which matches how long the
+       * problem has.
+       *
+       * It bought little anyway: the overlay covers the whole stage, so a pen
+       * is over it for the entire stroke. What capture did buy — events
+       * continuing when the pointer wanders off the element — is replaced by
+       * the document-level fallback below, which is ours rather than the
+       * browser's.
+       */
+      if (e.pointerType === "mouse") {
+        try {
+          el.setPointerCapture(e.pointerId);
+        } catch {
+          // An optimisation, not a requirement.
+        }
       }
       // Fingers navigate, the stylus draws, and neither does the other's job.
       // Palm rejection then needs no heuristic at all: a palm is a touch, and a
@@ -532,7 +554,7 @@ export function ArtReviewer({
         tool: tools.tool as StrokeTool,
       };
       hoverRef.current = { x: p.x, y: p.y, down: true };
-      logInput("down", e, `START ${tools.tool}`);
+      logInput("down", e, `START ${tools.tool}${e.pointerType === "mouse" ? " · captured" : ""}`);
       viewer.invalidate();
     },
     [state, tools.tool, toMediaNorm, annotations, author, session, channel.clientId, viewer, logInput],
@@ -782,6 +804,37 @@ export function ArtReviewer({
   );
 
   onPointerUpRef.current = onPointerUp;
+  onPointerMoveRef.current = onPointerMove;
+
+  /**
+   * What pointer capture used to do, done by hand.
+   *
+   * With a stroke in flight, a pen move or release that lands on some other
+   * element still belongs to that stroke — the pen wandered over the rail, or
+   * off the stage edge. Without this, removing capture would truncate a stroke
+   * at the boundary instead of losing it to a stale capture; both are wrong.
+   * Only events the overlay did *not* receive are handled here, so nothing is
+   * processed twice.
+   */
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    const stray = (e: PointerEvent) => {
+      if (e.pointerType === "touch" || e.target === overlay) return;
+      const d = drawingRef.current;
+      if (!d) return;
+      const ev = e as unknown as React.PointerEvent;
+      if (e.type === "pointermove") onPointerMoveRef.current?.(ev);
+      else onPointerUpRef.current?.(ev);
+    };
+    const listener = stray as EventListener;
+    document.addEventListener("pointermove", listener, true);
+    document.addEventListener("pointerup", listener, true);
+    return () => {
+      document.removeEventListener("pointermove", listener, true);
+      document.removeEventListener("pointerup", listener, true);
+    };
+  }, []);
 
   /** The cursor belongs to the stage; it does not linger once the pen leaves. */
   const onPointerLeave = useCallback(
