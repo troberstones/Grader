@@ -397,6 +397,10 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
       flipV: st.flipV,
       rotate: st.rotate,
       color: st.color,
+      // A property of the file, not of the session, so it is deliberately not
+      // part of ViewerState and never travels on the sync bus — every host
+      // reads the same item and derives the same transform.
+      sourcePrimaries: it?.colorSpace?.primaries,
     };
   }, [glCanvasRef, containerRef]);
 

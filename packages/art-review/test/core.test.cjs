@@ -578,3 +578,98 @@ test("floatToHalf: the values a render actually contains", () => {
   assert.equal(bits(1e6), 0x7c00, "overflow saturates to infinity, not garbage");
   assert.equal(bits(1e-9), 0x0000, "underflow to zero, sign preserved separately");
 });
+
+// ── Working-space conversion ──────────────────────────────────────────────────
+
+const {
+  PRIMARIES, rgbToXyz, toSrgbMatrix, toGl, IDENTITY,
+} = require(path.join(OUT, "primaries.js"));
+
+/** Compare a derived matrix against published figures. */
+function closeTo(actual, expected, tol, label) {
+  for (let i = 0; i < 9; i++) {
+    assert.ok(
+      Math.abs(actual[i] - expected[i]) < tol,
+      `${label}[${i}] was ${actual[i].toFixed(6)}, expected ${expected[i]}`,
+    );
+  }
+}
+
+test("rgbToXyz: sRGB derives the published D65 matrix", () => {
+  // IEC 61966-2-1. Deriving this rather than pasting it is what makes every
+  // other space in the table trustworthy — the construction is checked against
+  // the one matrix everybody agrees on.
+  closeTo(rgbToXyz(PRIMARIES.srgb), [
+    0.4124, 0.3576, 0.1805,
+    0.2126, 0.7152, 0.0722,
+    0.0193, 0.1192, 0.9505,
+  ], 5e-5, "srgb→xyz");
+});
+
+test("toSrgbMatrix: ACES2065-1 matches the published conversion", () => {
+  closeTo(toSrgbMatrix("aces2065-1"), [
+    2.52169, -1.13413, -0.38756,
+    -0.27648, 1.37272, -0.09624,
+    -0.01538, -0.15298, 1.16835,
+  ], 1e-4, "ap0→srgb");
+});
+
+test("toSrgbMatrix: ACEScg matches the published conversion", () => {
+  closeTo(toSrgbMatrix("acescg"), [
+    1.70505, -0.62179, -0.08326,
+    -0.13026, 1.14080, -0.01055,
+    -0.02400, -0.12897, 1.15297,
+  ], 1e-4, "ap1→srgb");
+});
+
+test("toSrgbMatrix: Display-P3 agrees with the matrix already in the shader", () => {
+  // The shader carries P3_TO_SRGB as a literal for the output path. If these
+  // two ever disagree, one of them is wrong.
+  closeTo(toSrgbMatrix("display-p3"), [
+    1.2249401, -0.2249404, 0,
+    -0.0420569, 1.042057, 0,
+    -0.0196376, -0.0786361, 1.0982735,
+  ], 1e-4, "p3→srgb");
+});
+
+test("toSrgbMatrix: white stays white in every named space", () => {
+  // The whole point of the chromatic adaptation. A D60 space converted without
+  // it puts a warm cast on everything.
+  for (const name of Object.keys(PRIMARIES)) {
+    const m = toSrgbMatrix(name);
+    for (let r = 0; r < 3; r++) {
+      const sum = m[r * 3] + m[r * 3 + 1] + m[r * 3 + 2];
+      assert.ok(Math.abs(sum - 1) < 1e-6, `${name} row ${r} maps white to ${sum}`);
+    }
+  }
+});
+
+test("toSrgbMatrix: sRGB and Rec.709 are identity, not a near miss", () => {
+  assert.deepEqual([...toSrgbMatrix("srgb")], [...IDENTITY]);
+  for (const [i, v] of toSrgbMatrix("bt709").entries()) {
+    assert.ok(Math.abs(v - IDENTITY[i]) < 1e-12);
+  }
+});
+
+test("toSrgbMatrix: an unknown or absent gamut is left alone", () => {
+  // Guessing would be worse than doing nothing: untouched is at least a state
+  // the colourist can reason about.
+  assert.deepEqual([...toSrgbMatrix(undefined)], [...IDENTITY]);
+  assert.deepEqual([...toSrgbMatrix("unknown")], [...IDENTITY]);
+  assert.deepEqual([...toSrgbMatrix("")], [...IDENTITY]);
+});
+
+test("toSrgbMatrix: an ACES red lands outside the sRGB gamut", () => {
+  // Not a round number to check, but the property that matters: AP0 red is far
+  // outside anything a monitor shows, so it must come out with the negative
+  // green and blue that says "out of gamut" rather than a plausible red.
+  const m = toSrgbMatrix("aces2065-1");
+  const red = [m[0], m[3], m[6]];
+  assert.ok(red[0] > 2, "red channel gains");
+  assert.ok(red[1] < 0 && red[2] < 0, "green and blue go negative");
+});
+
+test("toGl: row-major becomes the column-major order GL wants", () => {
+  const gl = toGl([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual([...gl], [1, 4, 7, 2, 5, 8, 3, 6, 9]);
+});

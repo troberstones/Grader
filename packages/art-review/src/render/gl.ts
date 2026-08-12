@@ -1,4 +1,5 @@
 import type { ColorState, Rotation, ViewTransform } from "../core/types";
+import { toGl, toSrgbMatrix } from "../core/primaries";
 import type { LayerDraw, TexSource } from "../sources/types";
 import { BLEND, FRAG, PSD_BLEND_MAP, VERT, type BlendName } from "./shaders";
 
@@ -24,6 +25,12 @@ export interface ViewParams {
   flipV: boolean;
   rotate: Rotation;
   color: ColorState;
+  /**
+   * The working space the item's pixels are in, as ingest named it. Per frame
+   * rather than per draw because every draw in a frame — including a PSD's
+   * layer stack — comes from the same file.
+   */
+  sourcePrimaries?: string;
 }
 
 interface CachedTexture {
@@ -173,7 +180,7 @@ export class GLRenderer {
     for (const name of [
       "uView", "uRect", "uFlip", "uRotate", "uMediaSize", "uTex", "uLut", "uHasLut",
       "uOpacity", "uExposure", "uGamma", "uSaturation", "uChannel", "uTransform",
-      "uOutputP3", "uLinearSource", "uFlipY", "uBlend", "uPremultiplied",
+      "uOutputP3", "uLinearSource", "uPrimaries", "uFlipY", "uBlend", "uPremultiplied",
     ]) {
       this.uniforms[name] = gl.getUniformLocation(prog, name);
     }
@@ -201,6 +208,21 @@ export class GLRenderer {
    * media-space → clip-space matrix (column-major for WebGL).
    * The image is centred, scaled to fit, then zoomed and panned.
    */
+  /**
+   * The working-space matrix for this frame, memoised on the space's name —
+   * deriving it costs two 3×3 inversions, and it changes only when the item
+   * does, not 60 times a second.
+   */
+  private primariesCache: { name: string; m: Float32Array } | null = null;
+
+  private primariesMatrix(name: string | undefined): Float32Array {
+    const key = name ?? "";
+    if (this.primariesCache?.name !== key) {
+      this.primariesCache = { name: key, m: toGl(toSrgbMatrix(name)) };
+    }
+    return this.primariesCache.m;
+  }
+
   private viewMatrix(p: ViewParams): Float32Array {
     const fitScale = Math.min(
       p.canvasWidth / Math.max(1, p.mediaWidth),
@@ -435,6 +457,7 @@ export class GLRenderer {
     // the colour work and it will read this again; see shaders.ts.
     gl.uniform1i(u.uTransform!, TRANSFORM_INDEX[p.color.transform] ?? 1);
     gl.uniform1i(u.uOutputP3!, this.outputP3 ? 1 : 0);
+    gl.uniformMatrix3fv(u.uPrimaries!, false, this.primariesMatrix(p.sourcePrimaries));
     gl.uniform1i(u.uTex!, 0);
     gl.uniform1i(u.uLut!, 1);
     gl.uniform1i(u.uHasLut!, this.lutTexture ? 1 : 0);
