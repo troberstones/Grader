@@ -10,8 +10,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ZoomIn, ZoomOut, ClipboardList, Radio } from "lucide-react";
-import { LinkButton } from "@/components/ui/link-button";
+import { ZoomIn, ZoomOut, Radio } from "lucide-react";
 import { StudentNavBar } from "@/components/shared/student-nav-bar";
 import { useGrading } from "@/components/shared/grading-context";
 import { useGlobalSync } from "@/components/shared/global-sync";
@@ -473,16 +472,6 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
                     </button>
                   </div>
                 ) : undefined
-              }
-              pageLink={
-                <LinkButton
-                  href={`/assignments/${assignment.id}?studentId=${selectedStudentId ?? ""}`}
-                  variant="outline"
-                  size="sm"
-                >
-                  <ClipboardList className="h-3.5 w-3.5" />
-                  Grade Sheet
-                </LinkButton>
               }
             />
 

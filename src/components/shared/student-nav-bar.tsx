@@ -12,12 +12,6 @@ interface StudentNavBarProps {
    * Rendered between the navigation arrows and the page-link button.
    */
   actions?: React.ReactNode;
-  /**
-   * The cross-page navigation button (Review ↔ Grade Sheet).
-   * Always rendered last, after its own divider, so it sits at the same
-   * right-edge position on both pages regardless of what actions are present.
-   */
-  pageLink?: React.ReactNode;
   className?: string;
 }
 
@@ -25,13 +19,14 @@ interface StudentNavBarProps {
  * Unified student navigation bar used on both the grade-sheet and review pages.
  * Reads students and the current selection directly from GradingContext.
  *
- * Layout:  [pageLink]  │  [◀]  name · netId  ● status  [x of n]  [▶]  │  [actions]
+ * Layout:  [◀]  name · netId  ● status  [x of n]  [▶]  │  [actions]
  *
- * • pageLink (Review ↔ Grade Sheet) is always the LEFTMOST element, well away
- *   from the annotation toolbar that lives on the right of the review page.
- * • Users learn: left = switch page context, right = page-specific tools.
+ * This used to carry a `pageLink` slot for the Review ↔ Grade Sheet trip, which
+ * each page had to fill in itself. The art reviewer never did, so once it became
+ * the default viewer there was no way back to the rubric. The switch now lives
+ * in the grading shell, where every grading route gets it without opting in.
  */
-export function StudentNavBar({ actions, pageLink, className }: StudentNavBarProps) {
+export function StudentNavBar({ actions, className }: StudentNavBarProps) {
   const { students, selectedStudentId, selectStudent } = useGrading();
 
   const idx = students.findIndex((s) => s.id === selectedStudentId);
@@ -46,18 +41,6 @@ export function StudentNavBar({ actions, pageLink, className }: StudentNavBarPro
         className,
       )}
     >
-      {/*
-       * Cross-page link is FIRST (left edge), always away from the annotation
-       * toolbar that lives on the right side of the review page.
-       * Users learn: left = switch context, right = page-specific tools.
-       */}
-      {pageLink && (
-        <>
-          {pageLink}
-          <div className="w-px h-5 bg-border mx-1 shrink-0" />
-        </>
-      )}
-
       {/* ◀ Prev */}
       <button
         onClick={() => prev && selectStudent(prev.id)}

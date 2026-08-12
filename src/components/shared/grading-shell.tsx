@@ -26,6 +26,8 @@ import {
 } from "@/components/ui/sheet";
 import { GradingProvider, useGrading } from "./grading-context";
 import { StudentSidebar } from "./student-sidebar";
+import { ViewLayoutProvider } from "./view-layout";
+import { ViewSwitch } from "./view-switch";
 import { useSync } from "@/hooks/use-sync";
 import { useGlobalSync } from "./global-sync";
 import type { StudentWithGrade } from "@/actions/grades";
@@ -73,19 +75,22 @@ export function GradingShell({
       initialStudentId={initialStudentId}
     >
       <SyncBridge assignmentId={assignmentId} />
-      <div className="flex flex-col h-full">
-        {/* Hamburger row */}
-        <div className="shrink-0 px-3 py-2 flex items-center gap-2 border-b bg-sidebar">
-          <NavDrawer />
-          <SyncToggle />
-        </div>
+      <ViewLayoutProvider>
+        <div className="flex flex-col h-full">
+          {/* Hamburger row */}
+          <div className="shrink-0 px-3 py-2 flex items-center gap-2 border-b bg-sidebar">
+            <NavDrawer />
+            <SyncToggle />
+            <ViewSwitch />
+          </div>
 
-        {/* Main area: sidebar + page content */}
-        <div className="flex flex-1 min-h-0">
-          <StudentSidebar />
-          <div className="flex-1 min-w-0 overflow-hidden">{children}</div>
+          {/* Main area: sidebar + page content */}
+          <div className="flex flex-1 min-h-0">
+            <StudentSidebar />
+            <div className="flex-1 min-w-0 overflow-hidden">{children}</div>
+          </div>
         </div>
-      </div>
+      </ViewLayoutProvider>
     </GradingProvider>
   );
 }

@@ -8,7 +8,10 @@ import {
 } from "@grader/art-review";
 import { useGrading } from "@/components/shared/grading-context";
 import { StudentNavBar } from "@/components/shared/student-nav-bar";
+import { useViewLayout } from "@/components/shared/view-layout";
+import { RubricDock } from "@/components/rubric/rubric-dock";
 import { useReviewChannel } from "@/lib/review-channel";
+import type { getAssignment } from "@/actions/assignments";
 import {
   appendStrokes,
   deleteStrokes,
@@ -19,9 +22,10 @@ import {
   savePrefs,
 } from "@/actions/review";
 
+type Assignment = NonNullable<Awaited<ReturnType<typeof getAssignment>>>;
+
 interface Props {
-  assignmentId: number;
-  assignmentName: string;
+  assignment: Assignment;
   author: { id: string; name: string; color: number };
 }
 
@@ -31,7 +35,8 @@ interface Props {
  * Everything grader-specific lives here: what a "student" is, where files come
  * from, how the channel is routed. The module itself knows none of it.
  */
-export function ReviewClient({ assignmentId, assignmentName, author }: Props) {
+export function ReviewClient({ assignment, author }: Props) {
+  const assignmentId = assignment.id;
   /**
    * Take the app shell out of scroll for this route only.
    *
@@ -44,21 +49,25 @@ export function ReviewClient({ assignmentId, assignmentName, author }: Props) {
    *
    * This page sizes itself to the viewport, so it never needed to scroll.
    * Restored on unmount — every other page still wants it.
+   *
+   * Only `overflow` is touched. This used to set `touch-action: none` here as
+   * well, from the same theory; the real culprit turned out to be iPadOS
+   * Scribble, and a `none` on this shared ancestor cannot be re-enabled by a
+   * descendant — which would leave the docked rubric unscrollable by touch.
+   * The module sets `touch-action: none` on its own stage, where it belongs.
    */
   useEffect(() => {
     const main = document.querySelector("main");
     if (!main) return;
     const prevOverflow = main.style.overflow;
-    const prevTouch = main.style.touchAction;
     main.style.overflow = "hidden";
-    main.style.touchAction = "none";
     return () => {
       main.style.overflow = prevOverflow;
-      main.style.touchAction = prevTouch;
     };
   }, []);
 
   const { selectedStudentId, students } = useGrading();
+  const { canDock, rubricDocked } = useViewLayout();
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -131,21 +140,15 @@ export function ReviewClient({ assignmentId, assignmentName, author }: Props) {
 
   const student = students.find((s) => s.id === selectedStudentId);
 
-  if (!selectedStudentId) {
-    return <Centered>Select a student to begin the review.</Centered>;
-  }
-  if (loading) {
-    return <Centered>Preparing media for {student?.name ?? "student"}…</Centered>;
-  }
-  if (error) {
-    return <Centered tone="error">{error}</Centered>;
-  }
-  if (items.length === 0) {
-    return <Centered>No submissions for {student?.name ?? "this student"}.</Centered>;
-  }
-  if (!channel) return null;
-
-  return (
+  const viewer = !selectedStudentId ? (
+    <Centered>Select a student to begin the review.</Centered>
+  ) : loading ? (
+    <Centered>Preparing media for {student?.name ?? "student"}…</Centered>
+  ) : error ? (
+    <Centered tone="error">{error}</Centered>
+  ) : items.length === 0 ? (
+    <Centered>No submissions for {student?.name ?? "this student"}.</Centered>
+  ) : !channel ? null : (
     <ArtReviewer
       // Remount per student: sources, caches and stroke state are all scoped
       // to one student's playlist.
@@ -157,11 +160,27 @@ export function ReviewClient({ assignmentId, assignmentName, author }: Props) {
       pdfWorkerUrl="/pdf.worker.min.mjs"
       headerSlot={
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 12, color: "#adaaaa" }}>{assignmentName}</span>
+          <span style={{ fontSize: 12, color: "#adaaaa" }}>{assignment.name}</span>
           <StudentNavBar />
         </div>
       }
     />
+  );
+
+  /*
+   * The rubric docks beside the artwork rather than inside it. Everything to the
+   * left of the divider is the module and knows nothing about grades; everything
+   * to the right is grader's own. That separation is the point — scores must not
+   * become viewer state, because viewer state is what gets broadcast to the
+   * other machines. See docs/security.md.
+   */
+  return (
+    <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
+      <div style={{ flex: 1, minWidth: 0, height: "100%" }}>{viewer}</div>
+      {canDock && rubricDocked && selectedStudentId && (
+        <RubricDock assignment={assignment} />
+      )}
+    </div>
   );
 }
 

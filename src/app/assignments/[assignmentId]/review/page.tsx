@@ -28,11 +28,7 @@ export default async function ReviewPage({
     // than the screen and the transport bar sat below the bottom edge, where
     // nothing could scroll it back into view.
     <div style={{ height: "calc(100dvh - 3.5rem)", minHeight: 480 }}>
-      <ReviewClient
-        assignmentId={assignment.id}
-        assignmentName={assignment.name}
-        author={author}
-      />
+      <ReviewClient assignment={assignment} author={author} />
     </div>
   );
 }
