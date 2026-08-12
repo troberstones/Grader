@@ -153,14 +153,18 @@ export function ArtReviewer({
       if (!showLogRef.current) return;
       const buf = logRef.current;
       const p = toMediaNormRef.current(e.clientX, e.clientY);
+      // Fold consecutive identical moves, *including* their note. Hover moves
+      // all carry "nothing in flight", so requiring an empty note meant they
+      // never folded and a few seconds of hovering buried the one line that
+      // mattered under thirty that did not. Hovering near the page is not
+      // avoidable; drowning in it should be.
       const last = buf[buf.length - 1];
       if (
         phase === "move" &&
-        !note &&
         last &&
         last.phase === "move" &&
         last.pointerId === e.pointerId &&
-        !last.note
+        last.note === note
       ) {
         last.count += 1;
         last.t = Date.now();
@@ -181,7 +185,7 @@ export function ArtReviewer({
         note,
         count: 1,
       });
-      if (buf.length > 600) buf.splice(0, buf.length - 600);
+      if (buf.length > 2000) buf.splice(0, buf.length - 2000);
     },
     [],
   );
