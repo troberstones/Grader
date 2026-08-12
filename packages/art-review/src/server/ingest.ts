@@ -297,14 +297,27 @@ export async function makeHdrPng(
   }
 
   // Interleaved RGBA out of the decoder; the packer wants planes.
+  //
+  // Rows are also reversed on the way. The decoder hands back scanlines in GL
+  // texture order — first row at the bottom — because it exists to fill a
+  // three.js DataTexture. A PNG is the other way up, so writing them straight
+  // through produces a derivative that is upside down in every viewer,
+  // including this one. Doing it here rather than with a shader flip keeps the
+  // file on disk honest: open it in anything and it is the right way up.
   const n = width * height;
   const r = new Float32Array(n);
   const g = new Float32Array(n);
   const b = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    r[i] = exr.data[i * 4];
-    g[i] = exr.data[i * 4 + 1];
-    b[i] = exr.data[i * 4 + 2];
+  for (let y = 0; y < height; y++) {
+    const from = (height - 1 - y) * width;
+    const to = y * width;
+    for (let x = 0; x < width; x++) {
+      const s = (from + x) * 4;
+      const d = to + x;
+      r[d] = exr.data[s];
+      g[d] = exr.data[s + 1];
+      b[d] = exr.data[s + 2];
+    }
   }
 
   const rgbe = new Uint8Array(n * 4);
