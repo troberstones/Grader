@@ -354,6 +354,11 @@ export function ArtReviewer({
     (e: React.PointerEvent) => {
       const el = overlayRef.current;
       if (!el) return;
+      // Tell the browser this gesture is ours. Without it iPadOS can decide a
+      // drag belongs to the page — the stage sits inside a scrollable column —
+      // and hand it to scrolling, which arrives here as pointercancel and takes
+      // the rest of the stroke with it.
+      if (e.pointerType !== "touch" && e.cancelable) e.preventDefault();
       try {
         el.setPointerCapture(e.pointerId);
       } catch {
@@ -473,6 +478,21 @@ export function ArtReviewer({
         const h = toMediaNorm(e.clientX, e.clientY);
         hoverRef.current = { x: h.x, y: h.y, down: e.buttons !== 0 };
         viewer.invalidate();
+
+        // If capture slipped away mid-stroke, take it back. Losing it is how a
+        // letter goes missing: the remaining moves are delivered somewhere
+        // else, and the first sign is the cursor freezing where the stroke
+        // began.
+        const el = overlayRef.current;
+        const d = drawingRef.current;
+        if (el && d && d.pointerId === e.pointerId && !el.hasPointerCapture(e.pointerId)) {
+          try {
+            el.setPointerCapture(e.pointerId);
+            logInput("move", e, "recaptured — capture had slipped");
+          } catch {
+            // Nothing to be done; the log line above is the diagnosis either way.
+          }
+        }
       }
 
       // A stylus neither pans nor pinches, so it skips both branches outright.
