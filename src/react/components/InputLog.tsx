@@ -52,9 +52,11 @@ interface Props {
   entries: InputEntry[];
   onClear: () => void;
   onClose: () => void;
+  /** Absent unless the host offers somewhere to put it; the button hides. */
+  onSend?: (name: string, text: string) => Promise<string>;
 }
 
-export function InputLog({ entries, onClear, onClose }: Props) {
+export function InputLog({ entries, onClear, onClose, onSend }: Props) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [manual, setManual] = useState<string | null>(null);
@@ -78,8 +80,28 @@ export function InputLog({ entries, onClear, onClose }: Props) {
    * of what iOS counts as a user gesture. A download is neither — it is a blob
    * and an anchor, and it lands in Files where it can be opened and read.
    */
+  const dump = () => lines.map((l) => l.text).join("\n");
+  const stampName = () =>
+    `input-log-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.txt`;
+
+  /** Straight to the machine running the server, so nobody has to transcribe. */
+  const send = async () => {
+    if (!onSend) return;
+    if (entries.length === 0) {
+      setCopied("nothing to send");
+      return;
+    }
+    setCopied("sending…");
+    try {
+      const where = await onSend(stampName(), dump());
+      setCopied(where);
+    } catch (e) {
+      setCopied(e instanceof Error ? `failed: ${e.message}` : "send failed");
+    }
+  };
+
   const save = () => {
-    const text = lines.map((l) => l.text).join("\n");
+    const text = dump();
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     try {
       const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
@@ -103,7 +125,7 @@ export function InputLog({ entries, onClear, onClose }: Props) {
 
   useEffect(() => {
     if (!copied) return;
-    const timer = setTimeout(() => setCopied(null), 2000);
+    const timer = setTimeout(() => setCopied(null), 8000);
     return () => clearTimeout(timer);
   }, [copied]);
 
@@ -138,9 +160,21 @@ export function InputLog({ entries, onClear, onClose }: Props) {
       >
         <span style={{ ...label, color: C.text }}>Input</span>
         <span style={{ ...label, color: C.faint }}>{entries.length}</span>
+        {copied && (
+          <span style={{ ...label, color: C.primary, textTransform: "none" }}>{copied}</span>
+        )}
         <div style={{ flex: 1 }} />
+        {onSend && (
+          <button
+            onClick={() => void send()}
+            style={{ ...textButton(), height: 22, fontSize: 11 }}
+            title="Write this log to a file on the machine running the server"
+          >
+            Send
+          </button>
+        )}
         <button onClick={save} style={{ ...textButton(), height: 22, fontSize: 11 }}>
-          {copied ?? "Save"}
+          Save
         </button>
         {/* Always-available escape hatch: the text, selectable, in place. No
             download to find in Files, no clipboard permission to be refused. */}

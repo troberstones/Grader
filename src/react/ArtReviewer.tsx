@@ -1078,6 +1078,7 @@ export function ArtReviewer({
                 setLogEntries([]);
               }}
               onClose={() => setShowLog(false)}
+              onSend={adapter.sendDiagnostics}
             />
           )}
 

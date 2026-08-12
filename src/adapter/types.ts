@@ -52,6 +52,16 @@ export interface ReviewDataAdapter {
   /** Persist per-user viewer preferences (fps, loop, flips) for a context. */
   savePrefs?(contextId: string, prefs: Record<string, unknown>): Promise<void>;
   loadPrefs?(contextId: string): Promise<Record<string, unknown> | null>;
+
+  /**
+   * Park a diagnostic dump somewhere the developer can read it, and say where.
+   *
+   * Optional, and the input log's Send button only appears when the host
+   * provides it. This exists because the device with the bug is a tablet: the
+   * clipboard is unavailable over http, and a downloaded file has to be found
+   * in Files and transcribed by hand before anyone can look at it.
+   */
+  sendDiagnostics?(name: string, text: string): Promise<string>;
 }
 
 export interface ReviewChannel {

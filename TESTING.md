@@ -85,9 +85,14 @@ number when a stroke goes missing. `#n` is the pointer id, `b` the button mask,
 are stored in. Runs of moves fold into one line with a count, so the downs, ups
 and cancels stay legible.
 
-**Save** downloads the buffer as `input-log-<timestamp>.txt`. **Text** puts it
-in a selectable box in the panel instead, for when digging a file out of Files
-is more trouble than selecting it in place.
+**Send** is the one to reach for. It writes the buffer straight to
+`storage/diagnostics/input-log-<timestamp>.txt` on the machine running the dev
+server, and shows you the path. Nobody has to transcribe anything off a tablet.
+The route is development-only and 404s in production.
+
+**Save** downloads the buffer as a file instead. **Text** puts it in a
+selectable box in the panel, for when digging a download out of Files is more
+trouble than selecting it in place.
 
 There is no Copy button, and that is deliberate: the clipboard is a dead end
 here. `navigator.clipboard` needs a secure context and the iPad reaches this
