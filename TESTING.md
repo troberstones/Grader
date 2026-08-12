@@ -288,6 +288,15 @@ Multi-client sync, verified with two browser tabs:
   every `hello` replied with a `hello`, so two peers volleyed at network speed
   and real transport events queued behind the noise.)
 
+Apple Pencil on the iPad, verified on hardware:
+
+- Writing whole words no longer loses letters. The cause was iPadOS Scribble
+  swallowing pencil input at the system level once a run of strokes looked like
+  handwriting — not the browser, and not this code, which is why the input log
+  showed the missing letter as no events at all rather than as dropped ones.
+  A non-passive `touchmove` preventDefault on the overlay is the fix in code;
+  Settings → Apple Pencil → Scribble → Off is the fix outside it.
+
 Annotation across clients, verified with two browser windows:
 
 - Live ink: the line appears on the other screen *while* it is being drawn,
