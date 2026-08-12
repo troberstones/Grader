@@ -32,6 +32,32 @@ interface Props {
  * from, how the channel is routed. The module itself knows none of it.
  */
 export function ReviewV2Client({ assignmentId, assignmentName, author }: Props) {
+  /**
+   * Take the app shell out of scroll for this route only.
+   *
+   * `<main>` is `overflow-auto` for every other page, and a scroll container
+   * wrapped around a drawing surface gives iPadOS something to arbitrate: it
+   * withholds pencil input while deciding whether a drag belongs to the page.
+   * A diagnostic capture of a lost letter showed no contact events reaching the
+   * page at all, with even the hover rate collapsing from ~120 Hz to ~8 Hz for
+   * its duration.
+   *
+   * This page sizes itself to the viewport, so it never needed to scroll.
+   * Restored on unmount — every other page still wants it.
+   */
+  useEffect(() => {
+    const main = document.querySelector("main");
+    if (!main) return;
+    const prevOverflow = main.style.overflow;
+    const prevTouch = main.style.touchAction;
+    main.style.overflow = "hidden";
+    main.style.touchAction = "none";
+    return () => {
+      main.style.overflow = prevOverflow;
+      main.style.touchAction = prevTouch;
+    };
+  }, []);
+
   const { selectedStudentId, students } = useGrading();
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [loading, setLoading] = useState(false);
