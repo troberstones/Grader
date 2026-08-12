@@ -63,18 +63,26 @@ on a machine with a keyboard. A floating panel tails every pointer event with
 the decision the handler made:
 
 ```
-   0ms  down    #901  pen   b1  p0.31  0.221,0.200  → START pen
-   1ms  move×5  #901  pen   b1  p0.65  0.260,0.235
-   1ms  up      #901  pen   b0  p0.00  0.260,0.235  → END 6 pts
-   2ms  down    #902  touch b1  p0.00  0.221,0.358  → pan · touch never draws
-   3ms  cancel  #903  pen   b0  p0.00  0.225,0.463  → system took gesture
+  +0ms  cancel  #903  pen   b0  p0.00  0.225,0.463  → system took gesture
+  +3ms  down    #903  pen   b1  p0.55  0.201,0.463  → START pen
+  +2ms  down    #902  touch b1  p0.00  0.221,0.358  → pan · touch never draws
+  +1ms  up      #901  pen   b0  p0.00  0.260,0.235  → END 6 pts
+  +1ms  move×5  #901  pen   b1  p0.65  0.260,0.235
+  +0ms  down    #901  pen   b1  p0.31  0.221,0.200  → START pen
 ```
 
-Time is relative to the first line; `#n` is the pointer id, `b` is the button
-mask, `p` is pressure, and the coordinates are media-normalised — the same space
-strokes are stored in. Runs of moves fold into one line with a count, so the
-downs, ups and cancels stay legible. **Copy** puts the whole buffer on the
-clipboard.
+**Newest is at the top**, so the line you want is always in the same place and
+there is nothing to scroll. `+Nms` is the pause *before* that event — the useful
+number when a stroke goes missing. `#n` is the pointer id, `b` the button mask,
+`p` pressure, and the coordinates are media-normalised, the same space strokes
+are stored in. Runs of moves fold into one line with a count, so the downs, ups
+and cancels stay legible.
+
+**Copy** puts the buffer on the clipboard. Over plain http on a LAN address —
+which is how the iPad reaches this — `navigator.clipboard` does not exist,
+because it needs a secure context; the button falls back to the old
+`execCommand` path, and if that fails too it drops the whole log into a
+selectable box so you can always get it out by hand.
 
 Read it for a stroke that never appeared. `START` with no matching `END` means
 the release never arrived. `cancel` means iPadOS took the gesture away.

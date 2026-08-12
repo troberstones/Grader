@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { C, label, textButton } from "../styles";
+import { useEffect, useRef, useState } from "react";
+import { C, label, selectableText, textButton } from "../styles";
 
 /**
  * A live tail of pointer input, for working out where a stroke went.
@@ -34,8 +34,10 @@ const PHASE_COLOR: Record<InputEntry["phase"], string> = {
   lost: "#ffa657",
 };
 
-export function formatEntry(e: InputEntry, t0: number): string {
-  const t = `${e.t - t0}ms`.padStart(8, " ");
+/** `gap` is the pause before this event — the useful number when a stroke is
+ *  missing, since it reads the same whichever end of the list you start from. */
+export function formatEntry(e: InputEntry, gap: number): string {
+  const t = `+${gap}ms`.padStart(8, " ");
   const phase = (e.phase + (e.count > 1 ? `×${e.count}` : "")).padEnd(9, " ");
   const id = `#${e.pointerId}`.padEnd(6, " ");
   const type = e.type.padEnd(6, " ");
@@ -54,20 +56,70 @@ interface Props {
 
 export function InputLog({ entries, onClear, onClose }: Props) {
   const bodyRef = useRef<HTMLDivElement>(null);
-  const t0 = entries.length ? entries[0].t : 0;
+  const [copied, setCopied] = useState<string | null>(null);
+  const [manual, setManual] = useState<string | null>(null);
 
-  // Stick to the bottom unless the reader has scrolled up to look at something.
+  // Newest first: the line you want is the one that just happened, and this way
+  // it is always in the same place with nothing to scroll.
+  const lines = entries
+    .map((e, i) => ({ e, text: formatEntry(e, i === 0 ? 0 : e.t - entries[i - 1].t) }))
+    .reverse();
+
   useEffect(() => {
-    const el = bodyRef.current;
-    if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    if (atBottom) el.scrollTop = el.scrollHeight;
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
   }, [entries]);
 
-  const copy = () => {
-    const text = entries.map((e) => formatEntry(e, t0)).join("\n");
-    void navigator.clipboard?.writeText(text);
+  /**
+   * `navigator.clipboard` exists only in a secure context, and the review runs
+   * over plain http on a LAN address — so on the iPad, the device this log is
+   * for, it is simply undefined. Fall back to the old execCommand path, which
+   * still works inside a user gesture, and say so either way rather than
+   * failing in silence.
+   */
+  const copy = async () => {
+    const text = lines.map((l) => l.text).join("\n");
+    try {
+      if (window.isSecureContext && navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+        setCopied(`copied ${entries.length}`);
+        return;
+      }
+      throw new Error("no clipboard api");
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;";
+      document.body.appendChild(ta);
+      // iOS ignores .select() on a readonly textarea; it wants an explicit
+      // range on the selection *and* setSelectionRange.
+      const range = document.createRange();
+      range.selectNodeContents(ta);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      ta.setSelectionRange(0, text.length);
+      let ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch {
+        ok = false;
+      }
+      sel?.removeAllRanges();
+      document.body.removeChild(ta);
+      // Last resort: hand the text over in something the user can select by
+      // hand. Failing silently is how the button looked broken in the first
+      // place.
+      if (!ok) setManual(text);
+      setCopied(ok ? `copied ${entries.length}` : "select + copy ↓");
+    }
   };
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(null), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
 
   return (
     <div
@@ -101,16 +153,44 @@ export function InputLog({ entries, onClear, onClose }: Props) {
         <span style={{ ...label, color: C.text }}>Input</span>
         <span style={{ ...label, color: C.faint }}>{entries.length}</span>
         <div style={{ flex: 1 }} />
-        <button onClick={copy} style={{ ...textButton(), height: 22, fontSize: 11 }}>
-          Copy
+        <button onClick={() => void copy()} style={{ ...textButton(), height: 22, fontSize: 11 }}>
+          {copied ?? "Copy"}
         </button>
-        <button onClick={onClear} style={{ ...textButton(), height: 22, fontSize: 11 }}>
+        <button
+          onClick={() => {
+            setManual(null);
+            setCopied(null);
+            onClear();
+          }}
+          style={{ ...textButton(), height: 22, fontSize: 11 }}
+        >
           Clear
         </button>
         <button onClick={onClose} style={{ ...textButton(), height: 22, fontSize: 11 }}>
           ✕
         </button>
       </div>
+
+      {manual !== null && (
+        <textarea
+          readOnly
+          value={manual}
+          onFocus={(e) => e.currentTarget.select()}
+          style={{
+            ...selectableText,
+            pointerEvents: "auto",
+            margin: 8,
+            height: 90,
+            background: C.lowest,
+            color: C.text,
+            border: `1px solid ${C.high}`,
+            borderRadius: 6,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: 10,
+            padding: 6,
+          }}
+        />
+      )}
 
       <div
         ref={bodyRef}
@@ -126,9 +206,9 @@ export function InputLog({ entries, onClear, onClose }: Props) {
         {entries.length === 0 && (
           <div style={{ color: C.faint }}>Draw on the stage — every pointer event lands here.</div>
         )}
-        {entries.map((e, i) => (
-          <div key={i} style={{ color: PHASE_COLOR[e.phase] }}>
-            {formatEntry(e, t0)}
+        {lines.map((l, i) => (
+          <div key={i} style={{ color: PHASE_COLOR[l.e.phase] }}>
+            {l.text}
           </div>
         ))}
       </div>
