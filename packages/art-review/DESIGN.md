@@ -624,6 +624,14 @@ fallback rather than the primary path.
 
 ## 11. Dependencies
 
+Vendored: the OpenEXR decoder in `src/server/vendor/exr-loader.ts`, adapted from three.js
+(MIT, attribution in the file header, along with the ILM and TinyEXR notices it already
+carried). ffmpeg cannot do this job — it decodes a half-float EXR as `gbrpf16le`, cannot
+write any 16-bit float pixel format, and every conversion to a writable one goes through
+swscale, which clamps float to [0,1]. On a real DWAA render that took the maximum from 6.32
+to 1.00 without an error. Half is the ordinary choice for a render, so this was not an edge
+case.
+
 Add: `pdfjs-dist` (pdf pages), `ag-psd` (psd/psb parse + layer rasters, server-side — §5.6),
 `sharp` (promote from transitive to explicit; ICC + layer raster encoding),
 `mp4box` or `mediabunny` (WebCodecs demux — now phase 1).

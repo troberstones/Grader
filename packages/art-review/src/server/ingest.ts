@@ -3,6 +3,7 @@ import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { floatsToRgbe, RGBE_TRANSFER } from "../core/rgbe";
+import type { DecodedExr } from "./exr";
 
 const run = promisify(execFile);
 
@@ -282,37 +283,29 @@ export async function makeHdrPng(
   opts: IngestOptions,
 ): Promise<Derivative> {
   const sharp = (await import("sharp")).default;
+  const { readFile } = await import("node:fs/promises");
+  const { decodeExr } = await import("./exr");
   await mkdir(opts.outDir, { recursive: true });
   const out = path.join(opts.outDir, `${opts.baseName}.rgbe.png`);
 
-  const info = await probe(input, opts.ffprobePath);
-  const { width, height, pixFmt } = info;
-  if (!/^gbra?pf32le$/.test(pixFmt)) {
-    throw new Error(`EXR decoded as unexpected pixel format ${pixFmt}`);
-  }
+  const file = await readFile(input);
+  const exr = decodeExr(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength));
+  const { width, height } = exr;
 
   if (!opts.force && (await exists(out))) {
-    return { variant: "composite", idx: 0, path: out, mime: "image/png", width, height, colorTransfer: RGBE_TRANSFER };
+    return hdrDerivative(out, width, height, exr.chromaticities);
   }
 
-  const { stdout } = await run(
-    opts.ffmpegPath ?? "ffmpeg",
-    ["-v", "error", "-i", input, "-f", "rawvideo", "-pix_fmt", pixFmt, "-"],
-    { maxBuffer: 2048 * 1024 * 1024, encoding: "buffer" },
-  );
-
+  // Interleaved RGBA out of the decoder; the packer wants planes.
   const n = width * height;
-  const planes = pixFmt === "gbrapf32le" ? 4 : 3;
-  const expected = n * planes * 4;
-  if (stdout.length !== expected) {
-    throw new Error(`EXR decode gave ${stdout.length} bytes, expected ${expected}`);
+  const r = new Float32Array(n);
+  const g = new Float32Array(n);
+  const b = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    r[i] = exr.data[i * 4];
+    g[i] = exr.data[i * 4 + 1];
+    b[i] = exr.data[i * 4 + 2];
   }
-
-  // Planar, and the order is G, B, R — not R, G, B.
-  const f = new Float32Array(stdout.buffer, stdout.byteOffset, stdout.length / 4);
-  const g = f.subarray(0, n);
-  const b = f.subarray(n, 2 * n);
-  const r = f.subarray(2 * n, 3 * n);
 
   const rgbe = new Uint8Array(n * 4);
   floatsToRgbe(r, g, b, rgbe);
@@ -326,7 +319,45 @@ export async function makeHdrPng(
     .png({ compressionLevel: 6 })
     .toFile(out);
 
-  return { variant: "composite", idx: 0, path: out, mime: "image/png", width, height, colorTransfer: RGBE_TRANSFER };
+  return hdrDerivative(out, width, height, exr.chromaticities);
+}
+
+/**
+ * Name the working space from the chromaticities the file declares, so the
+ * renderer is told rather than left to assume sRGB. A render in ACES primaries
+ * shown as sRGB is not subtly off — the gamut is a different shape.
+ */
+function primariesOf(c: DecodedExr["chromaticities"]): string | undefined {
+  if (!c) return undefined;
+  const near = (a: number, b: number) => Math.abs(a - b) < 0.001;
+  const match = (rx: number, ry: number, gx: number, gy: number, bx: number, by: number) =>
+    near(c.redX, rx) && near(c.redY, ry) &&
+    near(c.greenX, gx) && near(c.greenY, gy) &&
+    near(c.blueX, bx) && near(c.blueY, by);
+
+  if (match(0.7347, 0.2653, 0.0, 1.0, 0.0001, -0.077)) return "aces2065-1";
+  if (match(0.713, 0.293, 0.165, 0.83, 0.128, 0.044)) return "acescg";
+  if (match(0.64, 0.33, 0.3, 0.6, 0.15, 0.06)) return "bt709";
+  if (match(0.68, 0.32, 0.265, 0.69, 0.15, 0.06)) return "display-p3";
+  return "unknown";
+}
+
+function hdrDerivative(
+  out: string,
+  width: number,
+  height: number,
+  chromaticities: DecodedExr["chromaticities"],
+): Derivative {
+  return {
+    variant: "composite",
+    idx: 0,
+    path: out,
+    mime: "image/png",
+    width,
+    height,
+    colorTransfer: RGBE_TRANSFER,
+    colorPrimaries: primariesOf(chromaticities),
+  };
 }
 
 /** Everything needed to register one submission's media derivatives. */
