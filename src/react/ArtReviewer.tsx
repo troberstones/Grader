@@ -224,6 +224,30 @@ export function ArtReviewer({
     };
   }, [showLog, logInput]);
 
+  /** Log something that is not itself a pointer event, at the last known spot. */
+  const logNote = useCallback(
+    (phase: InputEntry["phase"], note: string) => {
+      const h = hoverRef.current;
+      logInput(phase, {
+        clientX: 0,
+        clientY: 0,
+        pointerId: -1,
+        pointerType: "pen",
+        pressure: 0,
+        buttons: 0,
+      }, note);
+      if (h) {
+        const buf = logRef.current;
+        const last = buf[buf.length - 1];
+        if (last) {
+          last.x = h.x;
+          last.y = h.y;
+        }
+      }
+    },
+    [logInput],
+  );
+
   // Repaint the panel on a timer rather than per event.
   useEffect(() => {
     if (!showLog) return;
@@ -655,7 +679,10 @@ export function ArtReviewer({
   const finishStroke = useCallback(async () => {
     const d = drawingRef.current;
     drawingRef.current = null;
-    if (!d || d.points.length < 2) return;
+    if (!d || d.points.length < 2) {
+      logNote("up", `no commit · ${d ? d.points.length / 2 : 0} pts, needs 2`);
+      return;
+    }
 
     annotations.endInk(d.id);
 
@@ -664,6 +691,7 @@ export function ArtReviewer({
       const dx = Math.abs(d.points[2] - d.points[0]);
       const dy = Math.abs(d.points[3] - d.points[1]);
       if (dx < 0.004 && dy < 0.004) {
+        logNote("up", "no commit · shape tap, too small");
         viewer.invalidate();
         return;
       }
@@ -673,7 +701,7 @@ export function ArtReviewer({
       d.tool === "pen" || d.tool === "highlight" ? simplify(d.points, 0.0012) : d.points;
     const [frameIn, frameOut] = holdRange(state.frame);
 
-    await annotations.commit({
+    const res = await annotations.commit({
       tool: d.tool,
       color: inkColor,
       width: tools.width,
@@ -683,8 +711,14 @@ export function ArtReviewer({
       pressure: d.pressure.length === d.points.length / 2 ? d.pressure : undefined,
       layers: state.composite ? undefined : Object.keys(state.layers).filter((k) => state.layers[k]),
     } as Omit<Stroke, "localId" | "authorId">);
+    logNote(
+      "up",
+      res.ok
+        ? `SAVED id=${res.id ?? "?"} · ${res.points} pts on frame ${res.frame}`
+        : `NOT SAVED · ${res.why}`,
+    );
     viewer.invalidate();
-  }, [annotations, holdRange, state, inkColor, tools.width, viewer]);
+  }, [annotations, holdRange, state, inkColor, tools.width, viewer, logNote]);
 
   finishStrokeRef.current = () => void finishStroke();
 
@@ -1148,7 +1182,7 @@ export function ArtReviewer({
                 const [frameIn, frameOut] = holdRange(state.frame);
                 setTextPrompt(null);
                 if (!value.trim()) return;
-                await annotations.commit({
+                const res = await annotations.commit({
                   tool: "text",
                   color: inkColor,
                   width: tools.width,

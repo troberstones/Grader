@@ -24,6 +24,10 @@ export interface LiveInk {
   updatedAt: number;
 }
 
+export type CommitResult =
+  | { ok: true; id?: number; seq?: number; points: number; frame: number }
+  | { ok: false; why: string };
+
 export interface AnnotationApi {
   strokes: Stroke[];
   markers: FrameMarker[];
@@ -37,7 +41,8 @@ export interface AnnotationApi {
   visibleOn: (frame: number) => Stroke[];
   /** Distinct frames carrying annotations, for prev/next navigation. */
   annotatedFrames: number[];
-  commit: (stroke: Omit<Stroke, "localId" | "authorId">) => Promise<void>;
+  /** Resolves with how it went, so a caller can say so in a diagnostic log. */
+  commit: (stroke: Omit<Stroke, "localId" | "authorId">) => Promise<CommitResult>;
   eraseAt: (frame: number, x: number, y: number, radius: number) => Promise<boolean>;
   clearFrame: (frame: number) => Promise<void>;
   undo: () => Promise<void>;
@@ -193,8 +198,8 @@ export function useAnnotations(
 
   // ── Commit ──────────────────────────────────────────────────────────────────
   const commit = useCallback(
-    async (input: Omit<Stroke, "localId" | "authorId">) => {
-      if (!itemId) return;
+    async (input: Omit<Stroke, "localId" | "authorId">): Promise<CommitResult> => {
+      if (!itemId) return { ok: false, why: "no item open" };
       const localId = `${author.id}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
       const stroke: Stroke = {
         ...input,
@@ -228,7 +233,15 @@ export function useAnnotations(
         const [saved] = await adapter.appendStrokes(itemId, [
           { localId, frameIn: stroke.frameIn, frameOut: stroke.frameOut, authorId: author.id, b },
         ]);
+        let out: CommitResult = { ok: false, why: "server returned nothing" };
         if (saved) {
+          out = {
+            ok: true,
+            id: saved.id,
+            seq: saved.seq,
+            points: stroke.points.length / 2,
+            frame: stroke.frameIn,
+          };
           setStrokes((prev) =>
             prev.map((s) => (s.localId === localId ? { ...s, id: saved.id, seq: saved.seq } : s)),
           );
@@ -242,8 +255,11 @@ export function useAnnotations(
           }
           headSeq.current = Math.max(headSeq.current, saved.seq);
         }
+        return out;
       } catch (e) {
-        setError(e instanceof Error ? e.message : "failed to save stroke");
+        const why = e instanceof Error ? e.message : "failed to save stroke";
+        setError(why);
+        return { ok: false, why };
       } finally {
         setSaving(false);
       }
