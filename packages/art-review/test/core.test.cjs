@@ -6,7 +6,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 
-const OUT = process.env.CORE_OUT || path.join(__dirname, ".build");
+const OUT = process.env.CORE_OUT || path.join(__dirname, ".build", "core");
 const { fold, step, prevMarker, nextMarker } = require(path.join(OUT, "fold.js"));
 const {
   encodeStroke,
