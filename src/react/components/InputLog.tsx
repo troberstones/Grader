@@ -70,48 +70,34 @@ export function InputLog({ entries, onClear, onClose }: Props) {
   }, [entries]);
 
   /**
-   * `navigator.clipboard` exists only in a secure context, and the review runs
-   * over plain http on a LAN address — so on the iPad, the device this log is
-   * for, it is simply undefined. Fall back to the old execCommand path, which
-   * still works inside a user gesture, and say so either way rather than
-   * failing in silence.
+   * Save, not copy.
+   *
+   * The clipboard was a dead end on the device this log exists for:
+   * `navigator.clipboard` needs a secure context and the review is reached over
+   * plain http on a LAN address, and the `execCommand` fallback is at the mercy
+   * of what iOS counts as a user gesture. A download is neither — it is a blob
+   * and an anchor, and it lands in Files where it can be opened and read.
    */
-  const copy = async () => {
+  const save = () => {
     const text = lines.map((l) => l.text).join("\n");
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     try {
-      if (window.isSecureContext && navigator.clipboard) {
-        await navigator.clipboard.writeText(text);
-        setCopied(`copied ${entries.length}`);
-        return;
-      }
-      throw new Error("no clipboard api");
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `input-log-${stamp}.txt`;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Safari needs the URL to outlive the click.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      setCopied(`saved ${entries.length}`);
     } catch {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.setAttribute("readonly", "");
-      ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;";
-      document.body.appendChild(ta);
-      // iOS ignores .select() on a readonly textarea; it wants an explicit
-      // range on the selection *and* setSelectionRange.
-      const range = document.createRange();
-      range.selectNodeContents(ta);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-      ta.setSelectionRange(0, text.length);
-      let ok = false;
-      try {
-        ok = document.execCommand("copy");
-      } catch {
-        ok = false;
-      }
-      sel?.removeAllRanges();
-      document.body.removeChild(ta);
-      // Last resort: hand the text over in something the user can select by
-      // hand. Failing silently is how the button looked broken in the first
-      // place.
-      if (!ok) setManual(text);
-      setCopied(ok ? `copied ${entries.length}` : "select + copy ↓");
+      // Anything at all goes wrong: hand over the text to select by hand.
+      setManual(text);
+      setCopied("select it ↓");
     }
   };
 
@@ -153,8 +139,16 @@ export function InputLog({ entries, onClear, onClose }: Props) {
         <span style={{ ...label, color: C.text }}>Input</span>
         <span style={{ ...label, color: C.faint }}>{entries.length}</span>
         <div style={{ flex: 1 }} />
-        <button onClick={() => void copy()} style={{ ...textButton(), height: 22, fontSize: 11 }}>
-          {copied ?? "Copy"}
+        <button onClick={save} style={{ ...textButton(), height: 22, fontSize: 11 }}>
+          {copied ?? "Save"}
+        </button>
+        {/* Always-available escape hatch: the text, selectable, in place. No
+            download to find in Files, no clipboard permission to be refused. */}
+        <button
+          onClick={() => setManual((m) => (m === null ? lines.map((l) => l.text).join("\n") : null))}
+          style={{ ...textButton(manual !== null), height: 22, fontSize: 11 }}
+        >
+          Text
         </button>
         <button
           onClick={() => {

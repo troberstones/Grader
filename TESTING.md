@@ -85,11 +85,14 @@ number when a stroke goes missing. `#n` is the pointer id, `b` the button mask,
 are stored in. Runs of moves fold into one line with a count, so the downs, ups
 and cancels stay legible.
 
-**Copy** puts the buffer on the clipboard. Over plain http on a LAN address —
-which is how the iPad reaches this — `navigator.clipboard` does not exist,
-because it needs a secure context; the button falls back to the old
-`execCommand` path, and if that fails too it drops the whole log into a
-selectable box so you can always get it out by hand.
+**Save** downloads the buffer as `input-log-<timestamp>.txt`. **Text** puts it
+in a selectable box in the panel instead, for when digging a file out of Files
+is more trouble than selecting it in place.
+
+There is no Copy button, and that is deliberate: the clipboard is a dead end
+here. `navigator.clipboard` needs a secure context and the iPad reaches this
+over plain http on a LAN address, so it does not exist; and `execCommand` is at
+the mercy of what iOS counts as a user gesture. A blob and an anchor are neither.
 
 Read it for a stroke that never appeared. `START` with no matching `END` means
 the release never arrived. `cancel` means iPadOS took the gesture away.
