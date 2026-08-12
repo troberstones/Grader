@@ -50,6 +50,13 @@ it flashes past in 42 ms during playback — `[` and `]` jump between annotated
 frames, and "Stop on notes" pauses playback when one is hit. Those are how you
 read notes back, not the playhead.
 
+**Brush cursor** — hover the Pencil over the stage without touching: a ring
+shows where the tip will land, at the actual width of the current brush. It
+fills with the ink colour the moment the tip touches down. Hover needs hardware
+that reports it (M2 iPad Pro and later); on anything else the ring simply
+appears when you touch. It follows zoom, so it grows as you zoom in — it is the
+real brush size, not a fixed dot.
+
 **Stylus and fingers** — they do not share jobs. The Pencil draws and only
 draws: it never pans, never pinches, and does nothing at all with the select
 tool. Fingers navigate and only navigate: one drags, two pinch-zoom, and no

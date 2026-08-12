@@ -386,3 +386,47 @@ export function drawGuides(
   ctx.stroke();
   ctx.restore();
 }
+
+/**
+ * The brush cursor: where the stylus is, and whether it is touching.
+ *
+ * Sized with the same formula as a real stroke, so the ring is the actual
+ * width you are about to lay down — but clamped to a few screen pixels, since
+ * a 2 px brush zoomed out is otherwise an invisible dot. The outer ring is
+ * drawn dark and the inner one in the ink colour, so it reads on a white
+ * canvas and on a black one without knowing which it is over.
+ */
+export function drawBrushCursor(
+  ctx: CanvasRenderingContext2D,
+  cursor: { x: number; y: number; down: boolean },
+  width: number,
+  color: number,
+  p: ViewParams,
+): void {
+  const m = mediaTransform(p);
+  const scale = Math.hypot(m.a ?? 1, m.b ?? 0) || 1;
+  const brush = Math.max(0.5, (width * p.mediaWidth) / REFERENCE_WIDTH) / 2;
+  const r = Math.max(brush, 3.5 / scale);
+  const x = cursor.x * p.mediaWidth;
+  const y = cursor.y * p.mediaHeight;
+
+  ctx.save();
+  ctx.setTransform(m.a!, m.b!, m.c!, m.d!, m.e!, m.f!);
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+
+  if (cursor.down) {
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = rgbaToCss(color);
+    ctx.fill();
+  }
+
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = 2.5 / scale;
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
+  ctx.stroke();
+  ctx.lineWidth = 1.2 / scale;
+  ctx.strokeStyle = cursor.down ? "rgba(255,255,255,0.9)" : rgbaToCss(color);
+  ctx.stroke();
+  ctx.restore();
+}

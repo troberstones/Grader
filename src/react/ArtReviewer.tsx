@@ -7,6 +7,7 @@ import type { Author, LoopMode, Stroke, StrokeTool, ViewerState } from "../core/
 import { GLRenderer, type ViewParams } from "../render/gl";
 import {
   clearOverlay,
+  drawBrushCursor,
   drawGuides,
   drawLaser,
   drawLiveInk,
@@ -109,6 +110,12 @@ export function ArtReviewer({
   const pointersRef = useRef(new Map<number, { x: number; y: number }>());
   const pinchRef = useRef<{ dist: number; zoom: number; cx: number; cy: number; panX: number; panY: number } | null>(null);
   const spaceRef = useRef(false);
+  /**
+   * Where the stylus is, in media space, and whether it is touching. Apple
+   * Pencil reports hover on the hardware that supports it; on everything else
+   * this simply never populates until the tip lands.
+   */
+  const hoverRef = useRef<{ x: number; y: number; down: boolean } | null>(null);
   /** finishStroke is defined below onPointerDown; a ref sidesteps the ordering. */
   const finishStrokeRef = useRef<(() => void) | null>(null);
   const onPointerUpRef = useRef<((e: React.PointerEvent) => void) | null>(null);
@@ -227,6 +234,11 @@ export function ArtReviewer({
         );
       }
 
+      const hover = hoverRef.current;
+      if (hover && tools.tool !== "select") {
+        drawBrushCursor(ctx, hover, tools.width, inkColor, params);
+      }
+
       const now = Date.now();
       lasersRef.current = lasersRef.current.filter((l) => now - l.at < LASER_LIFETIME_MS);
       if (lasersRef.current.length) {
@@ -237,7 +249,7 @@ export function ArtReviewer({
         );
       }
     },
-    [annotations, tools.width, inkColor],
+    [annotations, tools.width, tools.tool, inkColor],
   );
 
   const viewer = useViewer({
@@ -441,6 +453,7 @@ export function ArtReviewer({
         sent: 0,
         tool: tools.tool as StrokeTool,
       };
+      hoverRef.current = { x: p.x, y: p.y, down: true };
       logInput("down", e, `START ${tools.tool}`);
       viewer.invalidate();
     },
@@ -451,6 +464,15 @@ export function ArtReviewer({
     (e: React.PointerEvent) => {
       if (pointersRef.current.has(e.pointerId)) {
         pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+
+      // The stylus cursor: updated before every early return below, because a
+      // hovering pen takes the "nothing in flight" path and would otherwise
+      // never move.
+      if (e.pointerType === "pen") {
+        const h = toMediaNorm(e.clientX, e.clientY);
+        hoverRef.current = { x: h.x, y: h.y, down: e.buttons !== 0 };
+        viewer.invalidate();
       }
 
       // A stylus neither pans nor pinches, so it skips both branches outright.
@@ -625,6 +647,7 @@ export function ArtReviewer({
       }
       logInput("up", e, d ? `END ${d.points.length / 2} pts` : "no stroke in flight");
 
+      if (hoverRef.current) hoverRef.current = { ...hoverRef.current, down: false };
       panStateRef.current = null;
       void finishStroke();
     },
@@ -646,6 +669,16 @@ export function ArtReviewer({
   );
 
   onPointerUpRef.current = onPointerUp;
+
+  /** The cursor belongs to the stage; it does not linger once the pen leaves. */
+  const onPointerLeave = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.pointerType !== "pen") return;
+      hoverRef.current = null;
+      viewer.invalidate();
+    },
+    [viewer],
+  );
 
   // Wheel: pinch-zoom around the cursor, two-finger scroll pans.
   useEffect(() => {
@@ -974,6 +1007,8 @@ export function ArtReviewer({
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerCancel}
             onLostPointerCapture={onLostCapture}
+            onPointerLeave={onPointerLeave}
+            onPointerOut={onPointerLeave}
             onContextMenu={(e) => e.preventDefault()}
             style={{
               position: "absolute",
