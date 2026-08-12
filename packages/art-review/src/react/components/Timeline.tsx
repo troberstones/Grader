@@ -88,6 +88,21 @@ export function Timeline({
   /** Nuke puts its cache line along the bottom of the timeline; so does this. */
   const BAND = 5;
 
+  /**
+   * Is the playhead standing on a frame that is actually resident?
+   *
+   * Read from the same ranges the band draws from, deliberately rather than
+   * from the renderer's own hit/miss. Those update on a 400 ms tick, so a face
+   * driven by the live result would disagree with the bar directly beneath it
+   * for a third of a second at a time — and a marker that contradicts the thing
+   * next to it reads as broken rather than as information.
+   *
+   * Only for sources that keep a frame cache at all: a streamed <video> has no
+   * ranges to be outside of, and a single still is never a miss.
+   */
+  const tracked = !single && !!stats && (stats.mode === "full" || stats.mode === "window");
+  const miss = tracked && !stats!.ranges.some(([a, b]) => frame >= a && frame <= b);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
       <div
@@ -206,17 +221,38 @@ export function Timeline({
             boxShadow: "0 0 6px rgba(0,0,0,0.8)",
           }}
         />
-        <div
-          style={{
-            position: "absolute",
-            left: `calc(${pct(frame)}% - 5px)`,
-            bottom: 2,
-            width: 10,
-            height: 10,
-            borderRadius: 2,
-            background: C.text,
-          }}
-        />
+        {/* The handle doubles as the cache-miss tell: on a frame that is not
+            resident it pulls a face, because that is the frame the playback is
+            about to stutter on. */}
+        {miss ? (
+          <div
+            title={`Frame ${frame} is not in the cache — it has to be decoded before it can be shown`}
+            style={{
+              position: "absolute",
+              left: `calc(${pct(frame)}% - 7px)`,
+              bottom: 0,
+              width: 14,
+              height: 14,
+              fontSize: 12,
+              lineHeight: "14px",
+              textAlign: "center",
+            }}
+          >
+            🙁
+          </div>
+        ) : (
+          <div
+            style={{
+              position: "absolute",
+              left: `calc(${pct(frame)}% - 5px)`,
+              bottom: 2,
+              width: 10,
+              height: 10,
+              borderRadius: 2,
+              background: C.text,
+            }}
+          />
+        )}
       </div>
 
       <div

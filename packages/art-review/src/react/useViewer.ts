@@ -503,6 +503,17 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
         }
       }
 
+      // Before the early return below, not after it. Cache state carries on
+      // changing while the picture does not — frames arrive behind a settled
+      // image, and the ceiling can move under it — so tying the readout to
+      // whether a draw happened froze it at whatever was true when the last
+      // frame was painted. Which was usually "nothing cached yet, decoding".
+      const now = performance.now();
+      if (now - lastStatsAt > 400) {
+        lastStatsAt = now;
+        setStats(src.stats());
+      }
+
       if (!dirtyRef.current) {
         // Video elements and in-flight decodes keep the frame moving even when
         // nothing in React changed.
@@ -551,12 +562,6 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
       }
 
       drawOverlayRef.current(params, frame);
-
-      const now = performance.now();
-      if (now - lastStatsAt > 400) {
-        lastStatsAt = now;
-        setStats(src.stats());
-      }
     };
 
     rafRef.current = requestAnimationFrame(loop);

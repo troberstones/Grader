@@ -25,6 +25,10 @@ export abstract class BitmapCacheSource implements FrameSource {
   protected version = 0;
   /** Bytes this source currently holds against the shared ledger. */
   protected reserved = 0;
+  /** Where the playhead was last seen, so trimming keeps the useful frames. */
+  protected lastFrame = 0;
+  private offLedger: (() => void) | null = null;
+  private trimming = false;
   protected readyPromise: Promise<void> | null = null;
 
   /** Frames to keep resident. Overridden per source kind. */
@@ -35,7 +39,36 @@ export abstract class BitmapCacheSource implements FrameSource {
     readonly width: number,
     readonly height: number,
     readonly frameCount: number,
-  ) {}
+  ) {
+    // Lowering the ceiling has to actually hand memory back. Without this the
+    // limit changed and nothing else did: frames already resident stayed
+    // resident, and a paused viewer would sit over its new budget indefinitely
+    // because the only thing that ever evicted was a *new* frame arriving.
+    this.offLedger = sharedLedger().onChange(() => this.trim());
+  }
+
+  /**
+   * Drop frames until the source is back inside the shared ceiling.
+   *
+   * Re-entrant by nature — each release emits the very change that triggered
+   * this — so the guard is not optional. Three frames stay whatever happens,
+   * for the same reason eviction keeps three: a cache trimmed to the playhead
+   * makes every step a fresh decode.
+   */
+  protected trim(): void {
+    if (this.trimming || this.disposed) return;
+    this.trimming = true;
+    let dropped = 0;
+    try {
+      while (sharedLedger().pressure > 1 && this.cache.size > 3) {
+        if (!this.dropFurthest(this.lastFrame)) break;
+        dropped++;
+      }
+    } finally {
+      this.trimming = false;
+    }
+    if (dropped > 0) this.emit();
+  }
 
   protected abstract load(frame: number): Promise<ImageBitmap>;
 
@@ -72,6 +105,7 @@ export abstract class BitmapCacheSource implements FrameSource {
 
   peek(frame: number): FrameRef | null {
     const clamped = Math.min(this.frameCount - 1, Math.max(0, Math.round(frame)));
+    this.lastFrame = clamped;
     const hit = this.cache.get(clamped);
     if (hit) {
       this.touch(clamped);
@@ -253,6 +287,8 @@ export abstract class BitmapCacheSource implements FrameSource {
 
   dispose(): void {
     this.disposed = true;
+    this.offLedger?.();
+    this.offLedger = null;
     // Give the ledger back everything at once — releasing per frame as the map
     // drains would leave a source that died mid-decode holding the difference,
     // and nothing else can ever hand it back.
