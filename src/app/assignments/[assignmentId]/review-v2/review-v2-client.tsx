@@ -87,6 +87,18 @@ export function ReviewV2Client({ assignmentId, assignmentName, author }: Props) 
       },
       savePrefs,
       loadPrefs,
+      // Dev-loop affordance: the input log's Send button lands its dump next to
+      // the source rather than in Files on a tablet. The route is 404 in prod.
+      sendDiagnostics: async (name, text) => {
+        const res = await fetch("/api/review/diagnostics", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, text }),
+        });
+        if (!res.ok) throw new Error(`server said ${res.status}`);
+        const { path } = (await res.json()) as { path: string };
+        return path;
+      },
     }),
     [],
   );
