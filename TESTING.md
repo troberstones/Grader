@@ -57,6 +57,17 @@ that reports it (M2 iPad Pro and later); on anything else the ring simply
 appears when you touch. It follows zoom, so it grows as you zoom in — it is the
 real brush size, not a fixed dot.
 
+**If strokes go missing while you write words** — that is iPadOS Scribble, not
+this code. Scribble watches Apple Pencil input at the system level and swallows
+the events once a run of strokes starts to look like handwriting, over a canvas
+as readily as over a text field. The events never reach the browser at all,
+which is why the input log shows the missing letter as nothing whatsoever: no
+down, no moves, no cancel.
+
+The overlay carries a non-passive `touchmove` listener calling preventDefault,
+which is the documented workaround (WebKit bug 217430). If it still happens,
+**Settings → Apple Pencil → Scribble → Off** is the certain fix.
+
 **Stylus and fingers** — they do not share jobs. The Pencil draws and only
 draws: it never pans, never pinches, and does nothing at all with the select
 tool. Fingers navigate and only navigate: one drags, two pinch-zoom, and no

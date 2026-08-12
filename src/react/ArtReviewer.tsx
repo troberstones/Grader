@@ -807,6 +807,30 @@ export function ArtReviewer({
   onPointerMoveRef.current = onPointerMove;
 
   /**
+   * Stop iPadOS Scribble eating alternate strokes.
+   *
+   * Scribble watches Apple Pencil input at the system level and swallows the
+   * events when a run of strokes starts to look like handwriting — which is
+   * exactly what a critique note is. It does this over a `<canvas>` as happily
+   * as over a text field, so nothing in the page can opt out by being the wrong
+   * sort of element. The events never reach the browser at all, which is why
+   * every diagnostic here showed a letter with no `down`, no moves and no
+   * cancel: not dropped, never delivered.
+   *
+   * The documented workaround is a non-passive `touchmove` listener that calls
+   * preventDefault. React attaches touch listeners passively, so this has to be
+   * done by hand. WebKit bug 217430; the alternative is asking every user to
+   * turn Scribble off in Settings.
+   */
+  useEffect(() => {
+    const el = overlayRef.current;
+    if (!el) return;
+    const swallow = (e: TouchEvent) => e.preventDefault();
+    el.addEventListener("touchmove", swallow, { passive: false });
+    return () => el.removeEventListener("touchmove", swallow);
+  }, []);
+
+  /**
    * What pointer capture used to do, done by hand.
    *
    * With a stroke in flight, a pen move or release that lands on some other
