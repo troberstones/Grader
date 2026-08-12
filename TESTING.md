@@ -11,7 +11,7 @@ npm run dev
 `artReviewModule/src` take effect on restart. After editing the module while the
 server is already running, `npm run sync:review` then let HMR pick it up.
 
-Open **http://localhost:3000/assignments/22/review-v2** and pick a student from
+Open **http://localhost:3000/assignments/22/review** and pick a student from
 the sidebar.
 
 Student **Wright, Merlin** (assignment 22) has a deliberately mixed playlist:

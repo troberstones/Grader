@@ -84,7 +84,7 @@ export function ArtReviewer(props: {
 }): JSX.Element
 ```
 
-Grader mounts it at `/assignments/[id]/review-v2` with a `ReviewDataAdapter` built from
+Grader mounts it at `/assignments/[id]/review` with a `ReviewDataAdapter` built from
 its server actions. Old review page stays live until the new one wins. No big-bang cutover.
 
 Internals are split so the hard parts are testable without a browser:
