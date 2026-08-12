@@ -12,6 +12,7 @@ import { GLRenderer, type ViewParams } from "../render/gl";
 import { createSource, DecodedVideoSource, VideoElementSource } from "../sources";
 import type { CacheStats, FrameSource, SourceContext } from "../sources/types";
 import { LayeredSource } from "../sources/layered";
+import { sharedLedger } from "../sources/ledger";
 import type { SessionApi } from "./useSession";
 
 /** Master heartbeat. Cheap: one small message, and idle beats change nothing. */
@@ -125,6 +126,14 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   const invalidate = useCallback(() => {
     dirtyRef.current = true;
   }, []);
+
+  // Size the tab-wide frame ledger before any source can reserve against it —
+  // declared above the source effect so it runs first. The ledger's own default
+  // is a conservative 512 MB, which on a workstation would cap an HDR sequence
+  // at a fraction of what actually fits.
+  useEffect(() => {
+    sharedLedger(budget.ram);
+  }, [budget.ram]);
 
   // ── Source lifecycle ────────────────────────────────────────────────────────
   const getSource = useCallback(

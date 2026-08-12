@@ -29,7 +29,7 @@ export interface ProbeResult {
 }
 
 export interface Derivative {
-  variant: "original" | "proxy" | "poster" | "page" | "composite" | "layer";
+  variant: "original" | "proxy" | "poster" | "page" | "composite" | "layer" | "frame";
   idx: number;
   path: string;
   mime: string;
@@ -360,9 +360,117 @@ function hdrDerivative(
   };
 }
 
+/**
+ * The frame number in a rendered filename: the last run of digits before the
+ * extension. Renders come off a farm as name.1001.exr, name_0042.png, or
+ * name.v03.0001.exr — the version field is why this takes the *last* run
+ * rather than the first.
+ */
+export function frameNumberOf(fileName: string): number | null {
+  const stem = fileName.slice(0, fileName.length - path.extname(fileName).length);
+  const match = /(\d+)(?!.*\d)/.exec(stem);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * Files in a directory that form one image sequence, in frame order.
+ *
+ * Sorting is by the parsed frame number, never by name: a sequence that runs
+ * past frame 999 sorts 1000 before 999 as a string, and the first frame to
+ * cross that boundary would silently reorder the shot.
+ */
+export async function sequenceFrames(dir: string): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  const numbered: Array<{ name: string; n: number }> = [];
+
+  for (const name of await readdir(dir)) {
+    if (name.startsWith(".")) continue;
+    const kind = classify(name);
+    if (kind !== "hdr" && kind !== "image" && kind !== "convert") continue;
+    const n = frameNumberOf(name);
+    if (n === null) continue;
+    numbered.push({ name, n });
+  }
+
+  numbered.sort((a, b) => a.n - b.n || a.name.localeCompare(b.name));
+  return numbered.map((f) => path.join(dir, f.name));
+}
+
+/**
+ * A directory of numbered frames as one scrubbable item.
+ *
+ * Each frame gets the same treatment a lone still would — EXR through the RGBE
+ * packer, everything else through sharp — so an HDR sequence keeps its range
+ * and a PNG sequence still works. Frames are decoded one at a time on purpose:
+ * the EXR decoder is synchronous CPU work, so running four at once would only
+ * move the queue, and holding four 1920×1080 float buffers at once is 130 MB
+ * for nothing.
+ */
+export async function ingestSequence(
+  dir: string,
+  opts: IngestOptions,
+): Promise<IngestResult> {
+  const warnings: string[] = [];
+  const files = await sequenceFrames(dir);
+  if (files.length === 0) throw new Error(`no numbered frames in ${dir}`);
+
+  const derivatives: Derivative[] = [];
+  let width = 0;
+  let height = 0;
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const frameOpts = {
+      ...opts,
+      baseName: `${opts.baseName}.f${String(i).padStart(4, "0")}`,
+    };
+
+    let d: Derivative;
+    try {
+      d = classify(path.basename(file)) === "hdr"
+        ? await makeHdrPng(file, frameOpts)
+        : await normaliseImage(file, frameOpts);
+    } catch (e) {
+      // One unreadable frame must not cost the whole shot. Dropping it would
+      // shift every later frame's number, so the gap is reported instead and
+      // the sequence keeps its original length.
+      warnings.push(`frame ${i} (${path.basename(file)}) failed: ${e instanceof Error ? e.message : e}`);
+      continue;
+    }
+
+    if (!width) {
+      width = d.width ?? 0;
+      height = d.height ?? 0;
+    } else if (d.width !== width || d.height !== height) {
+      // Mixed sizes would make the shot jump under a fixed view transform.
+      warnings.push(
+        `frame ${i} is ${d.width}×${d.height}, not ${width}×${height} — skipped`,
+      );
+      continue;
+    }
+
+    derivatives.push({ ...d, variant: "frame", idx: i });
+  }
+
+  if (derivatives.length === 0) throw new Error(`every frame in ${dir} failed to decode`);
+
+  return {
+    kind: "sequence",
+    derivatives,
+    width,
+    height,
+    // The declared length is what was on disk, so a dropped frame reads as a
+    // gap rather than a shorter shot.
+    frameCount: files.length,
+    fps: 24,
+    duration: files.length / 24,
+    warnings,
+  };
+}
+
 /** Everything needed to register one submission's media derivatives. */
 export interface IngestResult {
-  kind: "video" | "still" | "layered" | "pages";
+  kind: "video" | "still" | "layered" | "pages" | "sequence";
   derivatives: Derivative[];
   width: number;
   height: number;
@@ -378,6 +486,12 @@ export async function ingestFile(
   opts: IngestOptions,
 ): Promise<IngestResult> {
   const warnings: string[] = [];
+
+  // A render sequence arrives as a folder, not a file — there is no single
+  // thing to classify by extension, so this is checked before anything else.
+  const entry = await stat(input).catch(() => null);
+  if (entry?.isDirectory()) return ingestSequence(input, opts);
+
   const kind = classify(fileName);
 
   if (kind === "video") {

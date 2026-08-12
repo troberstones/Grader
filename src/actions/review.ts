@@ -194,12 +194,21 @@ export async function listReviewItems(contextId: string): Promise<ReviewItem[]> 
     const composite = media.find((m) => m.variant === "composite");
     const manifest = media.find((m) => m.variant === "page" && m.idx === -1);
     const poster = media.find((m) => m.variant === "poster");
-    const primary = proxy ?? composite ?? media.find((m) => m.variant === "original");
+    // Already ordered by idx above, so this is frame order.
+    const frames = media.filter((m) => m.variant === "frame");
+    const primary = proxy ?? composite ?? frames[0] ?? media.find((m) => m.variant === "original");
 
     const kind = (primary?.kind ?? (sub.mediaType === "video" ? "video" : "still")) as ReviewItem["kind"];
     const url = primary?.variant === "original" || !primary
       ? `/api/submissions/${sub.id}/file`
       : `/api/review/media/${primary.id}`;
+
+    // A sequence addresses its frames individually; frameCount follows the
+    // urls rather than the stored count, so a frame that failed to decode
+    // cannot leave the transport seeking past the end of the list.
+    const frameUrls = frames.length
+      ? frames.map((f) => `/api/review/media/${f.id}`)
+      : undefined;
 
     items.push({
       id: itemIdFor(sub.id),
@@ -209,7 +218,8 @@ export async function listReviewItems(contextId: string): Promise<ReviewItem[]> 
       url,
       width: primary?.width ?? 1600,
       height: primary?.height ?? 900,
-      frameCount: Math.max(1, primary?.frameCount ?? 1),
+      frameCount: Math.max(1, frameUrls?.length ?? primary?.frameCount ?? 1),
+      frameUrls,
       fps: primary?.fps ?? null,
       duration: primary?.duration ?? null,
       posterUrl: poster ? `/api/review/media/${poster.id}` : undefined,

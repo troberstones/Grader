@@ -92,11 +92,18 @@ installGlobals();
 const { BitmapCacheSource, halfFloatOf } = require(path.join(OUT, "sources", "bitmap-cache.js"));
 const { StillSource, SequenceSource } = require(path.join(OUT, "sources", "still.js"));
 const { RGBE_TRANSFER } = require(path.join(OUT, "core", "rgbe.js"));
+const { frameNumberOf, sequenceFrames } = require(path.join(OUT, "server", "ingest.js"));
+const { sharedLedger } = require(path.join(OUT, "sources", "ledger.js"));
 
 function reset() {
   images.clear();
   fetches = [];
   bitmapCalls = [];
+  // The ledger is a module singleton by design, so a source left undisposed by
+  // an earlier test would otherwise charge its frames to the next one.
+  const ledger = sharedLedger();
+  ledger.release(ledger.bytesUsed);
+  ledger.setLimit(1024 * 1024 * 1024);
 }
 
 const CTX = {
@@ -350,6 +357,125 @@ test("sequence: prefetch fills around the playhead without unbounded fan-out", a
   src.prefetch(30, 100);
   assert.ok(src.stats().decoding);
   assert.ok(fetches.length <= 4, `fan-out was ${fetches.length}`);
+});
+
+/** An HDR sequence at a real render size, with tiny frames to keep it fast. */
+function hdrSequence(count, w = 100, h = 100) {
+  const item = sequence(count);
+  item.width = w;
+  item.height = h;
+  item.colorSpace = { transfer: RGBE_TRANSFER, primaries: "aces2065-1" };
+  for (const url of item.frameUrls) {
+    images.get(url).width = w;
+    images.get(url).height = h;
+    images.get(url).rgbe = new Uint8ClampedArray(w * h * 4);
+  }
+  return item;
+}
+
+test("sequence: an HDR sequence is never downscaled", async () => {
+  reset();
+  const item = hdrSequence(4, 1920, 1080);
+  // A viewport far narrower than the frames, which for an ordinary sequence
+  // would trigger the resize path.
+  const src = new SequenceSource(item, { ...CTX, viewportWidth: 800, maxCacheWidth: 1024 });
+
+  await src.request(0);
+  assert.equal(bitmapCalls.filter((c) => c.opts.resizeWidth).length, 0);
+  src.dispose();
+});
+
+test("sequence: the shared ledger bounds an HDR window, not the frame count", async () => {
+  reset();
+  const item = hdrSequence(40);
+  const perFrame = 100 * 100 * 12;
+  // Room for eight frames — well under the 48-frame count cap, so if the cap
+  // were doing the bounding this would sail past it.
+  sharedLedger().setLimit(perFrame * 8);
+
+  const src = new SequenceSource(item, CTX);
+  for (let f = 0; f < 40; f++) await src.request(f);
+
+  const cached = src.stats().cached;
+  assert.ok(cached <= 9, `held ${cached} frames against room for 8`);
+  assert.ok(cached >= 3, "the window did not collapse to the playhead");
+
+  src.dispose();
+  assert.equal(sharedLedger().bytesUsed, 0, "disposal hands every byte back");
+});
+
+test("sequence: prefetch asks only for frames the window can keep", async () => {
+  // Otherwise an idle viewer decodes for ever: prefetch requests 24, memory
+  // holds 20, each arrival evicts one that prefetch immediately asks for again.
+  reset();
+  const item = hdrSequence(40);
+  const perFrame = 100 * 100 * 12;
+  sharedLedger().setLimit(perFrame * 8);
+
+  const src = new SequenceSource(item, CTX);
+  await src.request(0);
+  fetches = [];
+  src.prefetch(0, 30);
+  await settle();
+
+  const asked = new Set(fetches);
+  assert.ok(asked.size > 0);
+  for (const url of asked) {
+    const frame = item.frameUrls.indexOf(url);
+    assert.ok(frame <= 4, `prefetched frame ${frame}, beyond a window of 8`);
+  }
+  src.dispose();
+});
+
+test("sequence: an ordinary sequence still fills its full count window", async () => {
+  reset();
+  const item = sequence(60);
+  // Twelve times the room an HDR window needs, because a plain frame is a
+  // twelfth the cost — the same ledger, a very different number of frames.
+  sharedLedger().setLimit(640 * 360 * 4 * 60);
+
+  const src = new SequenceSource(item, CTX);
+  for (let f = 0; f < 60; f++) await src.request(f);
+  assert.equal(src.stats().cached, 48, "bounded by the count cap, not memory");
+  src.dispose();
+});
+
+// ── frame numbering ──────────────────────────────────────────────────────────
+
+test("frameNumberOf: the frame field is the last number, not the first", () => {
+  assert.equal(frameNumberOf("sh0070_bg01_v03.1001.exr"), 1001);
+  assert.equal(frameNumberOf("shot.v03.0001.exr"), 1);
+  assert.equal(frameNumberOf("render_0042.png"), 42);
+  assert.equal(frameNumberOf("beauty.exr"), null);
+});
+
+test("sequenceFrames: orders by number, so 1000 does not sort before 999", async () => {
+  const { mkdtemp, writeFile } = require("node:fs/promises");
+  const os = require("node:os");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "seq-"));
+  // Deliberately written out of order, and spanning the digit-count boundary
+  // that breaks a plain name sort.
+  for (const n of [1000, 998, 1001, 999]) {
+    await writeFile(path.join(dir, `shot.${n}.exr`), "");
+  }
+  await writeFile(path.join(dir, "notes.txt"), "");
+  await writeFile(path.join(dir, ".DS_Store"), "");
+
+  const frames = (await sequenceFrames(dir)).map((f) => path.basename(f));
+  assert.deepEqual(frames, ["shot.998.exr", "shot.999.exr", "shot.1000.exr", "shot.1001.exr"]);
+});
+
+test("sequenceFrames: ignores files that are not frames", async () => {
+  const { mkdtemp, writeFile } = require("node:fs/promises");
+  const os = require("node:os");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "seq-"));
+  await writeFile(path.join(dir, "shot.0001.exr"), "");
+  await writeFile(path.join(dir, "shot.0002.png"), "");
+  await writeFile(path.join(dir, "shot.mp4"), "");
+  await writeFile(path.join(dir, "unnumbered.exr"), "");
+
+  const frames = (await sequenceFrames(dir)).map((f) => path.basename(f));
+  assert.deepEqual(frames, ["shot.0001.exr", "shot.0002.png"]);
 });
 
 // ── the raw unpack, independent of any source ────────────────────────────────
