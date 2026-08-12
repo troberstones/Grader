@@ -48,12 +48,12 @@ const LASER_LIFETIME_MS = 1200;
 /**
  * The artwork is the point, so the stage has a floor — but a low one.
  *
- * Above this the stage absorbs every bit of shortfall and the transport stays
- * on screen, which is the trade a tablet needs: a smaller image you can still
- * scrub beats a bigger one whose play button is below the fold. Only under this
- * does the panel start to scroll.
+ * The stage absorbs every bit of shortfall so the transport stays on screen —
+ * a smaller image you can still scrub beats a bigger one whose play button is
+ * off the bottom. Low, because the panel no longer scrolls at all: a scroll
+ * container around the stage lets iPadOS take pencil gestures away.
  */
-const STAGE_MIN_HEIGHT = 220;
+const STAGE_MIN_HEIGHT = 140;
 
 export function ArtReviewer({
   items,
@@ -1033,12 +1033,20 @@ export function ArtReviewer({
           flexDirection: "column",
           flex: 1,
           minWidth: 0,
-          // When the window is genuinely too short for a usable stage plus the
-          // controls, scroll. The alternative is what used to happen: the stage
-          // refused to shrink past its minimum, overflowed its own row, and
-          // painted straight over the timeline and the transport bar.
+          // Deliberately not scrollable, and this is load-bearing.
+          //
+          // A scroll container around the stage gives iPadOS something to
+          // arbitrate: it holds pencil input back while it decides whether the
+          // drag belongs to the page. A capture of a lost letter showed exactly
+          // that — no contact events reached the page at all, and even the hover
+          // rate collapsed from ~120 Hz to ~8 Hz for its duration.
+          //
+          // The stage absorbs the shortfall instead. Below its floor the
+          // controls clip rather than scroll, which is the lesser evil: a
+          // cramped window is rare, losing a letter mid-word is not.
           minHeight: 0,
-          overflowY: "auto",
+          overflow: "hidden",
+          touchAction: "none",
           gap: 8,
         }}
       >

@@ -119,11 +119,27 @@ the composite.
 button: no blue highlight, no callout menu, no tap flash. The fps field and the
 text-note box still select and edit normally, because you type into those.
 
+**Nothing around the stage scrolls, on purpose.** A scroll container wrapping a
+drawing surface gives iPadOS something to arbitrate, and it withholds pencil
+input while it decides whether a drag belongs to the page. If you ever add
+`overflow: auto` to an ancestor of the stage, expect lost strokes. To check:
+
+```js
+// in the console, with the stage's canvas as the starting point
+let el = document.querySelectorAll('canvas')[0].parentElement, hits = []
+for (; el && el !== document.documentElement; el = el.parentElement) {
+  const o = getComputedStyle(el)
+  if (/(auto|scroll)/.test(o.overflowY + o.overflowX)) hits.push(el)
+}
+hits   // must be empty
+```
+
 **Layout** — the drawing rail is pinned to the right of the stage, so it never
 scrolls away the way a bar under the transport did. Resize the window and watch
-the stage: it grows and shrinks, keeps a 220 px floor, and nothing is allowed to
+the stage: it grows and shrinks, keeps a 140 px floor, and nothing is allowed to
 paint over the timeline. The stage absorbs the shortfall so the transport stays
-on screen; only below the floor does the panel scroll.
+on screen; below the floor the controls clip rather than scroll, because
+nothing here is allowed to be a scroll container.
 
 ## Multi-device / master mode
 
