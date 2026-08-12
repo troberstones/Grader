@@ -7,9 +7,9 @@ cd ~/Documents/Dev/grader
 npm run dev
 ```
 
-`predev` re-syncs the module into `node_modules` automatically, so edits under
-`artReviewModule/src` take effect on restart. After editing the module while the
-server is already running, `npm run sync:review` then let HMR pick it up.
+The module is an npm workspace, so `node_modules/@grader/art-review` is a
+symlink to `packages/art-review` and edits under `packages/art-review/src` are
+picked up by HMR like any other source file. Nothing to re-sync.
 
 Open **http://localhost:3000/assignments/22/review** and pick a student from
 the sidebar.
@@ -236,8 +236,8 @@ vm_stat 1
 ## Automated checks
 
 ```bash
-cd ~/Documents/Dev/artReviewModule
-npm test          # 43 unit tests: fold/bounce math, stroke codec, reducer, clock, budgets
+cd ~/Documents/Dev/grader/packages/art-review
+npm test          # 50 unit tests: fold/bounce math, stroke codec, reducer, clock, budgets
 npx tsc --noEmit  # module typecheck
 ```
 

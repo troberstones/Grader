@@ -1,5 +1,5 @@
-# Symlink to grader's node_modules so the module resolves React et al. from a
-# single install — see TESTING.md. Never committed.
+# Workspace deps hoist to the repo root; this only appears if npm has to keep a
+# conflicting version local to the package.
 node_modules
 
 # Test scratch: compiled core (npm test), ingest smoke output, generated PSD/PDF

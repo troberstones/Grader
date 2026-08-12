@@ -2,6 +2,9 @@
   "name": "grader",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,14 +12,14 @@
     "lint": "eslint",
     "review:migrate": "node scripts/apply-review-migration.mjs",
     "review:ingest": "node scripts/ingest-review-media.mjs",
-    "sync:review": "rsync -a --delete ../artReviewModule/src/ node_modules/@grader/art-review/src/ && rsync -a ../artReviewModule/package.json node_modules/@grader/art-review/package.json && npm run sync:pdf-worker",
+    "review:test": "npm test --workspace @grader/art-review",
     "sync:pdf-worker": "cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/pdf.worker.min.mjs",
-    "predev": "npm run sync:review",
-    "prebuild": "npm run sync:review"
+    "predev": "npm run sync:pdf-worker",
+    "prebuild": "npm run sync:pdf-worker"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
-    "@grader/art-review": "file:../artReviewModule",
+    "@grader/art-review": "*",
     "ag-psd": "^31.0.2",
     "better-sqlite3": "^12.8.0",
     "class-variance-authority": "^0.7.1",

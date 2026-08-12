@@ -1,14 +1,6 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // @grader/art-review is installed with `--install-links`, so it lands in
-  // node_modules as a real directory rather than a symlink out to
-  // ../artReviewModule. That keeps every import inside the project root.
-  //
-  // Raising `turbopack.root` to the parent directory would also resolve the
-  // symlink, but it moves PostCSS/Tailwind plugin resolution up with it and
-  // Tailwind then fails to resolve at all. Copy, don't move the root.
-  // Re-sync after editing the module with: npm run sync:review
   // sharp and ag-psd are server-only (native bindings / large parsers) and must
   // not be pulled into a client bundle.
   serverExternalPackages: ["better-sqlite3", "sharp", "ag-psd"],
