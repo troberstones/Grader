@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { floatsToRgbe, RGBE_TRANSFER } from "../core/rgbe";
 
 const run = promisify(execFile);
 
@@ -57,12 +58,21 @@ export interface IngestOptions {
 
 const VIDEO_EXT = new Set([".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpg", ".mpeg"]);
 const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]);
-const CONVERT_EXT = new Set([".tif", ".tiff", ".exr", ".dpx", ".tga"]);
+const CONVERT_EXT = new Set([".tif", ".tiff", ".dpx", ".tga"]);
+/**
+ * EXR is its own path, not part of CONVERT_EXT: sharp cannot read it at all
+ * ("Input file contains unsupported image format"), and the whole reason to
+ * accept it is the dynamic range, which a convert-to-PNG step would flatten.
+ */
+const HDR_EXT = new Set([".exr"]);
 
-export function classify(fileName: string): "video" | "image" | "convert" | "psd" | "pdf" | null {
+export function classify(
+  fileName: string,
+): "video" | "image" | "convert" | "hdr" | "psd" | "pdf" | null {
   const ext = path.extname(fileName).toLowerCase();
   if (VIDEO_EXT.has(ext)) return "video";
   if (IMAGE_EXT.has(ext)) return "image";
+  if (HDR_EXT.has(ext)) return "hdr";
   if (CONVERT_EXT.has(ext)) return "convert";
   if (ext === ".psd" || ext === ".psb") return "psd";
   if (ext === ".pdf") return "pdf";
@@ -258,6 +268,67 @@ export async function normaliseImage(
   };
 }
 
+/**
+ * EXR → RGBE PNG, preserving everything above 1.0.
+ *
+ * The pixel format is read from the file and handed straight back to ffmpeg
+ * rather than being chosen. Asking for a format that differs from the decoded
+ * one — even only by an added alpha plane — routes the frame through swscale,
+ * which silently clamps float to [0,1]. That failure is invisible: you get a
+ * plausible image with the entire highlight range gone.
+ */
+export async function makeHdrPng(
+  input: string,
+  opts: IngestOptions,
+): Promise<Derivative> {
+  const sharp = (await import("sharp")).default;
+  await mkdir(opts.outDir, { recursive: true });
+  const out = path.join(opts.outDir, `${opts.baseName}.rgbe.png`);
+
+  const info = await probe(input, opts.ffprobePath);
+  const { width, height, pixFmt } = info;
+  if (!/^gbra?pf32le$/.test(pixFmt)) {
+    throw new Error(`EXR decoded as unexpected pixel format ${pixFmt}`);
+  }
+
+  if (!opts.force && (await exists(out))) {
+    return { variant: "composite", idx: 0, path: out, mime: "image/png", width, height, colorTransfer: RGBE_TRANSFER };
+  }
+
+  const { stdout } = await run(
+    opts.ffmpegPath ?? "ffmpeg",
+    ["-v", "error", "-i", input, "-f", "rawvideo", "-pix_fmt", pixFmt, "-"],
+    { maxBuffer: 2048 * 1024 * 1024, encoding: "buffer" },
+  );
+
+  const n = width * height;
+  const planes = pixFmt === "gbrapf32le" ? 4 : 3;
+  const expected = n * planes * 4;
+  if (stdout.length !== expected) {
+    throw new Error(`EXR decode gave ${stdout.length} bytes, expected ${expected}`);
+  }
+
+  // Planar, and the order is G, B, R — not R, G, B.
+  const f = new Float32Array(stdout.buffer, stdout.byteOffset, stdout.length / 4);
+  const g = f.subarray(0, n);
+  const b = f.subarray(n, 2 * n);
+  const r = f.subarray(2 * n, 3 * n);
+
+  const rgbe = new Uint8Array(n * 4);
+  floatsToRgbe(r, g, b, rgbe);
+
+  await sharp(Buffer.from(rgbe.buffer, rgbe.byteOffset, rgbe.length), {
+    raw: { width, height, channels: 4 },
+  })
+    // No resizing, ever: resampling RGBE means averaging exponents, which is
+    // not a colour operation and produces garbage. If a cap is needed it has
+    // to happen in float, before the pack.
+    .png({ compressionLevel: 6 })
+    .toFile(out);
+
+  return { variant: "composite", idx: 0, path: out, mime: "image/png", width, height, colorTransfer: RGBE_TRANSFER };
+}
+
 /** Everything needed to register one submission's media derivatives. */
 export interface IngestResult {
   kind: "video" | "still" | "layered" | "pages";
@@ -313,6 +384,20 @@ export async function ingestFile(
       fps: null,
       duration: null,
       warnings: ["PDF pages render in the browser; dimensions are per-page"],
+    };
+  }
+
+  if (kind === "hdr") {
+    const view = await makeHdrPng(input, opts);
+    return {
+      kind: "still",
+      derivatives: [view],
+      width: view.width ?? 0,
+      height: view.height ?? 0,
+      frameCount: 1,
+      fps: null,
+      duration: null,
+      warnings,
     };
   }
 

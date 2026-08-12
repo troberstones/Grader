@@ -16,8 +16,14 @@ export class StillSource extends BitmapCacheSource {
 
   protected async load(): Promise<ImageBitmap> {
     // Stills are cheap enough to hold at native size unless they are enormous.
+    //
+    // Never for an RGBE frame, though: downscaling resamples the alpha channel,
+    // which is a shared exponent rather than a colour, and the average of two
+    // exponents describes neither neighbour. It has to arrive whole and be
+    // unpacked to float before anything interpolates it.
     const cap = Math.max(this.ctx.maxCacheWidth, this.ctx.viewportWidth * 2);
-    return loadBitmap(this.item.url, this.item.width > cap ? cap : undefined);
+    const downscale = !this.isHdr && this.item.width > cap;
+    return loadBitmap(this.item.url, downscale ? cap : undefined);
   }
 
   async fullRes(): Promise<TexSource | null> {
@@ -28,7 +34,9 @@ export class StillSource extends BitmapCacheSource {
         return null;
       }
     }
-    return { type: "bitmap", bitmap: this.full, width: this.full.width, height: this.full.height };
+    // Through texFor, so an HDR still is unpacked here too — returning the raw
+    // bitmap would hand RGBE bytes to the shader as though they were colour.
+    return this.texFor(-1, this.full);
   }
 
   dispose(): void {

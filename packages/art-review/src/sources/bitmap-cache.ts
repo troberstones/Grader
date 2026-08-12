@@ -1,5 +1,6 @@
 import type { CacheStats, FrameRef, FrameSource, TexSource } from "./types";
 import type { ReviewItem } from "../core/types";
+import { rgbeToHalfFloat, RGBE_TRANSFER } from "../core/rgbe";
 
 /**
  * Shared base for sources whose frames are independently addressable images:
@@ -10,6 +11,12 @@ import type { ReviewItem } from "../core/types";
  */
 export abstract class BitmapCacheSource implements FrameSource {
   protected cache = new Map<number, ImageBitmap>();
+  /**
+   * Decoded half-float for HDR items, kept beside the bitmap because peek()
+   * runs every frame and the RGBE unpack is a per-pixel loop — doing it on
+   * demand would redo two million iterations per repaint.
+   */
+  protected hdrCache = new Map<number, TexSource>();
   protected inflight = new Map<number, Promise<void>>();
   protected listeners = new Set<() => void>();
   protected disposed = false;
@@ -28,6 +35,24 @@ export abstract class BitmapCacheSource implements FrameSource {
   ) {}
 
   protected abstract load(frame: number): Promise<ImageBitmap>;
+
+  /** True when this item's pixels are RGBE-packed and need unpacking. */
+  protected get isHdr(): boolean {
+    return this.item.colorSpace?.transfer === RGBE_TRANSFER;
+  }
+
+  /** The texture for a decoded frame — unpacked first if the item is HDR. */
+  protected texFor(frame: number, bmp: ImageBitmap): TexSource {
+    if (!this.isHdr) {
+      return { type: "bitmap", bitmap: bmp, width: bmp.width, height: bmp.height };
+    }
+    let tex = this.hdrCache.get(frame);
+    if (!tex) {
+      tex = halfFloatOf(bmp);
+      this.hdrCache.set(frame, tex);
+    }
+    return tex;
+  }
 
   protected async init(): Promise<void> {}
 
@@ -49,7 +74,7 @@ export abstract class BitmapCacheSource implements FrameSource {
       this.touch(clamped);
       return {
         frame: clamped,
-        tex: { type: "bitmap", bitmap: hit, width: hit.width, height: hit.height },
+        tex: this.texFor(clamped, hit),
         exact: true,
         version: this.version,
       };
@@ -66,7 +91,7 @@ export abstract class BitmapCacheSource implements FrameSource {
     const bmp = this.cache.get(best)!;
     return {
       frame: best,
-      tex: { type: "bitmap", bitmap: bmp, width: bmp.width, height: bmp.height },
+      tex: this.texFor(best, bmp),
       exact: false,
       version: this.version,
     };
@@ -126,6 +151,7 @@ export abstract class BitmapCacheSource implements FrameSource {
       if (worst === null || worst === near) break;
       this.cache.get(worst)?.close?.();
       this.cache.delete(worst);
+      this.hdrCache.delete(worst);
     }
   }
 
@@ -141,8 +167,11 @@ export abstract class BitmapCacheSource implements FrameSource {
       if (last && k === last[1] + 1) last[1] = k;
       else ranges.push([k, k]);
     }
+    // HDR frames are held twice over: the source bitmap and the unpacked
+    // half-float, at 4 and 8 bytes a pixel.
+    const perPixel = this.isHdr ? 12 : 4;
     let bytes = 0;
-    for (const b of this.cache.values()) bytes += b.width * b.height * 4;
+    for (const b of this.cache.values()) bytes += b.width * b.height * perPixel;
     return {
       cached: this.cache.size,
       total: this.frameCount,
@@ -167,6 +196,7 @@ export abstract class BitmapCacheSource implements FrameSource {
     this.disposed = true;
     for (const b of this.cache.values()) b.close?.();
     this.cache.clear();
+    this.hdrCache.clear();
     this.inflight.clear();
     this.listeners.clear();
   }
@@ -196,4 +226,32 @@ export async function loadBitmap(url: string, maxWidth?: number): Promise<ImageB
 
 export function texOf(bitmap: ImageBitmap): TexSource {
   return { type: "bitmap", bitmap, width: bitmap.width, height: bitmap.height };
+}
+
+/**
+ * Read an RGBE PNG back to linear half-float.
+ *
+ * The bytes have to be got at unchanged, so this goes through a canvas rather
+ * than straight to a texture: `willReadFrequently` keeps it on the CPU side,
+ * and the bitmap was decoded with `colorSpaceConversion: "none"` so nothing has
+ * quietly reinterpreted the exponent channel as colour on the way in.
+ */
+export function halfFloatOf(bitmap: ImageBitmap): TexSource {
+  const { width, height } = bitmap;
+  const canvas = typeof OffscreenCanvas !== "undefined"
+    ? new OffscreenCanvas(width, height)
+    : Object.assign(document.createElement("canvas"), { width, height });
+  const ctx = (canvas as OffscreenCanvas).getContext("2d", {
+    willReadFrequently: true,
+    colorSpace: "srgb",
+  }) as OffscreenCanvasRenderingContext2D | null;
+  if (!ctx) throw new Error("no 2d context to decode RGBE");
+  ctx.drawImage(bitmap, 0, 0);
+  const { data } = ctx.getImageData(0, 0, width, height);
+  return {
+    type: "half",
+    data: rgbeToHalfFloat(new Uint8Array(data.buffer, data.byteOffset, data.length), width * height),
+    width,
+    height,
+  };
 }

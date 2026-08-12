@@ -510,3 +510,71 @@ test("policy: a free peer ignores remote transport", () => {
   assert.equal(shouldApply("seek", { role: "free", followView: false }), false);
   assert.equal(shouldApply("seek", { role: "master", followView: false }), false);
 });
+
+// ── RGBE ─────────────────────────────────────────────────────────────────────
+// The pack/unpack pair is what carries an EXR's range through an ordinary PNG,
+// so it is worth pinning: encode is server-side, decode is in the browser, and
+// a drift between them is a silently wrong picture rather than a crash.
+
+const { floatsToRgbe, rgbeToFloat, floatToHalf } = require(path.join(OUT, "rgbe.js"));
+
+function roundTrip(values) {
+  const n = values.length;
+  const r = Float32Array.from(values);
+  const out = new Uint8Array(n * 4);
+  floatsToRgbe(r, r, r, out);
+  return Array.from({ length: n }, (_, i) => rgbeToFloat(out, i * 4)[0]);
+}
+
+test("rgbe: values above 1.0 survive, which is the whole point", () => {
+  const input = [1.5, 2.26, 8, 64, 1000];
+  for (const [i, back] of roundTrip(input).entries()) {
+    const rel = Math.abs(back - input[i]) / input[i];
+    assert.ok(rel < 0.005, `${input[i]} → ${back} (${(rel * 100).toFixed(2)}%)`);
+  }
+});
+
+test("rgbe: shadow detail keeps its precision too", () => {
+  const input = [0.5, 0.1, 0.01, 0.001, 0.0001];
+  for (const [i, back] of roundTrip(input).entries()) {
+    const rel = Math.abs(back - input[i]) / input[i];
+    assert.ok(rel < 0.005, `${input[i]} → ${back} (${(rel * 100).toFixed(2)}%)`);
+  }
+});
+
+test("rgbe: zero and NaN pack to the null pixel rather than a stray exponent", () => {
+  const n = 2;
+  const src = Float32Array.from([0, NaN]);
+  const out = new Uint8Array(n * 4);
+  floatsToRgbe(src, src, src, out);
+  for (let i = 0; i < n; i++) {
+    assert.deepEqual(Array.from(out.subarray(i * 4, i * 4 + 4)), [0, 0, 0, 0]);
+    assert.deepEqual(rgbeToFloat(out, i * 4), [0, 0, 0]);
+  }
+});
+
+test("rgbe: a shared exponent tracks the brightest channel", () => {
+  // Green dominates, so red and blue are encoded against green's exponent and
+  // are allowed to be coarser in relative terms — but not in absolute ones.
+  const r = Float32Array.from([0.02]);
+  const g = Float32Array.from([4.0]);
+  const b = Float32Array.from([0.5]);
+  const out = new Uint8Array(4);
+  floatsToRgbe(r, g, b, out);
+  const [br, bg, bb] = rgbeToFloat(out, 0);
+  assert.ok(Math.abs(bg - 4.0) / 4.0 < 0.005, `green ${bg}`);
+  for (const [got, want] of [[br, 0.02], [bb, 0.5]]) {
+    assert.ok(Math.abs(got - want) / 4.0 < 0.005, `${want} → ${got} vs peak 4.0`);
+  }
+});
+
+test("floatToHalf: the values a render actually contains", () => {
+  const bits = (v) => floatToHalf(v);
+  assert.equal(bits(0), 0x0000);
+  assert.equal(bits(1), 0x3c00);
+  assert.equal(bits(2), 0x4000);
+  assert.equal(bits(-1), 0xbc00);
+  assert.equal(bits(65504), 0x7bff, "largest finite half");
+  assert.equal(bits(1e6), 0x7c00, "overflow saturates to infinity, not garbage");
+  assert.equal(bits(1e-9), 0x0000, "underflow to zero, sign preserved separately");
+});

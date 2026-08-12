@@ -11,7 +11,14 @@ import type { LayerInfo, LayerManifest, ReviewItem } from "../core/types";
 export type TexSource =
   | { type: "bitmap"; bitmap: ImageBitmap; width: number; height: number }
   | { type: "video"; video: HTMLVideoElement; width: number; height: number }
-  | { type: "pixels"; data: Uint8Array; width: number; height: number; channels: 3 | 4 };
+  | { type: "pixels"; data: Uint8Array; width: number; height: number; channels: 3 | 4 }
+  /**
+   * Linear half-float RGBA, for sources that carry more than display range.
+   * Uploads as RGBA16F, which WebGL2 filters natively — the reason RGBE is
+   * decoded on the way in rather than sampled as bytes and decoded in the
+   * shader, where a bilinear tap would average two exponents into nonsense.
+   */
+  | { type: "half"; data: Uint16Array; width: number; height: number };
 
 export interface FrameRef {
   /** The frame actually available — may lag the request while decoding. */

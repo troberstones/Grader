@@ -30,6 +30,13 @@ interface CachedTexture {
   tex: WebGLTexture;
   width: number;
   height: number;
+  /**
+   * Actual VRAM footprint. Carried rather than recomputed as w*h*4: an HDR
+   * still uploads as RGBA16F at 8 bytes a pixel, and undercounting it would
+   * let the resident set drift past vramBudget — which is what provokes the
+   * context loss this cache exists to avoid.
+   */
+  bytes: number;
   version: number;
   lastUsed: number;
 }
@@ -166,7 +173,7 @@ export class GLRenderer {
     for (const name of [
       "uView", "uRect", "uFlip", "uRotate", "uMediaSize", "uTex", "uLut", "uHasLut",
       "uOpacity", "uExposure", "uGamma", "uSaturation", "uChannel", "uTransform",
-      "uOutputP3", "uFlipY", "uBlend", "uPremultiplied",
+      "uOutputP3", "uLinearSource", "uFlipY", "uBlend", "uPremultiplied",
     ]) {
       this.uniforms[name] = gl.getUniformLocation(prog, name);
     }
@@ -298,7 +305,15 @@ export class GLRenderer {
 
     let bytes = 0;
     try {
-      if (src.type === "pixels") {
+      if (src.type === "half") {
+        // RGBA16F is filterable in core WebGL2 — no extension needed — which is
+        // what lets an HDR still be scaled and zoomed like any other.
+        gl.texImage2D(
+          gl.TEXTURE_2D, 0, gl.RGBA16F, src.width, src.height, 0,
+          gl.RGBA, gl.HALF_FLOAT, src.data,
+        );
+        bytes = src.width * src.height * 8;
+      } else if (src.type === "pixels") {
         const format = src.channels === 3 ? gl.RGB : gl.RGBA;
         const internal = src.channels === 3 ? gl.RGB8 : gl.RGBA8;
         gl.texImage2D(
@@ -321,11 +336,12 @@ export class GLRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    if (existing) this.textureBytes -= existing.width * existing.height * 4;
+    if (existing) this.textureBytes -= existing.bytes;
     this.textures.set(key, {
       tex,
       width: src.width,
       height: src.height,
+      bytes,
       version,
       lastUsed: ++this.clock,
     });
@@ -350,7 +366,7 @@ export class GLRenderer {
       if (!oldestKey) break;
       const victim = this.textures.get(oldestKey)!;
       gl.deleteTexture(victim.tex);
-      this.textureBytes -= victim.width * victim.height * 4;
+      this.textureBytes -= victim.bytes;
       this.textures.delete(oldestKey);
     }
   }
@@ -455,6 +471,10 @@ export class GLRenderer {
     gl.uniform1i(u.uFlipY!, 0);
     gl.uniform1i(u.uBlend!, BLEND[opts.blend ?? "normal"]);
     gl.uniform1i(u.uPremultiplied!, opts.premultiplied ? 1 : 0);
+    // Per draw, not per frame: a playlist can hold an HDR still next to an
+    // ordinary 8-bit one, and the flip decides whether the texels get an sRGB
+    // decode or are taken as linear light.
+    gl.uniform1i(u.uLinearSource!, src.type === "half" ? 1 : 0);
 
     this.setBlend(opts.blend ?? "normal");
     gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -502,7 +522,7 @@ export class GLRenderer {
     for (const [k, v] of [...this.textures]) {
       if (!k.startsWith(prefix)) continue;
       gl.deleteTexture(v.tex);
-      this.textureBytes -= v.width * v.height * 4;
+      this.textureBytes -= v.bytes;
       this.textures.delete(k);
     }
   }

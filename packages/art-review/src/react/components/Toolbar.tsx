@@ -202,6 +202,11 @@ export function TransportBar({
 interface ViewBarProps {
   state: ViewerState;
   guides: GuideKind;
+  /**
+   * The current item carries more than display range, so exposure is a real
+   * control rather than a way to darken an already-clipped picture.
+   */
+  hdr?: boolean;
   onFlip: (h: boolean, v: boolean) => void;
   onRotate: () => void;
   onZoom: (z: number | "fit" | "actual") => void;
@@ -212,6 +217,7 @@ interface ViewBarProps {
 export function ViewBar({
   state,
   guides,
+  hdr = false,
   onFlip,
   onRotate,
   onZoom,
@@ -268,6 +274,35 @@ export function ViewBar({
       </div>
 
       <Divider />
+
+      {hdr && (
+        <>
+          <div
+            style={{ display: "flex", alignItems: "center", gap: 6 }}
+            title="Exposure in stops — an HDR frame keeps detail above white, so pulling down recovers blown highlights instead of just darkening"
+          >
+            <span style={{ fontSize: 11, color: "#8a8a8a", letterSpacing: 0.5 }}>EV</span>
+            <input
+              type="range"
+              min={-6}
+              max={6}
+              step={0.25}
+              value={state.color.exposure}
+              onChange={(e) => onColor({ exposure: Number(e.target.value) })}
+              style={{ width: 90 }}
+            />
+            <button
+              onClick={() => onColor({ exposure: 0 })}
+              style={textButton(state.color.exposure !== 0)}
+              title="Back to 0 EV"
+            >
+              {state.color.exposure > 0 ? "+" : ""}
+              {state.color.exposure.toFixed(2).replace(/\.?0+$/, "")}
+            </button>
+          </div>
+          <Divider />
+        </>
+      )}
 
       <button
         title="Value check — strip colour to judge values  V"

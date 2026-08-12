@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { hexToRgba, Smoother, simplify } from "../core/strokes";
 import { nextMarker, prevMarker } from "../core/fold";
+import { RGBE_TRANSFER } from "../core/rgbe";
 import type { Author, LoopMode, Stroke, StrokeTool, ViewerState } from "../core/types";
 import { GLRenderer, type ViewParams } from "../render/gl";
 import {
@@ -1280,6 +1281,7 @@ export function ArtReviewer({
           <ViewBar
             state={state}
             guides={state.guides}
+            hdr={currentItem?.colorSpace?.transfer === RGBE_TRANSFER}
             onFlip={(h, v) => dispatch({ a: "flip", h, v })}
             onRotate={() =>
               dispatch({ a: "rotate", deg: (((state.rotate + 90) % 360) as 0 | 90 | 180 | 270) })
