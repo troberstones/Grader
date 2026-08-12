@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { V3GradingView } from "@/components/rubric/v3-grading-view";
 import type { RubricGrading } from "@/hooks/use-rubric-grading";
-import { cn } from "@/lib/utils";
+import { cn, formatScore } from "@/lib/utils";
 
 type Level = {
   id: number;
@@ -18,13 +18,6 @@ type Level = {
 };
 
 const levelsHighToLow = (levels: Level[]) => [...levels].sort((a, b) => b.level - a.level);
-
-/**
- * Weighted V3 scores are sums of floats, so a total lands as 91.60000000000001
- * often enough to matter. Two decimals is finer than any rubric resolves to,
- * and this is display only — the saved score keeps its full precision.
- */
-const formatScore = (n: number) => String(Number(n.toFixed(2)));
 
 interface Props {
   grading: RubricGrading;

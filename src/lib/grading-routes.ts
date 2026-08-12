@@ -13,3 +13,10 @@ export const GRADING_ROUTE_PATTERNS = [
 export function isGradingRoute(pathname: string): boolean {
   return GRADING_ROUTE_PATTERNS.some((p) => p.test(pathname));
 }
+
+/** The art reviewer (or the legacy viewer), as opposed to the grade sheet. */
+const REVIEW_ROUTE_PATTERN = /^\/assignments\/\d+\/review(-v\d+)?$/;
+
+export function isReviewRoute(pathname: string): boolean {
+  return REVIEW_ROUTE_PATTERN.test(pathname);
+}

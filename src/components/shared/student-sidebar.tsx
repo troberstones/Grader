@@ -1,17 +1,26 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { usePathname } from "next/navigation";
 import { CheckCircle2, Clock, Circle, Users } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatScore } from "@/lib/utils";
+import { isReviewRoute } from "@/lib/grading-routes";
 import { useGrading } from "./grading-context";
 import type { GradeStatus } from "@/types/grading";
 
 /**
  * Shared student sidebar that lives in the grading layout.
  * Persists (including scroll position) across grade ↔ review navigation.
+ *
+ * On the grade sheet each row carries the net ID and the score, because that is
+ * the view where you are looking things up. On the review route it is names
+ * only, which buys back both the second line of every row and 48px of width for
+ * the artwork — and keeps a column of everyone's marks off a screen that may be
+ * mirrored to a projector. See docs/security.md.
  */
 export function StudentSidebar() {
   const { students, selectedStudentId, selectStudent, scrollRef } = useGrading();
+  const detailed = !isReviewRoute(usePathname());
 
   const gradedCount = students.filter((s) => s.grade?.status === "graded").length;
   const pct = students.length > 0 ? Math.round((gradedCount / students.length) * 100) : 0;
@@ -29,7 +38,12 @@ export function StudentSidebar() {
   }, [selectedStudentId]);
 
   return (
-    <div className="w-56 shrink-0 border-r flex flex-col bg-sidebar">
+    <div
+      className={cn(
+        "shrink-0 border-r flex flex-col bg-sidebar transition-[width]",
+        detailed ? "w-56" : "w-44",
+      )}
+    >
       {/* Progress summary */}
       <div className="px-4 py-3 border-b">
         <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
@@ -67,13 +81,13 @@ export function StudentSidebar() {
               <StatusIcon status={status} />
               <div className="flex-1 min-w-0">
                 <div className="truncate font-medium">{student.sortName}</div>
-                {student.netId && (
+                {detailed && student.netId && (
                   <div className="text-xs text-muted-foreground">{student.netId}</div>
                 )}
               </div>
-              {score !== null && score !== undefined && (
+              {detailed && score !== null && score !== undefined && (
                 <span className="text-xs tabular-nums shrink-0 text-muted-foreground">
-                  {score}
+                  {formatScore(score)}
                 </span>
               )}
             </button>

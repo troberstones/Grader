@@ -6,6 +6,7 @@ import { ClipboardList, Image as ImageIcon, PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useGrading } from "./grading-context";
 import { useViewLayout } from "./view-layout";
+import { isReviewRoute } from "@/lib/grading-routes";
 import { cn } from "@/lib/utils";
 
 /**
@@ -27,9 +28,8 @@ export function ViewSwitch() {
   const { selectedStudentId } = useGrading();
   const { canDock, rubricDocked, setRubricDocked } = useViewLayout();
 
-  const match = pathname.match(/^\/assignments\/(\d+)(\/.*)?$/);
-  const assignmentId = match?.[1];
-  const onArtwork = Boolean(match?.[2]?.startsWith("/review"));
+  const assignmentId = pathname.match(/^\/assignments\/(\d+)(\/|$)/)?.[1];
+  const onArtwork = isReviewRoute(pathname);
 
   const href = (mode: "rubric" | "artwork") => {
     const student = selectedStudentId ? `?studentId=${selectedStudentId}` : "";
