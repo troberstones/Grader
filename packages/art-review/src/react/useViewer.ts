@@ -12,7 +12,7 @@ import { GLRenderer, type ViewParams } from "../render/gl";
 import { createSource, DecodedVideoSource, VideoElementSource } from "../sources";
 import type { CacheStats, FrameSource, SourceContext } from "../sources/types";
 import { LayeredSource } from "../sources/layered";
-import { sharedLedger } from "../sources/ledger";
+import { sharedLedger, storedCacheLimit } from "../sources/ledger";
 import type { SessionApi } from "./useSession";
 
 /** Master heartbeat. Cheap: one small message, and idle beats change nothing. */
@@ -20,6 +20,8 @@ const SYNC_INTERVAL_MS = 5_000;
 
 export interface ViewerApi {
   state: ViewerState;
+  /** The detected memory tier. Exposed so the cache control can offer "Auto". */
+  budget: Budget;
   item: ReviewItem | null;
   items: ReviewItem[];
   source: FrameSource | null;
@@ -131,8 +133,11 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   // declared above the source effect so it runs first. The ledger's own default
   // is a conservative 512 MB, which on a workstation would cap an HDR sequence
   // at a fraction of what actually fits.
+  //
+  // A ceiling set by hand wins over detection: only the person at the machine
+  // knows they have a shot open that is worth holding whole.
   useEffect(() => {
-    sharedLedger(budget.ram);
+    sharedLedger(storedCacheLimit() ?? budget.ram);
   }, [budget.ram]);
 
   // ── Source lifecycle ────────────────────────────────────────────────────────
@@ -582,6 +587,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   }, [containerRef, overlayCanvasRef, invalidate]);
 
   return {
+    budget,
     state,
     item,
     items,

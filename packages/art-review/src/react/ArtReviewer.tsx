@@ -16,7 +16,7 @@ import {
   type GuideKind,
 } from "../render/overlay";
 import { LayeredSource } from "../sources/layered";
-import { sharedLedger } from "../sources/ledger";
+import { setStoredCacheLimit, sharedLedger, storedCacheLimit } from "../sources/ledger";
 import { VideoElementSource } from "../sources/video-element";
 import type { ReviewChannel, ReviewDataAdapter } from "../adapter/types";
 import type { ReviewItem } from "../core/types";
@@ -28,7 +28,7 @@ import { Presence } from "./components/Presence";
 import { Timeline } from "./components/Timeline";
 import { InkRail, TransportBar, ViewBar, type ToolState } from "./components/Toolbar";
 import { isTypingTarget } from "./keymap";
-import { C, label, noSelect, selectableText, textButton } from "./styles";
+import { C, label, noSelect, select as selectStyle, selectableText, textButton } from "./styles";
 import { useAnnotations } from "./useAnnotations";
 import { useSession } from "./useSession";
 import { useViewer } from "./useViewer";
@@ -1097,7 +1097,7 @@ export function ArtReviewer({
           />
           <span style={label}>Audio</span>
         </label>
-        <MemoryReadout />
+        <MemoryReadout autoBytes={viewer.budget.ram} item={item} />
         <div style={{ flex: 1, minWidth: 8 }} />
         {/* Shrinkable: the host's slot (assignment name, student nav) is wider
             than the panel once a sidebar is open, and an unshrinkable child
@@ -1317,7 +1317,16 @@ export function ArtReviewer({
  * this is the number that decides whether the tab is comfortable or pushing
  * the machine into swap, and it should never be a mystery.
  */
-function MemoryReadout() {
+const MB = 1024 * 1024;
+
+/**
+ * Cache ceilings offered by hand. Stops at 2 GB because the ledger clamps
+ * there anyway: the constraint is Chrome's renderer heap, not the machine's
+ * memory, and a tab that asks for more gets killed rather than throttled.
+ */
+const CACHE_CHOICES = [512 * MB, 1024 * MB, 1536 * MB, 2048 * MB];
+
+function MemoryReadout({ autoBytes, item }: { autoBytes: number; item: ReviewItem | null }) {
   const ledger = sharedLedger();
   const [, force] = useState(0);
 
@@ -1334,17 +1343,53 @@ function MemoryReadout() {
   const limitMb = ledger.bytesLimit / 1024 / 1024;
   const pressure = ledger.pressure;
 
+  // What the current item costs to hold whole — the number that decides whether
+  // playback is smooth or decodes a frame at a time. HDR frames are held twice
+  // over, packed and unpacked, which is where the factor of three comes from.
+  const perFrame = item
+    ? item.width * item.height * (item.colorSpace?.transfer === RGBE_TRANSFER ? 12 : 4)
+    : 0;
+  const wholeItemMb = (perFrame * (item?.frameCount ?? 1)) / 1024 / 1024;
+  const fits = wholeItemMb > 0 && wholeItemMb <= limitMb;
+
+  const hint = item
+    ? ` ${item.label} needs ${wholeItemMb.toFixed(0)} MB to hold every frame — ${
+        fits ? "it fits, so playback runs from memory." : "it does not fit, so playback re-decodes."
+      }`
+    : "";
+
   return (
-    <span
-      title={`Decoded frame cache across every open file. Capped at ${limitMb.toFixed(0)} MB — a browser tab, not the machine.`}
-      style={{
-        ...label,
-        color: pressure > 0.9 ? C.primary : C.faint,
-        fontVariantNumeric: "tabular-nums",
-        flexShrink: 0,
-      }}
-    >
-      {usedMb.toFixed(0)}/{limitMb.toFixed(0)} MB
+    <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+      <span
+        title={`Decoded frame cache across every open file.${hint}`}
+        style={{
+          ...label,
+          color: pressure > 0.9 ? C.primary : C.faint,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {usedMb.toFixed(0)}/{limitMb.toFixed(0)} MB
+      </span>
+      <select
+        value={storedCacheLimit() ?? ""}
+        onChange={(e) => {
+          setStoredCacheLimit(e.target.value ? Number(e.target.value) : null, autoBytes);
+          force((n) => n + 1);
+        }}
+        title={
+          "Frame cache ceiling. Detection guesses from the browser, which cannot know a whole " +
+          "shot is worth holding resident — raise it when a sequence will not fit." +
+          hint
+        }
+        style={{ ...selectStyle, padding: "1px 4px", fontSize: 10 }}
+      >
+        <option value="">Auto ({(autoBytes / MB).toFixed(0)})</option>
+        {CACHE_CHOICES.map((b) => (
+          <option key={b} value={b}>
+            {b >= 1024 * MB ? `${(b / 1024 / MB).toFixed(b % (1024 * MB) ? 1 : 0)} GB` : `${b / MB} MB`}
+          </option>
+        ))}
+      </select>
     </span>
   );
 }

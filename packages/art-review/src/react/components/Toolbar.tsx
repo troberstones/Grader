@@ -293,7 +293,17 @@ export function ViewBar({
             />
             <button
               onClick={() => onColor({ exposure: 0 })}
-              style={textButton(state.color.exposure !== 0)}
+              style={{
+                ...textButton(state.color.exposure !== 0),
+                // Fixed width and tabular figures: this label changes on every
+                // pointermove while the slider is dragged, and letting it size
+                // to its text shoved the rest of the bar sideways the whole way.
+                // Wide enough for "-3.25", the longest value the range allows.
+                width: 48,
+                textAlign: "center",
+                fontVariantNumeric: "tabular-nums",
+                padding: "3px 0",
+              }}
               title="Back to 0 EV"
             >
               {state.color.exposure > 0 ? "+" : ""}

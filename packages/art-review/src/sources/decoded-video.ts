@@ -57,7 +57,11 @@ export class DecodedVideoSource implements FrameSource {
     this.width = item.width;
     this.height = item.height;
     this.frameCount = Math.max(1, item.frameCount);
-    this.ledger = ledger ?? sharedLedger(budget.ram);
+    // Take the ledger as it is rather than sizing it. The viewer sets the
+    // ceiling once, from detection or from whatever the instructor chose, and a
+    // source resizing it on construction quietly reverted that choice the next
+    // time a video was opened.
+    this.ledger = ledger ?? sharedLedger();
 
     const choice = chooseCacheSize(
       budget,

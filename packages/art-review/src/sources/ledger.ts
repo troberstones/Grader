@@ -73,3 +73,35 @@ export function sharedLedger(limit?: number): MemoryLedger {
   else if (limit !== undefined && limit !== shared.bytesLimit) shared.setLimit(limit);
   return shared;
 }
+
+const PREF_KEY = "art-review.cacheBytes";
+
+/**
+ * A cache ceiling chosen by hand, if one has been.
+ *
+ * Detection guesses from the user agent and device memory, which is the right
+ * default but cannot know that this particular machine is a review workstation
+ * with a 49-frame EXR shot open. Holding a whole shot resident is the
+ * difference between smooth playback and a decode on every frame, so the number
+ * is worth handing over. Null means "keep detecting".
+ */
+export function storedCacheLimit(): number | null {
+  try {
+    const n = Number(localStorage.getItem(PREF_KEY));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    // Storage can throw outright in private mode rather than merely being empty.
+    return null;
+  }
+}
+
+/** Set the ceiling and remember it. Null goes back to detection. */
+export function setStoredCacheLimit(bytes: number | null, detected: number): void {
+  try {
+    if (bytes === null) localStorage.removeItem(PREF_KEY);
+    else localStorage.setItem(PREF_KEY, String(bytes));
+  } catch {
+    // Not being able to remember it should not stop it taking effect now.
+  }
+  sharedLedger().setLimit(bytes ?? detected);
+}

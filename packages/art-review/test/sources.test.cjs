@@ -318,18 +318,22 @@ function sequence(count) {
   };
 }
 
-test("sequence: frames beyond the limit are evicted furthest-first and closed", async () => {
+test("sequence: frames beyond what fits are evicted furthest-first and closed", async () => {
   reset();
   const item = sequence(60);
+  const perFrame = 640 * 360 * 4;
+  sharedLedger().setLimit(perFrame * 20);
   const src = new SequenceSource(item, CTX);
 
   for (let f = 0; f < 60; f++) await src.request(f);
 
   const stats = src.stats();
-  assert.equal(stats.cached, 48, "the LRU stays at the declared limit");
-  assert.ok(stats.ranges.length >= 1);
-  // Eviction is by distance from the frame just decoded, so the tail survives.
-  assert.ok(src.peek(59).exact);
+  assert.ok(stats.cached <= 21, `held ${stats.cached} against room for 20`);
+  // Eviction is by distance from the frame just decoded, so the tail survives
+  // and the frames furthest behind the playhead are the ones that went.
+  assert.ok(src.peek(59).exact, "the frame just decoded is still resident");
+  assert.equal(src.peek(0).exact, false, "the far end was evicted");
+  src.dispose();
 });
 
 test("sequence: peek falls back to the nearest resident frame while decoding", async () => {
@@ -427,16 +431,19 @@ test("sequence: prefetch asks only for frames the window can keep", async () => 
   src.dispose();
 });
 
-test("sequence: an ordinary sequence still fills its full count window", async () => {
+test("sequence: a shot that fits is held whole", async () => {
+  // The point of exposing the cache size at all. Twelve times the room an HDR
+  // window needs, because a plain frame is a twelfth the cost — the same
+  // ledger, a very different number of frames.
   reset();
   const item = sequence(60);
-  // Twelve times the room an HDR window needs, because a plain frame is a
-  // twelfth the cost — the same ledger, a very different number of frames.
-  sharedLedger().setLimit(640 * 360 * 4 * 60);
+  sharedLedger().setLimit(640 * 360 * 4 * 64);
 
   const src = new SequenceSource(item, CTX);
   for (let f = 0; f < 60; f++) await src.request(f);
-  assert.equal(src.stats().cached, 48, "bounded by the count cap, not memory");
+
+  assert.equal(src.stats().cached, 60, "no arbitrary count cap short of the clip");
+  assert.equal(src.stats().mode, "full");
   src.dispose();
 });
 

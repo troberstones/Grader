@@ -48,16 +48,20 @@ export class StillSource extends BitmapCacheSource {
 
 /** A pre-extracted image sequence, or PDF pages rasterised at ingest. */
 export class SequenceSource extends BitmapCacheSource {
-  // A count cap only. What a window actually costs varies twelvefold between an
-  // ordinary frame and an HDR one, so the memory bound is the shared ledger's
-  // job — see BitmapCacheSource.reserveFor.
-  protected limit = 48;
+  protected limit: number;
 
   constructor(
     item: ReviewItem,
     private ctx: SourceContext,
   ) {
     super(item, item.width, item.height, Math.max(1, item.frameUrls?.length ?? item.frameCount));
+
+    // Hold the whole shot if it will fit, and let the ledger say whether it
+    // does. A fixed count cap cannot: what a frame costs varies twelvefold
+    // between an ordinary one and an HDR one, so any number picked here is
+    // either wasteful or — as 48 was against a 49-frame shot — permanently one
+    // frame short, re-decoding that frame on every pass round the loop.
+    this.limit = this.frameCount;
   }
 
   protected async load(frame: number): Promise<ImageBitmap> {
