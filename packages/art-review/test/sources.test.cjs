@@ -337,14 +337,27 @@ test("sequence: frames beyond what fits are evicted furthest-first and closed", 
   sharedLedger().setLimit(perFrame * 20);
   const src = track(new SequenceSource(item, CTX));
 
-  for (let f = 0; f < 60; f++) await src.request(f);
+  // The playhead is parked at 30 while frames stream in from both ends.
+  for (let f = 0; f < 60; f++) {
+    src.peek(30);
+    await src.request(f);
+  }
 
+  // peek() starts its own request when the frame is missing, so let every
+  // in-flight decode land before judging what the window settled on.
+  for (let i = 0; i < 10; i++) await settle();
   const stats = src.stats();
   assert.ok(stats.cached <= 21, `held ${stats.cached} against room for 20`);
-  // Eviction is by distance from the frame just decoded, so the tail survives
-  // and the frames furthest behind the playhead are the ones that went.
-  assert.ok(src.peek(59).exact, "the frame just decoded is still resident");
-  assert.equal(src.peek(0).exact, false, "the far end was evicted");
+  // Eviction is by distance from the playhead, so the window closes around it
+  // wherever the frames happened to arrive from.
+  assert.ok(src.peek(30).exact, "the frame being shown is resident");
+  // The invariant, rather than a guess at which frames survived: everything
+  // still held is near the playhead. Both far ends went.
+  const held = stats.ranges.flatMap(([a, b]) =>
+    Array.from({ length: b - a + 1 }, (_, i) => a + i),
+  );
+  const furthest = Math.max(...held.map((f) => Math.abs(f - 30)));
+  assert.ok(furthest <= 21, `kept frame ${30 + furthest} while parked on 30`);
   src.dispose();
 });
 
@@ -471,6 +484,52 @@ test("sequence: a trim never collapses the cache to the playhead alone", async (
   sharedLedger().setLimit(1);
 
   assert.ok(src.stats().cached >= 3, `collapsed to ${src.stats().cached}`);
+  src.dispose();
+});
+
+test("sequence: a stopped playhead settles on a fixed set of frames", async () => {
+  // The wobble: with the window one frame larger than what fits, every arrival
+  // evicted a frame that prefetch immediately asked for again, so the cached
+  // region kept shifting a frame either side of a stationary playhead.
+  reset();
+  const item = hdrSequence(40);
+  const perFrame = 100 * 100 * 12;
+  // Deliberately awkward: an even window, and another source already holding
+  // part of the ceiling, which is the case that used to creep.
+  sharedLedger().setLimit(perFrame * 20);
+  sharedLedger().reserve(perFrame * 6);
+
+  const src = new SequenceSource(item, CTX);
+
+  // Ten passes of what the render loop does while paused on frame 20.
+  const settleRound = async () => {
+    src.peek(20);
+    src.prefetch(20, 30);
+    for (let i = 0; i < 8; i++) await settle();
+  };
+  for (let i = 0; i < 10; i++) await settleRound();
+
+  const ranges = JSON.stringify(src.stats().ranges);
+  fetches = [];
+  for (let i = 0; i < 6; i++) await settleRound();
+
+  assert.equal(JSON.stringify(src.stats().ranges), ranges, "the cached region moved");
+  assert.deepEqual(fetches, [], "nothing was re-fetched once it had settled");
+  src.dispose();
+});
+
+test("sequence: the window is what is left after the other sources, not the whole ceiling", async () => {
+  reset();
+  const item = hdrSequence(40);
+  const perFrame = 100 * 100 * 12;
+  sharedLedger().setLimit(perFrame * 20);
+
+  const src = new SequenceSource(item, CTX);
+  assert.equal(src.windowLimit, 20, "all of it, with nobody else spending");
+
+  // Something else takes half the ceiling.
+  sharedLedger().reserve(perFrame * 10);
+  assert.equal(src.windowLimit, 10, "planning against what is actually left");
   src.dispose();
 });
 

@@ -148,9 +148,26 @@ export abstract class BitmapCacheSource implements FrameSource {
           bmp.close?.();
           return;
         }
-        this.reserveFor(f);
+        // A frame that finished decoding further from the playhead than
+        // anything already resident has arrived too late to be worth a slot:
+        // taking one means evicting a nearer frame, which prefetch asks for
+        // again on the next tick. That swap, repeating, is most of what makes
+        // a stopped playhead's cached region creep.
+        if (
+          this.cache.size >= this.windowLimit &&
+          Math.abs(f - this.lastFrame) > this.furthestDistance(this.lastFrame)
+        ) {
+          bmp.close?.();
+          return;
+        }
+
+        // Anchored on the playhead, not on the frame that just arrived.
+        // Evicting furthest-from-f lets a frame landing at the edge of the
+        // window throw out one nearer the middle, which prefetch then asks for
+        // again — the resident set shuffles instead of settling.
+        this.reserveFor(this.lastFrame);
         this.cache.set(f, bmp);
-        this.evict(f);
+        this.evict(this.lastFrame);
         this.version++;
         this.emit();
       } catch (e) {
@@ -169,7 +186,11 @@ export abstract class BitmapCacheSource implements FrameSource {
   }
 
   prefetch(center: number, radius: number): void {
-    const r = Math.min(radius, Math.max(1, Math.floor(this.windowLimit / 2)));
+    // A window of N frames centred on the playhead reaches (N-1)/2 either side.
+    // Halving N asks for N+1 frames, one more than can ever be held — so the
+    // odd frame out was evicted on arrival and requested again immediately,
+    // for ever. That is the wobble either side of a stopped playhead.
+    const r = Math.min(radius, Math.max(1, Math.floor((this.windowLimit - 1) / 2)));
     for (let d = 0; d <= r; d++) {
       for (const f of d === 0 ? [center] : [center + d, center - d]) {
         if (f >= 0 && f < this.frameCount && !this.cache.has(f) && this.inflight.size < 4) {
@@ -192,16 +213,25 @@ export abstract class BitmapCacheSource implements FrameSource {
   }
 
   /**
-   * The window that actually fits, as a frame count.
+   * The window that actually fits *this* source, as a frame count.
    *
    * `limit` alone describes a window nobody can pay for once frames get large:
    * prefetch would keep asking for 24 frames while memory allows 20, evict one
    * to make room for each new arrival, and re-decode the evicted one on the
-   * next pass — a viewer sitting idle would decode for ever. Prefetch and
-   * eviction both work from this instead.
+   * next pass — a viewer sitting idle would decode for ever.
+   *
+   * The whole ceiling is not the answer either, because the other sources are
+   * spending from it too. What is left is the ceiling minus everyone else's
+   * usage, which is total usage less our own. Planning against the full
+   * ceiling while a video holds a third of it produces the same thrash in a
+   * quieter form: a resident set that creeps a frame either side of the
+   * playhead for ever without settling.
    */
   protected get windowLimit(): number {
-    const room = Math.floor(sharedLedger().bytesLimit / Math.max(1, this.bytesPerFrame));
+    const ledger = sharedLedger();
+    const others = Math.max(0, ledger.bytesUsed - this.reserved);
+    const mine = Math.max(0, ledger.bytesLimit - others);
+    const room = Math.floor(mine / Math.max(1, this.bytesPerFrame));
     return Math.max(3, Math.min(this.limit, room));
   }
 
@@ -226,6 +256,13 @@ export abstract class BitmapCacheSource implements FrameSource {
     while (this.cache.size > this.windowLimit) {
       if (!this.dropFurthest(near)) break;
     }
+  }
+
+  /** How far from `near` the most distant resident frame sits. -1 if empty. */
+  protected furthestDistance(near: number): number {
+    let worst = -1;
+    for (const k of this.cache.keys()) worst = Math.max(worst, Math.abs(k - near));
+    return worst;
   }
 
   /** Drop the resident frame furthest from `near`. False if none can go. */
