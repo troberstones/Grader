@@ -1,0 +1,12 @@
+# Symlink to grader's node_modules so the module resolves React et al. from a
+# single install — see TESTING.md. Never committed.
+node_modules
+
+# Test scratch: compiled core (npm test), ingest smoke output, generated PSD/PDF
+# fixtures. All reproducible with `node test/make-fixtures.cjs`.
+test/.build/
+test/.out/
+test/.fixtures/
+
+.DS_Store
+*.tsbuildinfo

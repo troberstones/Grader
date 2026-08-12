@@ -1,0 +1,334 @@
+import { execFile } from "node:child_process";
+import { mkdir, stat } from "node:fs/promises";
+import path from "node:path";
+import { promisify } from "node:util";
+
+const run = promisify(execFile);
+
+/**
+ * Ingest: never ask the browser to decode an arbitrary file.
+ *
+ * Students hand in .mov (often ProRes or HEVC), .avi, .tiff and .psd — none of
+ * which a browser will reliably display. Everything gets a web-safe derivative
+ * at upload, and video gets an all-intra proxy so random access is free.
+ */
+
+export interface ProbeResult {
+  width: number;
+  height: number;
+  fps: number;
+  frameCount: number;
+  duration: number;
+  codec: string;
+  pixFmt: string;
+  colorPrimaries?: string;
+  colorTransfer?: string;
+  hasAudio: boolean;
+}
+
+export interface Derivative {
+  variant: "original" | "proxy" | "poster" | "page" | "composite" | "layer";
+  idx: number;
+  path: string;
+  mime: string;
+  width?: number;
+  height?: number;
+  fps?: number;
+  frameCount?: number;
+  duration?: number;
+  colorPrimaries?: string;
+  colorTransfer?: string;
+}
+
+export interface IngestOptions {
+  /** Where derivatives are written. */
+  outDir: string;
+  /** Basename (no extension) for generated files. */
+  baseName: string;
+  /** Cap proxy resolution. */
+  maxWidth?: number;
+  /** Encode every frame as a keyframe. Costs ~4× bitrate, buys free seeking. */
+  allIntra?: boolean;
+  ffmpegPath?: string;
+  ffprobePath?: string;
+  /** Skip work when the derivative already exists. */
+  force?: boolean;
+}
+
+const VIDEO_EXT = new Set([".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpg", ".mpeg"]);
+const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]);
+const CONVERT_EXT = new Set([".tif", ".tiff", ".exr", ".dpx", ".tga"]);
+
+export function classify(fileName: string): "video" | "image" | "convert" | "psd" | "pdf" | null {
+  const ext = path.extname(fileName).toLowerCase();
+  if (VIDEO_EXT.has(ext)) return "video";
+  if (IMAGE_EXT.has(ext)) return "image";
+  if (CONVERT_EXT.has(ext)) return "convert";
+  if (ext === ".psd" || ext === ".psb") return "psd";
+  if (ext === ".pdf") return "pdf";
+  return null;
+}
+
+export async function probe(input: string, ffprobePath = "ffprobe"): Promise<ProbeResult> {
+  const { stdout } = await run(ffprobePath, [
+    "-v", "error",
+    "-show_entries",
+    "stream=index,codec_type,codec_name,width,height,r_frame_rate,avg_frame_rate,nb_frames,duration,pix_fmt,color_primaries,color_transfer",
+    "-show_entries", "format=duration",
+    "-of", "json",
+    input,
+  ], { maxBuffer: 8 * 1024 * 1024 });
+
+  const data = JSON.parse(stdout) as {
+    streams?: Array<Record<string, string | number>>;
+    format?: { duration?: string };
+  };
+  const streams = data.streams ?? [];
+  const v = streams.find((s) => s.codec_type === "video");
+  if (!v) throw new Error("no video stream");
+
+  const fps = parseRate(String(v.avg_frame_rate ?? "")) || parseRate(String(v.r_frame_rate ?? "")) || 24;
+  const duration =
+    Number(v.duration) || Number(data.format?.duration) || 0;
+
+  // nb_frames is missing from plenty of containers; derive it rather than
+  // decoding the whole file with -count_frames.
+  let frameCount = Number(v.nb_frames) || 0;
+  if (!frameCount && duration && fps) frameCount = Math.round(duration * fps);
+
+  return {
+    width: Number(v.width) || 0,
+    height: Number(v.height) || 0,
+    fps,
+    frameCount: Math.max(1, frameCount),
+    duration,
+    codec: String(v.codec_name ?? ""),
+    pixFmt: String(v.pix_fmt ?? ""),
+    colorPrimaries: v.color_primaries ? String(v.color_primaries) : undefined,
+    colorTransfer: v.color_transfer ? String(v.color_transfer) : undefined,
+    hasAudio: streams.some((s) => s.codec_type === "audio"),
+  };
+}
+
+function parseRate(r: string): number {
+  const [num, den] = r.split("/").map(Number);
+  if (!num || !den) return 0;
+  const v = num / den;
+  return Number.isFinite(v) && v > 0 && v < 1000 ? v : 0;
+}
+
+async function exists(p: string): Promise<boolean> {
+  try {
+    await stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Transcode to an all-intra H.264 proxy.
+ *
+ * `-g 1` makes every frame a keyframe: decoding frame 87 no longer walks a GOP
+ * from frame 60, reverse decode stops being a special case, and the <video>
+ * fallback can seek exactly. Bitrate roughly quadruples, which is nothing on a
+ * studio LAN and is why the original is always kept alongside.
+ */
+export async function makeVideoProxy(
+  input: string,
+  opts: IngestOptions & { probe?: ProbeResult },
+): Promise<Derivative> {
+  const ffmpeg = opts.ffmpegPath ?? "ffmpeg";
+  await mkdir(opts.outDir, { recursive: true });
+  const out = path.join(opts.outDir, `${opts.baseName}.proxy.mp4`);
+
+  const info = opts.probe ?? (await probe(input, opts.ffprobePath));
+  const maxWidth = opts.maxWidth ?? 1920;
+
+  if (!opts.force && (await exists(out))) {
+    return proxyDerivative(out, info, maxWidth);
+  }
+
+  const args = [
+    "-y",
+    "-i", input,
+    "-map", "0:v:0",
+    "-c:v", "libx264",
+    "-crf", "18",
+    "-preset", "fast",
+    "-pix_fmt", "yuv420p",
+    "-vf", `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
+    "-movflags", "+faststart",
+  ];
+  if (opts.allIntra !== false) args.push("-g", "1", "-bf", "0");
+  if (info.hasAudio) args.push("-map", "0:a:0?", "-c:a", "aac", "-b:a", "160k");
+  else args.push("-an");
+  args.push(out);
+
+  await run(ffmpeg, args, { maxBuffer: 16 * 1024 * 1024 });
+  return proxyDerivative(out, info, maxWidth);
+}
+
+function proxyDerivative(out: string, info: ProbeResult, maxWidth: number): Derivative {
+  const scale = Math.min(1, maxWidth / Math.max(1, info.width));
+  const w = Math.round(info.width * scale);
+  return {
+    variant: "proxy",
+    idx: 0,
+    path: out,
+    mime: "video/mp4",
+    // -2 keeps height even; mirror that so stored dimensions match the file.
+    width: w - (w % 2),
+    height: Math.round(info.height * scale) - (Math.round(info.height * scale) % 2),
+    fps: info.fps,
+    frameCount: info.frameCount,
+    duration: info.duration,
+    colorPrimaries: info.colorPrimaries,
+    colorTransfer: info.colorTransfer,
+  };
+}
+
+export async function makePoster(
+  input: string,
+  opts: IngestOptions,
+): Promise<Derivative | null> {
+  const ffmpeg = opts.ffmpegPath ?? "ffmpeg";
+  await mkdir(opts.outDir, { recursive: true });
+  const out = path.join(opts.outDir, `${opts.baseName}.poster.jpg`);
+  if (!opts.force && (await exists(out))) {
+    return { variant: "poster", idx: 0, path: out, mime: "image/jpeg" };
+  }
+  try {
+    await run(ffmpeg, [
+      "-y", "-i", input,
+      "-frames:v", "1",
+      "-vf", "scale='min(640,iw)':-2",
+      "-q:v", "4",
+      out,
+    ]);
+    return { variant: "poster", idx: 0, path: out, mime: "image/jpeg" };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Normalise a still image.
+ *
+ * Matrix/TRC ICC profiles (sRGB, AdobeRGB, Display P3, ProPhoto — nearly every
+ * RGB working space) could be applied in the shader, but converting once at
+ * ingest is simpler and covers LUT-based profiles too, which cannot go in a
+ * shader at all. The original is always kept.
+ */
+export async function normaliseImage(
+  input: string,
+  opts: IngestOptions & { toColourSpace?: "srgb" | "p3" },
+): Promise<Derivative> {
+  const sharp = (await import("sharp")).default;
+  await mkdir(opts.outDir, { recursive: true });
+  const out = path.join(opts.outDir, `${opts.baseName}.view.png`);
+
+  const image = sharp(input, { limitInputPixels: 1_000_000_000, unlimited: true });
+  const meta = await image.metadata();
+
+  if (!opts.force && (await exists(out))) {
+    return {
+      variant: "composite",
+      idx: 0,
+      path: out,
+      mime: "image/png",
+      width: meta.width,
+      height: meta.height,
+    };
+  }
+
+  const maxWidth = opts.maxWidth ?? 4096;
+  let pipeline = image;
+  if (meta.icc) pipeline = pipeline.toColourspace("srgb");
+  if ((meta.width ?? 0) > maxWidth) pipeline = pipeline.resize({ width: maxWidth });
+
+  const info = await pipeline.png({ compressionLevel: 6 }).toFile(out);
+  return {
+    variant: "composite",
+    idx: 0,
+    path: out,
+    mime: "image/png",
+    width: info.width,
+    height: info.height,
+  };
+}
+
+/** Everything needed to register one submission's media derivatives. */
+export interface IngestResult {
+  kind: "video" | "still" | "layered" | "pages";
+  derivatives: Derivative[];
+  width: number;
+  height: number;
+  frameCount: number;
+  fps: number | null;
+  duration: number | null;
+  warnings: string[];
+}
+
+export async function ingestFile(
+  input: string,
+  fileName: string,
+  opts: IngestOptions,
+): Promise<IngestResult> {
+  const warnings: string[] = [];
+  const kind = classify(fileName);
+
+  if (kind === "video") {
+    const info = await probe(input, opts.ffprobePath);
+    const proxy = await makeVideoProxy(input, { ...opts, probe: info });
+    const poster = await makePoster(input, opts);
+    return {
+      kind: "video",
+      derivatives: poster ? [proxy, poster] : [proxy],
+      width: proxy.width ?? info.width,
+      height: proxy.height ?? info.height,
+      frameCount: info.frameCount,
+      fps: info.fps,
+      duration: info.duration,
+      warnings,
+    };
+  }
+
+  if (kind === "psd") {
+    const { ingestPsd } = await import("./psd");
+    return ingestPsd(input, opts);
+  }
+
+  if (kind === "pdf") {
+    // No poppler/ghostscript/ImageMagick on this machine, so pages are
+    // rasterised client-side by pdf.js instead. Page count comes from the file.
+    const { pdfPageCount } = await import("./pdf");
+    const pages = await pdfPageCount(input).catch(() => 1);
+    return {
+      kind: "pages",
+      derivatives: [],
+      width: 1275,
+      height: 1650,
+      frameCount: pages,
+      fps: null,
+      duration: null,
+      warnings: ["PDF pages render in the browser; dimensions are per-page"],
+    };
+  }
+
+  if (kind === "image" || kind === "convert") {
+    const view = await normaliseImage(input, opts);
+    return {
+      kind: "still",
+      derivatives: [view],
+      width: view.width ?? 0,
+      height: view.height ?? 0,
+      frameCount: 1,
+      fps: null,
+      duration: null,
+      warnings,
+    };
+  }
+
+  throw new Error(`unsupported file type: ${fileName}`);
+}

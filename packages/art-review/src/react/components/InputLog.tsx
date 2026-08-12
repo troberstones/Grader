@@ -1,0 +1,245 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { C, label, selectableText, textButton } from "../styles";
+
+/**
+ * A live tail of pointer input, for working out where a stroke went.
+ *
+ * The raw event is only half the story — a stroke that never appears was
+ * usually routed somewhere else, so every entry carries the decision the
+ * handler made as well as the coordinates that produced it.
+ */
+export interface InputEntry {
+  t: number;
+  phase: "down" | "move" | "up" | "cancel" | "lost";
+  pointerId: number;
+  type: string;
+  pressure: number;
+  /** Media-normalised, the same space strokes are stored in. */
+  x: number;
+  y: number;
+  buttons: number;
+  /** What the handler did with it. Absent for plain moves. */
+  note?: string;
+  /** Consecutive identical moves are folded into one line. */
+  count: number;
+}
+
+const PHASE_COLOR: Record<InputEntry["phase"], string> = {
+  down: "#7ee787",
+  move: "#8b949e",
+  up: "#79c0ff",
+  cancel: "#ff7b72",
+  lost: "#ffa657",
+};
+
+/** `gap` is the pause before this event — the useful number when a stroke is
+ *  missing, since it reads the same whichever end of the list you start from. */
+export function formatEntry(e: InputEntry, gap: number): string {
+  const t = `+${gap}ms`.padStart(8, " ");
+  const phase = (e.phase + (e.count > 1 ? `×${e.count}` : "")).padEnd(9, " ");
+  const id = `#${e.pointerId}`.padEnd(6, " ");
+  const type = e.type.padEnd(6, " ");
+  const xy = `${e.x.toFixed(3)},${e.y.toFixed(3)}`.padEnd(14, " ");
+  return (
+    `${t}  ${phase}${id}${type}b${e.buttons}  p${e.pressure.toFixed(2)}  ${xy}` +
+    (e.note ? `→ ${e.note}` : "")
+  );
+}
+
+interface Props {
+  entries: InputEntry[];
+  onClear: () => void;
+  onClose: () => void;
+  /** Absent unless the host offers somewhere to put it; the button hides. */
+  onSend?: (name: string, text: string) => Promise<string>;
+}
+
+export function InputLog({ entries, onClear, onClose, onSend }: Props) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [manual, setManual] = useState<string | null>(null);
+
+  // Newest first: the line you want is the one that just happened, and this way
+  // it is always in the same place with nothing to scroll.
+  const lines = entries
+    .map((e, i) => ({ e, text: formatEntry(e, i === 0 ? 0 : e.t - entries[i - 1].t) }))
+    .reverse();
+
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [entries]);
+
+  /**
+   * Save, not copy.
+   *
+   * The clipboard was a dead end on the device this log exists for:
+   * `navigator.clipboard` needs a secure context and the review is reached over
+   * plain http on a LAN address, and the `execCommand` fallback is at the mercy
+   * of what iOS counts as a user gesture. A download is neither — it is a blob
+   * and an anchor, and it lands in Files where it can be opened and read.
+   */
+  const dump = () => lines.map((l) => l.text).join("\n");
+  const stampName = () =>
+    `input-log-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.txt`;
+
+  /** Straight to the machine running the server, so nobody has to transcribe. */
+  const send = async () => {
+    if (!onSend) return;
+    if (entries.length === 0) {
+      setCopied("nothing to send");
+      return;
+    }
+    setCopied("sending…");
+    try {
+      const where = await onSend(stampName(), dump());
+      setCopied(where);
+    } catch (e) {
+      setCopied(e instanceof Error ? `failed: ${e.message}` : "send failed");
+    }
+  };
+
+  const save = () => {
+    const text = dump();
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    try {
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `input-log-${stamp}.txt`;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Safari needs the URL to outlive the click.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      setCopied(`saved ${entries.length}`);
+    } catch {
+      // Anything at all goes wrong: hand over the text to select by hand.
+      setManual(text);
+      setCopied("select it ↓");
+    }
+  };
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(null), 8000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 8,
+        bottom: 8,
+        width: 460,
+        maxHeight: 300,
+        display: "flex",
+        flexDirection: "column",
+        background: "rgba(10,10,10,0.92)",
+        border: `1px solid ${C.high}`,
+        borderRadius: 8,
+        // The panel sits over the stage; it must never eat a stroke. Only the
+        // buttons opt back in.
+        pointerEvents: "none",
+        zIndex: 5,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "6px 8px",
+          borderBottom: `1px solid ${C.high}`,
+          pointerEvents: "auto",
+        }}
+      >
+        <span style={{ ...label, color: C.text }}>Input</span>
+        <span style={{ ...label, color: C.faint }}>{entries.length}</span>
+        {copied && (
+          <span style={{ ...label, color: C.primary, textTransform: "none" }}>{copied}</span>
+        )}
+        <div style={{ flex: 1 }} />
+        {onSend && (
+          <button
+            onClick={() => void send()}
+            style={{ ...textButton(), height: 22, fontSize: 11 }}
+            title="Write this log to a file on the machine running the server"
+          >
+            Send
+          </button>
+        )}
+        <button onClick={save} style={{ ...textButton(), height: 22, fontSize: 11 }}>
+          Save
+        </button>
+        {/* Always-available escape hatch: the text, selectable, in place. No
+            download to find in Files, no clipboard permission to be refused. */}
+        <button
+          onClick={() => setManual((m) => (m === null ? lines.map((l) => l.text).join("\n") : null))}
+          style={{ ...textButton(manual !== null), height: 22, fontSize: 11 }}
+        >
+          Text
+        </button>
+        <button
+          onClick={() => {
+            setManual(null);
+            setCopied(null);
+            onClear();
+          }}
+          style={{ ...textButton(), height: 22, fontSize: 11 }}
+        >
+          Clear
+        </button>
+        <button onClick={onClose} style={{ ...textButton(), height: 22, fontSize: 11 }}>
+          ✕
+        </button>
+      </div>
+
+      {manual !== null && (
+        <textarea
+          readOnly
+          value={manual}
+          onFocus={(e) => e.currentTarget.select()}
+          style={{
+            ...selectableText,
+            pointerEvents: "auto",
+            margin: 8,
+            height: 90,
+            background: C.lowest,
+            color: C.text,
+            border: `1px solid ${C.high}`,
+            borderRadius: 6,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: 10,
+            padding: 6,
+          }}
+        />
+      )}
+
+      <div
+        ref={bodyRef}
+        style={{
+          overflowY: "auto",
+          padding: "6px 8px",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize: 10,
+          lineHeight: 1.45,
+          whiteSpace: "pre-wrap",
+        }}
+      >
+        {entries.length === 0 && (
+          <div style={{ color: C.faint }}>Draw on the stage — every pointer event lands here.</div>
+        )}
+        {lines.map((l, i) => (
+          <div key={i} style={{ color: PHASE_COLOR[l.e.phase] }}>
+            {l.text}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
