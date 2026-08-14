@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   BookOpen,
   ClipboardList,
@@ -9,9 +11,13 @@ import {
   BarChart3,
   Archive,
   Home,
+  LogOut,
+  Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isGradingRoute } from "@/lib/grading-routes";
+import { isPublicRoute } from "@/lib/auth-routes";
+import { signOut } from "@/actions/auth";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: Home },
@@ -22,12 +28,23 @@ const navItems = [
   { href: "/archive", label: "Archive", icon: Archive },
 ];
 
-export function Sidebar() {
+export interface SidebarAccount {
+  id: number;
+  name: string;
+  email: string;
+  globalRole: string;
+}
+
+export function Sidebar({ account }: { account: SidebarAccount | null }) {
   const pathname = usePathname();
 
   // Hide the permanent sidebar on grading/review pages — those use the
   // GradingShell layout with a hamburger drawer instead.
   if (isGradingRoute(pathname)) return null;
+
+  // Sign-in, first-run setup and invitation acceptance have nowhere to
+  // navigate to, so they get the whole window.
+  if (isPublicRoute(pathname)) return null;
 
   return (
     // No border-r — tonal separation via bg-sidebar (#0a0a0a) against bg (#0e0e0e)
@@ -65,7 +82,53 @@ export function Sidebar() {
             </Link>
           );
         })}
+
+        {account?.globalRole === "admin" && (
+          <Link
+            href="/admin/users"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-150",
+              pathname.startsWith("/admin")
+                ? "text-primary bg-primary/10"
+                : "text-muted-foreground hover:text-foreground hover:bg-accent",
+            )}
+          >
+            <Users className={cn("h-4 w-4 shrink-0", pathname.startsWith("/admin") ? "text-primary" : "")} />
+            Accounts
+          </Link>
+        )}
       </nav>
+
+      {account && <AccountFooter account={account} />}
     </aside>
+  );
+}
+
+function AccountFooter({ account }: { account: SidebarAccount }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+
+  return (
+    <div className="px-3 pb-4 pt-2">
+      <div className="px-3 py-2">
+        <div className="text-sm font-medium truncate">{account.name}</div>
+        <div className="text-xs text-muted-foreground truncate">{account.email}</div>
+      </div>
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() =>
+          startTransition(async () => {
+            await signOut();
+            router.replace("/login");
+            router.refresh();
+          })
+        }
+        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-150 disabled:opacity-50"
+      >
+        <LogOut className="h-4 w-4 shrink-0" />
+        {pending ? "Signing out…" : "Sign out"}
+      </button>
+    </div>
   );
 }

@@ -206,6 +206,62 @@ export const reviewStrokes = sqliteTable("review_strokes", {
   uniqueIndex("review_strokes_local_idx").on(table.itemId, table.localId),
 ]);
 
+// ─── Accounts ───────────────────────────────────────────────────────────
+// See docs/accounts-and-courses.md. Three rules encoded here:
+//
+//   - `netId` exists from the start though nothing populates it yet, so that
+//     CAS/SSO can eventually replace local passwords as a column update rather
+//     than a merge of two identity systems.
+//   - `passwordHash` is nullable: an invited user exists before they have a
+//     password, which is what makes the admin list show pending invitations.
+//   - Sessions are server-side rows, not JWTs, because disabling an account has
+//     to log it out immediately.
+
+export const users = sqliteTable("users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull(),
+  netId: text("net_id"),
+  name: text("name").notNull(),
+  passwordHash: text("password_hash"),
+  globalRole: text("global_role").notNull().default("instructor"), // 'admin' | 'instructor' | 'assistant'
+  status: text("status").notNull().default("invited"), // 'invited' | 'active' | 'disabled'
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+  lastLoginAt: text("last_login_at"),
+}, (table) => [
+  uniqueIndex("users_email_idx").on(table.email),
+  uniqueIndex("users_net_id_idx").on(table.netId),
+]);
+
+// Only the SHA-256 of the cookie value is stored, so read access to the
+// database is not the same thing as the ability to forge a session.
+export const sessions = sqliteTable("sessions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tokenHash: text("token_hash").notNull(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+  userAgent: text("user_agent"),
+  ip: text("ip"),
+}, (table) => [
+  uniqueIndex("sessions_token_idx").on(table.tokenHash),
+  index("sessions_user_idx").on(table.userId),
+]);
+
+// Single-use invitation tokens. Account creation is invite-only: no self
+// signup, and no administrator ever knows another person's password.
+export const invites = sqliteTable("invites", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(),
+  invitedBy: integer("invited_by").references(() => users.id),
+  expiresAt: text("expires_at").notNull(),
+  acceptedAt: text("accepted_at"),
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  uniqueIndex("invites_token_idx").on(table.tokenHash),
+  index("invites_user_idx").on(table.userId),
+]);
+
 // Per-user viewer preferences (fps, loop mode, flips) scoped to a context.
 export const reviewPrefs = sqliteTable("review_prefs", {
   id: integer("id").primaryKey({ autoIncrement: true }),

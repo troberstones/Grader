@@ -2,6 +2,12 @@ import type { Metadata } from "next";
 import { Manrope, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { Sidebar } from "@/components/layout/sidebar";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { currentAccount } from "@/actions/auth";
+import { needsBootstrap } from "@/lib/auth/session";
+import { isPublicRoute } from "@/lib/auth-routes";
+import { PATHNAME_HEADER } from "@/proxy";
 import { GlobalSyncProvider } from "@/components/shared/global-sync";
 import "./globals.css";
 
@@ -23,11 +29,29 @@ export const metadata: Metadata = {
   description: "Rubric-based grading for digital art and 3D render assignments",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Null on the sign-in, setup and invitation pages, where the sidebar hides
+  // itself anyway. Read here rather than per-page so every route agrees about
+  // who is signed in.
+  const account = await currentAccount();
+
+  // The real gate. The proxy only checks that a session cookie is *present*,
+  // which a stale or forged one also satisfies; this checks that it names a
+  // live session belonging to an active account. Enforcing it in the root
+  // layout covers every page at once rather than waiting for a guard to be
+  // added to each of them one at a time.
+  //
+  // API routes are not covered — they sit outside the proxy matcher and outside
+  // this layout. See docs/security.md.
+  const pathname = (await headers()).get(PATHNAME_HEADER) ?? "/";
+  if (!isPublicRoute(pathname) && !account) {
+    redirect(await needsBootstrap() ? "/setup" : "/login");
+  }
+
   return (
     // `dark` class forces the editorial dark theme throughout
     <html
@@ -36,7 +60,7 @@ export default function RootLayout({
     >
       <body className="h-full flex">
         <GlobalSyncProvider>
-          <Sidebar />
+          <Sidebar account={account} />
           <main className="flex-1 overflow-auto">{children}</main>
           <Toaster />
         </GlobalSyncProvider>

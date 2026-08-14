@@ -2,11 +2,17 @@
 
 Written 2026-08-12, when the rubric gained a dock beside the art reviewer.
 
-This is a note, not a claim. Grader currently has **no authentication of any
-kind** — no login, no session, no middleware. Anything that can reach the port
-can read and write every grade. That is a deliberate trade for a single-
-instructor tool on a studio LAN, and it is the thing to fix first if any of the
-assumptions below stop holding.
+> **Updated 2026-08-14.** Grader now has authentication: invite-only accounts,
+> server-side sessions, and a gate covering every page. What has *not* happened
+> is the authorization sweep — **every `/api` route is still open**. Read "Known
+> gaps" below before assuming anything is protected. The original note follows,
+> amended.
+
+This is a note, not a claim. Grader has authentication as of 2026-08-14, but
+until the authorization sweep lands, anything that can reach the port can still
+read and write every grade **through the API**. That was a deliberate trade for
+a single-instructor tool on a studio LAN, and it stops being acceptable the
+moment more than one instructor has an account.
 
 ## The invariant worth protecting
 
@@ -39,26 +45,63 @@ structural property, which is why the structure is worth keeping.
 
 Roughly in the order they'd matter if the tool left the studio:
 
-1. **No authentication.** Any device on the subnet can open any assignment and
-   change grades. There is not even a shared password.
+1. **~~No authentication.~~ Pages are gated; the API is not.** `src/proxy.ts`
+   redirects unauthenticated page requests, and the root layout re-checks the
+   session against the database so a forged cookie fails. But the proxy matcher
+   deliberately excludes `/api`, and no route handler checks a session. Anything
+   on the subnet can still read and write grades through
+   `/api/submissions/*`, `/api/review/*` and `/api/sync/*`. This is the single
+   largest remaining gap and is phase 3 in
+   [accounts-and-courses.md](accounts-and-courses.md).
 2. **`allowedDevOrigins` uses subnet wildcards** (`192.168.86.*` and friends, in
    `next.config.ts`). Necessary because DHCP moves the studio machine between
    sessions, but it means any host on those subnets is a permitted origin.
-3. **No authorization model.** `author.id` is hard-coded to `"instructor"` in
-   the review route. The stroke schema already carries `author_id` per stroke,
-   so peer critique is a migration away — but visibility rules and moderation
-   do not exist yet, and nothing distinguishes one author from another.
+3. **Authorization exists globally, not per course.** `can()` in
+   `src/lib/auth/roles.ts` decides on a *resource*, and global roles
+   (admin / instructor / assistant) are enforced — the admin console is
+   genuinely admin-only. But `course_members` does not exist yet, so every
+   active instructor can reach every course. The assumption is greppable as
+   `COURSE_SCOPING_PENDING`.
+
+   `author.id` is still hard-coded to `"instructor"` in the review route, so
+   strokes do not yet carry a real author even though the schema has the column.
 4. **The follower has no way to verify the master.** Whoever posts to
    `/api/sync` first with `playback-master` is the master. On a trusted LAN this
    is fine; on an open network it is a hijack.
 5. **Student media is served without a check.** `/api/review/media/[mediaId]`
    and `/api/submissions/[id]/file` will hand a submission to any requester.
 
+6. **Sessions travel over plain HTTP.** Cookies are `httpOnly` and
+   `sameSite=lax` but not `secure`, because the studio LAN has no TLS and a
+   secure cookie would simply never be sent. Set `SECURE_COOKIES=1` when this
+   moves behind HTTPS — the flag is configuration, not a code change.
+
+7. **No rate limiting on sign-in.** Failures are generic and constant-time-ish,
+   but nothing slows down repeated attempts.
+
 ## What is already fenced off
 
 - `/api/review/diagnostics` returns 404 unless `NODE_ENV === "development"`,
   caps the body at 512 KB, and rebuilds the filename from a sanitised stem, so
   it cannot be used to write outside `storage/diagnostics/`.
+
+- **Credentials.** Passwords are scrypt (N=16384, r=8, p=1) with a per-password
+  salt, compared with `timingSafeEqual`. Session and invitation tokens are 32
+  bytes of `randomBytes`; only their SHA-256 is stored, so read access to the
+  database does not confer the ability to forge either. Verified: the invite
+  token issued in testing appears nowhere in `invites` except as its hash.
+
+- **Sessions are rows, not JWTs**, so disabling an account takes effect on the
+  next request rather than whenever a token happens to expire. `getCurrentUser`
+  drops every session belonging to a non-active account on sight.
+
+- **Invitations are single-use.** Acceptance consumes the token in the same
+  statement that checks it is unconsumed, so two submissions of one link cannot
+  both create a session.
+
+- **The last administrator cannot be demoted or disabled**, and nobody can
+  disable their own account — otherwise account management becomes permanently
+  unreachable without hand-editing the database.
 
 ## Before this is exposed to anything but the studio LAN
 
