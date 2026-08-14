@@ -261,11 +261,15 @@ band. That is ten effective values from four descriptions:
 
 ```
 level                          minus      base      plus
-Little / No Effort             50.0%     55.0%     61.3%
+Little / No Effort             48.7%     55.0%     61.3%
 Lacking Key Aspects            67.7%     74.0%     78.7%
 Good with Minor Flaws          83.3%     88.0%     92.0%
 Professional / Mastery         96.0%    100.0%    100.0%
 ```
+
+Level 0 has no band beneath it, so its downward nudge extrapolates the 0→1 gap
+rather than inventing a floor. It never reaches zero — zero is what the
+`missing` status is for.
 
 Storage already supports this: `grade_entries` carries **both** `level_id` and
 `score`. What the work *looks like* (the level, which is the feedback a student

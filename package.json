@@ -16,7 +16,9 @@
     "sync:pdf-worker": "cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/pdf.worker.min.mjs",
     "predev": "npm run sync:pdf-worker",
     "prebuild": "npm run sync:pdf-worker",
-    "review:import-sequence": "node scripts/import-sequence.mjs"
+    "review:import-sequence": "node scripts/import-sequence.mjs",
+    "test:rubric": "./scripts/build-rubric-test.sh && node --test test/rubric.test.cjs",
+    "test": "npm run test:rubric && npm run review:test"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
