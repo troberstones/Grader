@@ -4,12 +4,14 @@ interface HeaderProps {
   title: string;
   description?: ReactNode;
   actions?: ReactNode;
+  breadcrumb?: ReactNode;
 }
 
-export function Header({ title, description, actions }: HeaderProps) {
+export function Header({ title, description, actions, breadcrumb }: HeaderProps) {
   return (
     <div className="flex items-start justify-between pb-8">
       <div>
+        {breadcrumb}
         {/* Editorial headline — generous letter-spacing, no bold border compensation needed */}
         <h2 className="text-2xl font-semibold tracking-tight leading-none">
           {title}

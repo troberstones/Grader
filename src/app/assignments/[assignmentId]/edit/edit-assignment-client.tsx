@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import type { getAssignment, getAllAssignments } from "@/actions/assignments";
 import type { getCourses } from "@/actions/courses";
 import type { getRubrics } from "@/actions/rubrics";
+import { formatTerm } from "@/lib/terms";
 
 type Assignment = NonNullable<Awaited<ReturnType<typeof getAssignment>>>;
 type Course = Awaited<ReturnType<typeof getCourses>>[number];
@@ -89,7 +90,7 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
             <div className="space-y-2">
               <Label>Course</Label>
               <div className="flex h-9 items-center rounded-lg border border-input bg-muted/40 px-3 text-sm text-muted-foreground">
-                {assignment.course.code} — {assignment.course.name} ({assignment.course.semester})
+                {assignment.course.code} — {assignment.course.name} ({formatTerm(assignment.course.year, assignment.course.term)})
               </div>
             </div>
 

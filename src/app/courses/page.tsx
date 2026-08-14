@@ -1,11 +1,15 @@
-import { getCourses } from "@/actions/courses";
+import { getCourses, getCourseTerms, getMyTermPreference } from "@/actions/courses";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { CreateCourseDialog } from "./create-course-dialog";
-import { CourseList } from "./course-list";
+import { CoursesBrowser } from "./courses-browser";
 
 export default async function CoursesPage() {
-  const allCourses = await getCourses();
+  const [allCourses, terms, preference] = await Promise.all([
+    getCourses(),
+    getCourseTerms(),
+    getMyTermPreference(),
+  ]);
 
   return (
     <PageContainer>
@@ -14,7 +18,7 @@ export default async function CoursesPage() {
         description="Manage your courses and student rosters"
         actions={<CreateCourseDialog />}
       />
-      <CourseList courses={allCourses} />
+      <CoursesBrowser courses={allCourses} terms={terms} initialSelection={preference} />
     </PageContainer>
   );
 }

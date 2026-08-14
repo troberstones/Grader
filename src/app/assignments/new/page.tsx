@@ -15,8 +15,9 @@ import { getCourses } from "@/actions/courses";
 import { getRubrics } from "@/actions/rubrics";
 import { createAssignment } from "@/actions/assignments";
 import { toast } from "sonner";
+import { formatTerm, type Term } from "@/lib/terms";
 
-type Course = { id: number; name: string; code: string; semester: string };
+type Course = { id: number; name: string; code: string; year: number; term: Term };
 type Rubric = { id: number; name: string };
 
 export default function NewAssignmentPage() {
@@ -112,7 +113,7 @@ function NewAssignmentForm() {
                 <SelectContent>
                   {courses.map((c) => (
                     <SelectItem key={c.id} value={String(c.id)}>
-                      {c.code} — {c.name} ({c.semester})
+                      {c.code} — {c.name} ({formatTerm(c.year, c.term)})
                     </SelectItem>
                   ))}
                 </SelectContent>

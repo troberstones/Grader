@@ -1,5 +1,6 @@
 import { sqliteTable, text, integer, real, blob, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
+import type { Term } from "@/lib/terms";
 
 // ─── Courses ────────────────────────────────────────────
 
@@ -8,7 +9,8 @@ export const courses = sqliteTable("courses", {
   name: text("name").notNull(),
   code: text("code").notNull(),
   section: text("section"),
-  semester: text("semester").notNull(),
+  year: integer("year").notNull(),
+  term: text("term").notNull().$type<Term>(), // see src/lib/terms.ts
   lmsCourseId: text("lms_course_id"),
   archived: integer("archived").notNull().default(0),
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
@@ -227,6 +229,13 @@ export const users = sqliteTable("users", {
   status: text("status").notNull().default("invited"), // 'invited' | 'active' | 'disabled'
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
   lastLoginAt: text("last_login_at"),
+  // Remembered courses-page filter, so it follows the instructor across
+  // machines instead of resetting every time they sign in somewhere new.
+  defaultCourseYear: integer("default_course_year"),
+  defaultCourseTerm: text("default_course_term"),
+  // The course whose detail page the instructor last opened — scopes the
+  // global Assignments nav item instead of it always listing everything.
+  activeCourseId: integer("active_course_id"),
 }, (table) => [
   uniqueIndex("users_email_idx").on(table.email),
   uniqueIndex("users_net_id_idx").on(table.netId),

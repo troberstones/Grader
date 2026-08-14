@@ -5,6 +5,7 @@ import { assignments, courses, rubrics, rubricCriteria, rubricLevels, grades } f
 import { eq, desc, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireCapability } from "@/lib/auth/require";
+import type { Term } from "@/lib/terms";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,7 +22,7 @@ export type AssignmentWithCourse = {
   updatedAt: string;
   courseId: number;
   rubricId: number | null;
-  course: { id: number; name: string; code: string; semester: string };
+  course: { id: number; name: string; code: string; year: number; term: Term };
   rubricName: string | null;
 };
 
@@ -86,7 +87,8 @@ export async function getAllAssignments() {
       rubricName: rubrics.name,
       courseName: courses.name,
       courseCode: courses.code,
-      courseSemester: courses.semester,
+      courseYear: courses.year,
+      courseTerm: courses.term,
     })
     .from(assignments)
     .leftJoin(rubrics, eq(assignments.rubricId, rubrics.id))

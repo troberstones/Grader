@@ -10,6 +10,8 @@ import { LsSyncAssignmentsButton } from "@/components/ls-bridge/ls-sync-assignme
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Users, Plus, ClipboardList, Calendar, CheckCircle2, Clock, Circle, Pencil } from "lucide-react";
+import { formatTerm } from "@/lib/terms";
+import { TrackActiveCourse } from "./track-active-course";
 
 export const dynamic = "force-dynamic";
 
@@ -34,9 +36,10 @@ export default async function CourseDetailPage({
 
   return (
     <PageContainer>
+      <TrackActiveCourse courseId={course.id} />
       <Header
         title={course.name}
-        description={`${course.code}${course.section ? ` · Section ${course.section}` : ""} · ${course.semester}`}
+        description={`${course.code}${course.section ? ` · Section ${course.section}` : ""} · ${formatTerm(course.year, course.term)}`}
         actions={
           <div className="flex gap-2">
             <LsSyncAssignmentsButton courseId={course.id} />
