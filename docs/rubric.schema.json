@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://grader.local/schemas/rubric-v1.json",
+  "title": "Grader rubric",
+  "description": "An authored rubric, ready to import. Point values are NOT part of this document: they are computed at import from the assignment's total points, each criterion's share, and the rubric's band edges. See docs/rubric-authoring.md.",
+  "type": "object",
+  "required": ["version", "name", "criteria"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "Schema version. Always 1."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 120,
+      "description": "Short title, e.g. 'Shading' or 'Environment Final'."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "One or two sentences on what the rubric assesses."
+    },
+    "bandEdges": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+      "description": "Level 0/1/2 as fractions of a criterion's maximum; level 3 is always 1.0. Must be strictly increasing. Omit to use the course default: [0.55, 0.74, 0.88] (Advanced) or [0.60, 0.80, 0.92] (Foundation). Do NOT spread these evenly across 0-1 — see 'Points and calibration' in rubric-authoring.md.",
+      "default": [0.55, 0.74, 0.88]
+    },
+    "criteria": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 12,
+      "description": "The rows of the rubric. Two to twelve; beyond that a rubric stops being usable during a live critique.",
+      "items": {
+        "type": "object",
+        "required": ["name", "levels"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80,
+            "description": "The criterion, e.g. 'Light Response' or 'Timing & Spacing'."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "What this criterion is assessing, in one sentence."
+          },
+          "share": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": 1,
+            "description": "Relative importance. Shares are normalised across criteria and multiplied by the assignment's total points, so [2,1,1] means the first criterion is worth half. Any positive number; they need not sum to anything."
+          },
+          "levels": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "description": "Exactly four, ordered lowest to highest. Index in the array IS the level: 0 = lowest, 3 = mastery.",
+            "items": {
+              "type": "object",
+              "required": ["description"],
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "maxLength": 60,
+                  "description": "Optional. Omit to use the house labels: 'Little / No Effort', 'Lacking Key Aspects', 'Good with Minor Flaws', 'Professional / Mastery'."
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 10,
+                  "maxLength": 400,
+                  "description": "What work at this level looks like, in observable terms. Specific to this criterion — never generic praise."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
