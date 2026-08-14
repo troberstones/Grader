@@ -5,7 +5,7 @@ import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Calendar, ClipboardList, Pencil, ChevronRight } from "lucide-react";
+import { Plus, Calendar, ClipboardList, Pencil, ChevronRight, CheckCircle2, Clock, Circle } from "lucide-react";
 import { formatTerm } from "@/lib/terms";
 
 export const dynamic = "force-dynamic";
@@ -74,6 +74,8 @@ export default async function AssignmentsPage() {
 type AssignmentRow = Awaited<ReturnType<typeof getAssignmentsForCourse>>[number];
 
 function AssignmentRow({ assignment: a }: { assignment: AssignmentRow }) {
+  const pct = a.stats.total > 0 ? Math.round((a.stats.graded / a.stats.total) * 100) : 0;
+
   return (
     <div className="flex items-center gap-4 px-4 py-2.5 hover:bg-muted/40 transition-colors group">
       <Link href={`/assignments/${a.id}`} className="flex-1 min-w-0 flex items-center gap-4">
@@ -86,14 +88,36 @@ function AssignmentRow({ assignment: a }: { assignment: AssignmentRow }) {
               </Badge>
             )}
           </div>
-          {a.dueDate && (
-            <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
-              <Calendar className="h-3 w-3" />
-              Due {new Date(a.dueDate).toLocaleDateString()}
-            </div>
-          )}
+          <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground flex-wrap">
+            {a.dueDate && (
+              <span className="flex items-center gap-1">
+                <Calendar className="h-3 w-3" />
+                Due {new Date(a.dueDate).toLocaleDateString()}
+              </span>
+            )}
+            {a.stats.total > 0 && (
+              <span className="flex items-center gap-1">
+                {a.stats.graded === a.stats.total ? (
+                  <CheckCircle2 className="h-3 w-3 text-green-500" />
+                ) : a.stats.graded > 0 || a.stats.inProgress > 0 ? (
+                  <Clock className="h-3 w-3 text-yellow-500" />
+                ) : (
+                  <Circle className="h-3 w-3" />
+                )}
+                {a.stats.graded}/{a.stats.total} graded
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
+          {a.stats.total > 0 && (
+            <div className="w-20">
+              <div className="text-xs text-right text-muted-foreground mb-1">{pct}%</div>
+              <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                <div className="h-full bg-green-500 transition-all" style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+          )}
           <span className="text-sm text-muted-foreground">{a.pointsPossible} pts</span>
           <Badge variant="outline" className="text-xs capitalize">
             {a.submissionType}

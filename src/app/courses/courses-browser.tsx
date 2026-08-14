@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { CourseList } from "./course-list";
-import { setMyTermPreference } from "@/actions/courses";
+import { setMyTermPreference, setActiveCourse } from "@/actions/courses";
 import { formatTerm, type Term } from "@/lib/terms";
 import { cn } from "@/lib/utils";
 
@@ -28,10 +29,12 @@ export function CoursesBrowser({
   courses,
   terms,
   initialSelection,
+  initialActiveCourseId,
 }: {
   courses: Course[];
   terms: TermOption[];
   initialSelection: TermOption | null;
+  initialActiveCourseId: number | null;
 }) {
   // A saved preference might no longer have any courses (archived, or none
   // were ever created for it) — fall back to the newest real term instead of
@@ -40,13 +43,30 @@ export function CoursesBrowser({
   const [selected, setSelected] = useState<TermOption | null>(
     (savedIsLive ? initialSelection : null) ?? terms[0] ?? null
   );
+  const [activeCourseId, setActiveCourseId] = useState<number | null>(initialActiveCourseId);
   const [, startTransition] = useTransition();
+  const router = useRouter();
 
   function select(option: TermOption) {
     setSelected(option);
     startTransition(() => {
       setMyTermPreference(option.year, option.term);
     });
+  }
+
+  // Marks a course active in place — no navigation. The active course is
+  // what scopes the global Assignments page, not what "viewing" a course
+  // meant before; selecting one here should just be a quiet indicator.
+  function markActive(courseId: number) {
+    setActiveCourseId(courseId);
+    startTransition(() => {
+      setActiveCourse(courseId);
+    });
+  }
+
+  function openAssignments(courseId: number) {
+    markActive(courseId);
+    router.push("/assignments");
   }
 
   if (terms.length === 0) {
@@ -89,6 +109,9 @@ export function CoursesBrowser({
         <CourseList
           courses={visible}
           emptyMessage={selected ? `No courses in ${formatTerm(selected.year, selected.term)}.` : "Select a term."}
+          activeCourseId={activeCourseId}
+          onSelect={markActive}
+          onOpenAssignments={openAssignments}
         />
       </div>
     </div>

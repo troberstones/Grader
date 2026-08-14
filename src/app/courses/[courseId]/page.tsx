@@ -9,7 +9,7 @@ import { LinkButton } from "@/components/ui/link-button";
 import { LsSyncAssignmentsButton } from "@/components/ls-bridge/ls-sync-assignments-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Users, Plus, ClipboardList, Calendar, CheckCircle2, Clock, Circle, Pencil } from "lucide-react";
+import { Users, Plus, ClipboardList, Calendar, Pencil } from "lucide-react";
 import { formatTerm } from "@/lib/terms";
 import { TrackActiveCourse } from "./track-active-course";
 
@@ -27,12 +27,6 @@ export default async function CourseDetailPage({
     getAssignmentsForCourse(Number(courseId)),
   ]);
   if (!course) notFound();
-
-  const totalGraded = assignments.reduce((sum, a) => sum + a.stats.graded, 0);
-  const totalStudentAssignments = assignments.reduce(
-    (sum, a) => sum + a.stats.total,
-    0
-  );
 
   return (
     <PageContainer>
@@ -56,7 +50,7 @@ export default async function CourseDetailPage({
       />
 
       {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-3 mb-8">
+      <div className="grid gap-4 md:grid-cols-2 mb-8">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Students</CardTitle>
@@ -71,21 +65,6 @@ export default async function CourseDetailPage({
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{assignments.length}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Grades Entered</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {totalGraded}
-              {totalStudentAssignments > 0 && (
-                <span className="text-base font-normal text-muted-foreground ml-1">
-                  / {totalStudentAssignments}
-                </span>
-              )}
-            </div>
           </CardContent>
         </Card>
       </div>
@@ -113,77 +92,37 @@ export default async function CourseDetailPage({
             </LinkButton>
           </div>
         ) : (
-          <div className="space-y-2">
-            {assignments.map((a) => {
-              const pct =
-                a.stats.total > 0
-                  ? Math.round((a.stats.graded / a.stats.total) * 100)
-                  : 0;
-
-              return (
-                <Card key={a.id} className="hover:border-primary/50 transition-colors">
-                  <CardContent className="px-4 py-3">
-                    <div className="flex items-start gap-4">
-                      <Link href={`/assignments/${a.id}`} className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium">{a.name}</span>
-                          {a.rubricName && (
-                            <Badge variant="secondary" className="text-xs">
-                              {a.rubricName}
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-                          {a.dueDate && (
-                            <span className="flex items-center gap-1">
-                              <Calendar className="h-3 w-3" />
-                              Due {new Date(a.dueDate).toLocaleDateString()}
-                            </span>
-                          )}
-                          <span>{a.pointsPossible} pts</span>
-                          {a.stats.total > 0 && (
-                            <span className="flex items-center gap-1">
-                              {a.stats.graded === a.stats.total ? (
-                                <CheckCircle2 className="h-3 w-3 text-green-500" />
-                              ) : a.stats.graded > 0 || a.stats.inProgress > 0 ? (
-                                <Clock className="h-3 w-3 text-yellow-500" />
-                              ) : (
-                                <Circle className="h-3 w-3" />
-                              )}
-                              {a.stats.graded}/{a.stats.total} graded
-                            </span>
-                          )}
-                        </div>
-                      </Link>
-
-                      <div className="flex items-center gap-3 shrink-0">
-                        {/* Progress bar */}
-                        {a.stats.total > 0 && (
-                          <div className="w-20">
-                            <div className="text-xs text-right text-muted-foreground mb-1">
-                              {pct}%
-                            </div>
-                            <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                              <div
-                                className="h-full bg-green-500 transition-all"
-                                style={{ width: `${pct}%` }}
-                              />
-                            </div>
-                          </div>
-                        )}
-                        <Link
-                          href={`/assignments/${a.id}/edit`}
-                          className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                          title="Edit assignment"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Link>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
+          <div className="rounded-xl border divide-y divide-border overflow-hidden">
+            {assignments.map((a) => (
+              <div key={a.id} className="flex items-center gap-4 px-4 py-2.5 hover:bg-muted/40 transition-colors">
+                <Link href={`/assignments/${a.id}`} className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium">{a.name}</span>
+                    {a.rubricName && (
+                      <Badge variant="secondary" className="text-xs">
+                        {a.rubricName}
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground flex-wrap">
+                    {a.dueDate && (
+                      <span className="flex items-center gap-1">
+                        <Calendar className="h-3 w-3" />
+                        Due {new Date(a.dueDate).toLocaleDateString()}
+                      </span>
+                    )}
+                    <span>{a.pointsPossible} pts</span>
+                  </div>
+                </Link>
+                <Link
+                  href={`/assignments/${a.id}/edit`}
+                  className="shrink-0 p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                  title="Edit assignment"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Link>
+              </div>
+            ))}
           </div>
         )}
       </div>
