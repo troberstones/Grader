@@ -4,11 +4,15 @@ import fs from "fs/promises";
 import { db } from "@/db";
 import { submissions } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { apiRequireCapability } from "@/lib/auth/api";
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ submissionId: string }> }
 ) {
+  const auth = await apiRequireCapability("course.view");
+  if (!auth.user) return auth.response;
+
   const { submissionId } = await params;
 
   const rows = await db

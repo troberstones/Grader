@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { assignments, courses, rubrics, rubricCriteria, rubricLevels, grades } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { requireCapability } from "@/lib/auth/require";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,7 @@ export type AssignmentWithCourse = {
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 export async function getAssignmentsForCourse(courseId: number) {
+  await requireCapability("course.view", { kind: "course", courseId });
   const rows = await db
     .select({
       id: assignments.id,
@@ -66,6 +68,7 @@ export async function getAssignmentsForCourse(courseId: number) {
 }
 
 export async function getAllAssignments() {
+  await requireCapability("course.view");
   const rows = await db
     .select({
       id: assignments.id,
@@ -95,6 +98,7 @@ export async function getAllAssignments() {
 }
 
 export async function getAssignment(id: number) {
+  await requireCapability("course.view");
   const row = await db
     .select({
       id: assignments.id,
@@ -182,6 +186,7 @@ export async function createAssignment(data: {
   submissionType: "image" | "video" | "any";
   lmsAssignmentId?: string;
 }) {
+  await requireCapability("course.edit", { kind: "course", courseId: data.courseId });
   const result = await db
     .insert(assignments)
     .values({
@@ -213,6 +218,7 @@ export async function updateAssignment(
     lmsAssignmentId?: string | null;
   }
 ) {
+  await requireCapability("course.edit");
   await db
     .update(assignments)
     .set({ ...data, updatedAt: new Date().toISOString() })
@@ -223,6 +229,7 @@ export async function updateAssignment(
 }
 
 export async function deleteAssignment(id: number) {
+  await requireCapability("course.edit");
   const row = await db.select({ courseId: assignments.courseId }).from(assignments).where(eq(assignments.id, id));
   if (!row[0]) return;
   await db.delete(assignments).where(eq(assignments.id, id));
@@ -231,6 +238,7 @@ export async function deleteAssignment(id: number) {
 }
 
 export async function archiveAssignment(id: number) {
+  await requireCapability("course.edit");
   const row = await db.select({ courseId: assignments.courseId }).from(assignments).where(eq(assignments.id, id));
   if (!row[0]) return;
   await db.update(assignments).set({ archived: 1 }).where(eq(assignments.id, id));

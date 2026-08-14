@@ -404,10 +404,15 @@ Each phase leaves the application working.
    [rubric-authoring.md](rubric-authoring.md).
 2. **Authentication.** `users`, `sessions`, `invites`, `/login`, first-run
    bootstrap, admin console, a coarse route gate.
-3. **Authorization.** `can()` at every server action and route handler — around
-   thirty call sites, including the two unprotected media routes and the SSE
-   subscribe in `/api/sync/[assignmentId]`. **Larger than phase 2.** A login
-   screen without this is decorative.
+3. **Authorization. Done 2026-08-14.** `can()` at every server action and
+   same-origin route handler — the media routes and the SSE subscribe in
+   `/api/sync/[assignmentId]` included, once the studio confirmed the
+   projector/follower machine does sign in. The one thing this phase did
+   *not* close: `/api/ls-bridge/*` and `/api/submissions/upload` are called
+   cross-origin by the Chrome extension, and a wildcard-CORS route cannot
+   carry a session cookie by construction — no amount of `can()` fixes that.
+   Recorded as a permanent gap in [security.md](security.md) #1, needing a
+   machine credential (API key) as its own future feature.
 4. **Course scoping, ownership, dashboard.** Move assignments under
    `/courses/[courseId]/`, which is what makes phase 3's checks cheap.
 5. **Course copy**, with the preview screen.

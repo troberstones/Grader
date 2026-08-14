@@ -2,11 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { assignments } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { apiRequireCapability } from "@/lib/auth/api";
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ assignmentId: string }> }
 ) {
+  const auth = await apiRequireCapability("course.edit");
+  if (!auth.user) return auth.response;
+
   const { assignmentId } = await params;
   const id = Number(assignmentId);
   if (!id) return NextResponse.json({ error: "Invalid assignmentId" }, { status: 400 });

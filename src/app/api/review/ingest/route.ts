@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { submissions } from "@/db/schema";
 import { ensureIngested } from "@/actions/review";
+import { apiRequireCapability } from "@/lib/auth/api";
 
 /**
  * Warm derivatives ahead of a review session.
@@ -18,6 +19,9 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 3600;
 
 export async function POST(request: Request) {
+  const auth = await apiRequireCapability("course.edit");
+  if (!auth.user) return auth.response;
+
   let body: { assignmentId?: number; studentId?: number } = {};
   try {
     body = await request.json();
