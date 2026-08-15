@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiRequireCapability } from "@/lib/auth/api";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,9 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ assignmentId: string }> },
 ) {
+  const auth = await apiRequireCapability("course.view");
+  if (!auth.user) return auth.response;
+
   const { assignmentId } = await params;
 
   // Capture the controller so the cancel callback can remove it.
@@ -50,6 +54,9 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ assignmentId: string }> },
 ) {
+  const auth = await apiRequireCapability("course.view");
+  if (!auth.user) return auth.response;
+
   const { assignmentId } = await params;
   const body = (await req.json()) as { studentId: number; sender: string };
 

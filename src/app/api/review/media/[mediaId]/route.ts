@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { reviewMedia } from "@/db/schema";
 import { serveFile } from "@grader/art-review/server";
+import { apiRequireCapability } from "@/lib/auth/api";
 
 /**
  * Range-served derivatives.
@@ -29,6 +30,9 @@ export async function HEAD(
 }
 
 async function handle(request: Request, params: Promise<{ mediaId: string }>) {
+  const auth = await apiRequireCapability("course.view");
+  if (!auth.user) return auth.response;
+
   const { mediaId } = await params;
   const id = Number(mediaId);
   if (!Number.isInteger(id)) return new Response("Bad id", { status: 400 });

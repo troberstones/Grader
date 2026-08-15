@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { reviewMedia } from "@/db/schema";
+import { apiRequireCapability } from "@/lib/auth/api";
 
 /**
  * PSD layer manifest.
@@ -24,6 +25,9 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ submissionId: string }> },
 ) {
+  const auth = await apiRequireCapability("course.view");
+  if (!auth.user) return auth.response;
+
   const { submissionId } = await params;
   const id = Number(submissionId);
   if (!Number.isInteger(id)) return new Response("Bad id", { status: 400 });

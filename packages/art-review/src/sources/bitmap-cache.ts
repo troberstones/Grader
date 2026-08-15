@@ -1,6 +1,7 @@
 import type { CacheStats, FrameRef, FrameSource, TexSource } from "./types";
 import type { ReviewItem } from "../core/types";
 import { rgbeToHalfFloat, RGBE_TRANSFER } from "../core/rgbe";
+import { sharedLedger } from "./ledger";
 
 /**
  * Shared base for sources whose frames are independently addressable images:
@@ -22,6 +23,12 @@ export abstract class BitmapCacheSource implements FrameSource {
   protected disposed = false;
   protected error: string | undefined;
   protected version = 0;
+  /** Bytes this source currently holds against the shared ledger. */
+  protected reserved = 0;
+  /** Where the playhead was last seen, so trimming keeps the useful frames. */
+  protected lastFrame = 0;
+  private offLedger: (() => void) | null = null;
+  private trimming = false;
   protected readyPromise: Promise<void> | null = null;
 
   /** Frames to keep resident. Overridden per source kind. */
@@ -32,7 +39,36 @@ export abstract class BitmapCacheSource implements FrameSource {
     readonly width: number,
     readonly height: number,
     readonly frameCount: number,
-  ) {}
+  ) {
+    // Lowering the ceiling has to actually hand memory back. Without this the
+    // limit changed and nothing else did: frames already resident stayed
+    // resident, and a paused viewer would sit over its new budget indefinitely
+    // because the only thing that ever evicted was a *new* frame arriving.
+    this.offLedger = sharedLedger().onChange(() => this.trim());
+  }
+
+  /**
+   * Drop frames until the source is back inside the shared ceiling.
+   *
+   * Re-entrant by nature — each release emits the very change that triggered
+   * this — so the guard is not optional. Three frames stay whatever happens,
+   * for the same reason eviction keeps three: a cache trimmed to the playhead
+   * makes every step a fresh decode.
+   */
+  protected trim(): void {
+    if (this.trimming || this.disposed) return;
+    this.trimming = true;
+    let dropped = 0;
+    try {
+      while (sharedLedger().pressure > 1 && this.cache.size > 3) {
+        if (!this.dropFurthest(this.lastFrame)) break;
+        dropped++;
+      }
+    } finally {
+      this.trimming = false;
+    }
+    if (dropped > 0) this.emit();
+  }
 
   protected abstract load(frame: number): Promise<ImageBitmap>;
 
@@ -69,6 +105,7 @@ export abstract class BitmapCacheSource implements FrameSource {
 
   peek(frame: number): FrameRef | null {
     const clamped = Math.min(this.frameCount - 1, Math.max(0, Math.round(frame)));
+    this.lastFrame = clamped;
     const hit = this.cache.get(clamped);
     if (hit) {
       this.touch(clamped);
@@ -111,8 +148,26 @@ export abstract class BitmapCacheSource implements FrameSource {
           bmp.close?.();
           return;
         }
+        // A frame that finished decoding further from the playhead than
+        // anything already resident has arrived too late to be worth a slot:
+        // taking one means evicting a nearer frame, which prefetch asks for
+        // again on the next tick. That swap, repeating, is most of what makes
+        // a stopped playhead's cached region creep.
+        if (
+          this.cache.size >= this.windowLimit &&
+          Math.abs(f - this.lastFrame) > this.furthestDistance(this.lastFrame)
+        ) {
+          bmp.close?.();
+          return;
+        }
+
+        // Anchored on the playhead, not on the frame that just arrived.
+        // Evicting furthest-from-f lets a frame landing at the edge of the
+        // window throw out one nearer the middle, which prefetch then asks for
+        // again — the resident set shuffles instead of settling.
+        this.reserveFor(this.lastFrame);
         this.cache.set(f, bmp);
-        this.evict(f);
+        this.evict(this.lastFrame);
         this.version++;
         this.emit();
       } catch (e) {
@@ -131,7 +186,11 @@ export abstract class BitmapCacheSource implements FrameSource {
   }
 
   prefetch(center: number, radius: number): void {
-    const r = Math.min(radius, Math.max(1, Math.floor(this.limit / 2)));
+    // A window of N frames centred on the playhead reaches (N-1)/2 either side.
+    // Halving N asks for N+1 frames, one more than can ever be held — so the
+    // odd frame out was evicted on arrival and requested again immediately,
+    // for ever. That is the wobble either side of a stopped playhead.
+    const r = Math.min(radius, Math.max(1, Math.floor((this.windowLimit - 1) / 2)));
     for (let d = 0; d <= r; d++) {
       for (const f of d === 0 ? [center] : [center + d, center - d]) {
         if (f >= 0 && f < this.frameCount && !this.cache.has(f) && this.inflight.size < 4) {
@@ -141,18 +200,89 @@ export abstract class BitmapCacheSource implements FrameSource {
     }
   }
 
+  /**
+   * Bytes one resident frame costs.
+   *
+   * An HDR frame is held twice over — the RGBE bitmap and the half-float
+   * unpacked from it — which is 28 MB at 2048×1152 against 8 MB for an
+   * ordinary frame. A window sized for stills is a gigabyte here, so this is
+   * what the memory bound is actually computed from.
+   */
+  protected get bytesPerFrame(): number {
+    return this.width * this.height * (this.isHdr ? 12 : 4);
+  }
+
+  /**
+   * The window that actually fits *this* source, as a frame count.
+   *
+   * `limit` alone describes a window nobody can pay for once frames get large:
+   * prefetch would keep asking for 24 frames while memory allows 20, evict one
+   * to make room for each new arrival, and re-decode the evicted one on the
+   * next pass — a viewer sitting idle would decode for ever.
+   *
+   * The whole ceiling is not the answer either, because the other sources are
+   * spending from it too. What is left is the ceiling minus everyone else's
+   * usage, which is total usage less our own. Planning against the full
+   * ceiling while a video holds a third of it produces the same thrash in a
+   * quieter form: a resident set that creeps a frame either side of the
+   * playhead for ever without settling.
+   */
+  protected get windowLimit(): number {
+    const ledger = sharedLedger();
+    const others = Math.max(0, ledger.bytesUsed - this.reserved);
+    const mine = Math.max(0, ledger.bytesLimit - others);
+    const room = Math.floor(mine / Math.max(1, this.bytesPerFrame));
+    return Math.max(3, Math.min(this.limit, room));
+  }
+
+  /**
+   * Room for one more frame, evicting until the tab-wide ledger grants it.
+   *
+   * The ledger is shared with every other source on purpose: a per-source
+   * allowance is not a budget, because prefetching N items then holds N × it.
+   * Three frames stay resident whatever the pressure — evicting down to the
+   * playhead makes every step a fresh decode, which is worse than overshooting.
+   */
+  protected reserveFor(near: number): void {
+    const per = this.bytesPerFrame;
+    while (!sharedLedger().reserve(per)) {
+      if (this.cache.size <= 3 || !this.dropFurthest(near)) return;
+    }
+    this.reserved += per;
+  }
+
   /** Keep the LRU bounded, preferring to drop frames far from `near`. */
   protected evict(near: number): void {
-    while (this.cache.size > this.limit) {
-      let worst: number | null = null;
-      for (const k of this.cache.keys()) {
-        if (worst === null || Math.abs(k - near) > Math.abs(worst - near)) worst = k;
-      }
-      if (worst === null || worst === near) break;
-      this.cache.get(worst)?.close?.();
-      this.cache.delete(worst);
-      this.hdrCache.delete(worst);
+    while (this.cache.size > this.windowLimit) {
+      if (!this.dropFurthest(near)) break;
     }
+  }
+
+  /** How far from `near` the most distant resident frame sits. -1 if empty. */
+  protected furthestDistance(near: number): number {
+    let worst = -1;
+    for (const k of this.cache.keys()) worst = Math.max(worst, Math.abs(k - near));
+    return worst;
+  }
+
+  /** Drop the resident frame furthest from `near`. False if none can go. */
+  protected dropFurthest(near: number): boolean {
+    let worst: number | null = null;
+    for (const k of this.cache.keys()) {
+      if (worst === null || Math.abs(k - near) > Math.abs(worst - near)) worst = k;
+    }
+    if (worst === null || worst === near) return false;
+    this.cache.get(worst)?.close?.();
+    this.cache.delete(worst);
+    this.hdrCache.delete(worst);
+    this.releaseOne();
+    return true;
+  }
+
+  private releaseOne(): void {
+    const per = Math.min(this.bytesPerFrame, this.reserved);
+    sharedLedger().release(per);
+    this.reserved -= per;
   }
 
   protected touch(_frame: number): void {
@@ -194,6 +324,13 @@ export abstract class BitmapCacheSource implements FrameSource {
 
   dispose(): void {
     this.disposed = true;
+    this.offLedger?.();
+    this.offLedger = null;
+    // Give the ledger back everything at once — releasing per frame as the map
+    // drains would leave a source that died mid-decode holding the difference,
+    // and nothing else can ever hand it back.
+    sharedLedger().release(this.reserved);
+    this.reserved = 0;
     for (const b of this.cache.values()) b.close?.();
     this.cache.clear();
     this.hdrCache.clear();

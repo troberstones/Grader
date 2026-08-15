@@ -7,8 +7,10 @@ import { revalidatePath } from "next/cache";
 import { parseCSV } from "@/lib/csv";
 import { normalizeRosterRow } from "@/lib/learning-suite";
 import type { LMSRosterRow } from "@/types/learning-suite";
+import { requireCapability } from "@/lib/auth/require";
 
 export async function getStudentsForCourse(courseId: number) {
+  await requireCapability("course.view", { kind: "course", courseId });
   return db
     .select({
       id: students.id,
@@ -26,6 +28,7 @@ export async function getStudentsForCourse(courseId: number) {
 }
 
 export async function importRoster(courseId: number, csvText: string) {
+  await requireCapability("course.edit", { kind: "course", courseId });
   const { data, errors } = parseCSV<LMSRosterRow>(csvText);
 
   if (errors.length > 0) {
@@ -116,6 +119,7 @@ export async function addStudent(
   courseId: number,
   data: { name: string; sortName: string; netId?: string; email?: string }
 ) {
+  await requireCapability("course.edit", { kind: "course", courseId });
   const result = await db.insert(students).values(data).returning();
   await db.insert(courseEnrollments).values({
     courseId,
@@ -126,6 +130,7 @@ export async function addStudent(
 }
 
 export async function removeEnrollment(courseId: number, studentId: number) {
+  await requireCapability("course.edit", { kind: "course", courseId });
   await db
     .delete(courseEnrollments)
     .where(

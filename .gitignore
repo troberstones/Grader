@@ -56,3 +56,6 @@ testData/**/*.webm
 # (runs on predev/prebuild). Not committed so it cannot drift from the
 # installed pdfjs-dist version.
 /public/pdf.worker.min.mjs
+
+# compiled pure modules for node --test (npm run test:rubric)
+/test/.build/

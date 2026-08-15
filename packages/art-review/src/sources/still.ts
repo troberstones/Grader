@@ -48,18 +48,28 @@ export class StillSource extends BitmapCacheSource {
 
 /** A pre-extracted image sequence, or PDF pages rasterised at ingest. */
 export class SequenceSource extends BitmapCacheSource {
-  protected limit = 48;
+  protected limit: number;
 
   constructor(
     item: ReviewItem,
     private ctx: SourceContext,
   ) {
     super(item, item.width, item.height, Math.max(1, item.frameUrls?.length ?? item.frameCount));
+
+    // Hold the whole shot if it will fit, and let the ledger say whether it
+    // does. A fixed count cap cannot: what a frame costs varies twelvefold
+    // between an ordinary one and an HDR one, so any number picked here is
+    // either wasteful or — as 48 was against a 49-frame shot — permanently one
+    // frame short, re-decoding that frame on every pass round the loop.
+    this.limit = this.frameCount;
   }
 
   protected async load(frame: number): Promise<ImageBitmap> {
     const url = this.item.frameUrls?.[frame];
     if (!url) throw new Error(`sequence: no url for frame ${frame}`);
+    // Never for RGBE — see StillSource.load. A resampled exponent is not a
+    // dimmer pixel, it is a different one.
+    if (this.isHdr) return loadBitmap(url);
     const cap = Math.min(this.ctx.maxCacheWidth, Math.max(640, this.ctx.viewportWidth * 2));
     return loadBitmap(url, this.item.width > cap ? cap : undefined);
   }
@@ -68,8 +78,10 @@ export class SequenceSource extends BitmapCacheSource {
     const url = this.item.frameUrls?.[frame];
     if (!url) return null;
     try {
-      const bmp = await loadBitmap(url);
-      return { type: "bitmap", bitmap: bmp, width: bmp.width, height: bmp.height };
+      // Through texFor, so an HDR frame is unpacked here too — handing back the
+      // raw bitmap would feed RGBE bytes to the shader as though they were
+      // colour, which reads as a dark, blotchy mess.
+      return this.texFor(frame, await loadBitmap(url));
     } catch {
       return null;
     }

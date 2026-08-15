@@ -70,6 +70,39 @@ export function Timeline({
   const pct = (f: number) => (frameCount <= 1 ? 0 : (f / (frameCount - 1)) * 100);
   const single = frameCount <= 1;
 
+  /**
+   * A run of frames as a track span.
+   *
+   * Frames are points on the scale — frame 0 sits at 0% and the last at 100%,
+   * so the playhead lands on them exactly — but a cached frame is a cell, not a
+   * point. Without the half-cell overhang a single cached frame has zero width,
+   * and a fully cached clip stops short of both ends and reads as a gap.
+   */
+  const span = (a: number, b: number) => {
+    const half = frameCount <= 1 ? 50 : 50 / (frameCount - 1);
+    const left = Math.max(0, pct(a) - half);
+    const right = Math.min(100, pct(b) + half);
+    return { left: `${left}%`, width: `${Math.max(0, right - left)}%` };
+  };
+
+  /** Nuke puts its cache line along the bottom of the timeline; so does this. */
+  const BAND = 5;
+
+  /**
+   * Is the playhead standing on a frame that is actually resident?
+   *
+   * Read from the same ranges the band draws from, deliberately rather than
+   * from the renderer's own hit/miss. Those update on a 400 ms tick, so a face
+   * driven by the live result would disagree with the bar directly beneath it
+   * for a third of a second at a time — and a marker that contradicts the thing
+   * next to it reads as broken rather than as information.
+   *
+   * Only for sources that keep a frame cache at all: a streamed <video> has no
+   * ranges to be outside of, and a single still is never a miss.
+   */
+  const tracked = !single && !!stats && (stats.mode === "full" || stats.mode === "window");
+  const miss = tracked && !stats!.ranges.some(([a, b]) => frame >= a && frame <= b);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
       <div
@@ -95,20 +128,55 @@ export function Timeline({
           userSelect: "none",
         }}
       >
-        {/* cache fill */}
+        {/* Cached region, as a wash over the full height. Faint on purpose:
+            this is context while scrubbing, and the band below is the part
+            meant to be read precisely. */}
         {stats?.ranges.map(([a, b], i) => (
           <div
             key={`c${i}`}
             style={{
               position: "absolute",
-              left: `${pct(a)}%`,
-              width: `${Math.max(0.4, pct(b) - pct(a))}%`,
+              ...span(a, b),
               top: 0,
               bottom: 0,
               background: "rgba(255,255,255,0.055)",
+              pointerEvents: "none",
             }}
           />
         ))}
+
+        {/* Cache band. The whole clip is a dim gutter and the resident frames
+            are lit, so what is *not* held is as legible as what is — which is
+            the question being asked when playback stutters. */}
+        {!single && stats && stats.mode !== "n/a" && (
+          <>
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: BAND,
+                background: "rgba(255,255,255,0.07)",
+                pointerEvents: "none",
+              }}
+            />
+            {stats.ranges.map(([a, b], i) => (
+              <div
+                key={`b${i}`}
+                style={{
+                  position: "absolute",
+                  ...span(a, b),
+                  bottom: 0,
+                  height: BAND,
+                  background: C.good,
+                  opacity: 0.75,
+                  pointerEvents: "none",
+                }}
+              />
+            ))}
+          </>
+        )}
 
         {/* annotation ticks */}
         {markers.map((m, i) => (
@@ -153,17 +221,38 @@ export function Timeline({
             boxShadow: "0 0 6px rgba(0,0,0,0.8)",
           }}
         />
-        <div
-          style={{
-            position: "absolute",
-            left: `calc(${pct(frame)}% - 5px)`,
-            bottom: 2,
-            width: 10,
-            height: 10,
-            borderRadius: 2,
-            background: C.text,
-          }}
-        />
+        {/* The handle doubles as the cache-miss tell: on a frame that is not
+            resident it pulls a face, because that is the frame the playback is
+            about to stutter on. */}
+        {miss ? (
+          <div
+            title={`Frame ${frame} is not in the cache — it has to be decoded before it can be shown`}
+            style={{
+              position: "absolute",
+              left: `calc(${pct(frame)}% - 7px)`,
+              bottom: 0,
+              width: 14,
+              height: 14,
+              fontSize: 12,
+              lineHeight: "14px",
+              textAlign: "center",
+            }}
+          >
+            🙁
+          </div>
+        ) : (
+          <div
+            style={{
+              position: "absolute",
+              left: `calc(${pct(frame)}% - 5px)`,
+              bottom: 2,
+              width: 10,
+              height: 10,
+              borderRadius: 2,
+              background: C.text,
+            }}
+          />
+        )}
       </div>
 
       <div

@@ -5,12 +5,15 @@ import { rubrics, rubricCriteria, rubricLevels } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { RubricJSON, RubricCriterion, RubricSettings } from "@/types/rubric";
+import { requireCapability } from "@/lib/auth/require";
 
 export async function getRubrics() {
+  await requireCapability("course.view");
   return db.select().from(rubrics).orderBy(desc(rubrics.updatedAt));
 }
 
 export async function getRubric(id: number) {
+  await requireCapability("course.view");
   const rubric = await db.select().from(rubrics).where(eq(rubrics.id, id));
   if (!rubric[0]) return null;
 
@@ -49,6 +52,7 @@ export async function createRubric(data: {
     levels: Array<{ level: number; label: string; description: string; points: number }>;
   }>;
 }) {
+  await requireCapability("course.edit");
   const rubric = await db.insert(rubrics).values({
     name: data.name,
     description: data.description,
@@ -87,6 +91,7 @@ export async function updateRubric(
     }>;
   }
 ) {
+  await requireCapability("course.edit");
   await db.update(rubrics).set({
     name: data.name,
     description: data.description,
@@ -118,6 +123,7 @@ export async function updateRubric(
 }
 
 export async function deleteRubric(id: number) {
+  await requireCapability("course.edit");
   const criteria = await db.select().from(rubricCriteria).where(eq(rubricCriteria.rubricId, id));
   for (const c of criteria) {
     await db.delete(rubricLevels).where(eq(rubricLevels.criteriaId, c.id));
@@ -128,6 +134,7 @@ export async function deleteRubric(id: number) {
 }
 
 export async function duplicateRubric(id: number) {
+  await requireCapability("course.edit");
   const original = await getRubric(id);
   if (!original) return null;
   return createRubric({
@@ -144,6 +151,7 @@ export async function duplicateRubric(id: number) {
 }
 
 export async function importRubricFromJSON(json: RubricJSON) {
+  await requireCapability("course.edit");
   return createRubric({
     name: json.name,
     description: json.description,
@@ -158,6 +166,7 @@ export async function importRubricFromJSON(json: RubricJSON) {
 }
 
 export async function exportRubricToJSON(id: number): Promise<RubricJSON | null> {
+  await requireCapability("course.view");
   const rubric = await getRubric(id);
   if (!rubric) return null;
   return {

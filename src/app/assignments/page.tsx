@@ -1,38 +1,52 @@
 import Link from "next/link";
-import { getAllAssignments } from "@/actions/assignments";
-import { getCourses } from "@/actions/courses";
+import { getAssignmentsForCourse } from "@/actions/assignments";
+import { getActiveCourse } from "@/actions/courses";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import { Plus, BookOpen, Calendar, ClipboardList, Pencil } from "lucide-react";
+import { Plus, Calendar, ClipboardList, Pencil, ChevronRight, CheckCircle2, Clock, Circle } from "lucide-react";
+import { formatTerm } from "@/lib/terms";
 
 export const dynamic = "force-dynamic";
 
 export default async function AssignmentsPage() {
-  const [assignments, courses] = await Promise.all([getAllAssignments(), getCourses()]);
+  const course = await getActiveCourse();
 
-  // Group by course
-  const byCourse = courses
-    .filter((c) => !c.archived)
-    .map((course) => ({
-      course,
-      assignments: assignments.filter((a) => a.courseId === course.id),
-    }))
-    .filter((group) => group.assignments.length > 0);
+  if (!course) {
+    return (
+      <PageContainer>
+        <Header title="Assignments" description="Pick a course to see its assignments" />
+        <div className="text-center py-16 text-muted-foreground">
+          <ClipboardList className="mx-auto h-12 w-12 mb-4 opacity-30" />
+          <p className="text-lg font-medium mb-1">No active course</p>
+          <p className="text-sm mb-4">Open a course from Courses and its assignments will show up here.</p>
+          <LinkButton href="/courses">Go to Courses</LinkButton>
+        </div>
+      </PageContainer>
+    );
+  }
 
-  const unassigned = assignments.filter(
-    (a) => !courses.find((c) => c.id === a.courseId)
-  );
+  const assignments = await getAssignmentsForCourse(course.id);
 
   return (
     <PageContainer>
       <Header
-        title="Assignments"
-        description="Manage grading assignments across all courses"
+        breadcrumb={
+          <nav className="flex items-center gap-1.5 text-sm text-muted-foreground mb-2">
+            <Link href="/courses" className="hover:text-foreground transition-colors">
+              Courses
+            </Link>
+            <ChevronRight className="h-3.5 w-3.5" />
+            <Link href={`/courses/${course.id}`} className="hover:text-foreground transition-colors">
+              {course.code}
+            </Link>
+          </nav>
+        }
+        title={`${course.name} — Assignments`}
+        description={`${course.code}${course.section ? ` · Section ${course.section}` : ""} · ${formatTerm(course.year, course.term)}`}
         actions={
-          <LinkButton href="/assignments/new">
+          <LinkButton href={`/assignments/new?courseId=${course.id}`}>
             <Plus className="mr-2 h-4 w-4" />
             New Assignment
           </LinkButton>
@@ -44,80 +58,79 @@ export default async function AssignmentsPage() {
           <ClipboardList className="mx-auto h-12 w-12 mb-4 opacity-30" />
           <p className="text-lg font-medium mb-1">No assignments yet</p>
           <p className="text-sm mb-4">Create an assignment and link it to a rubric to start grading.</p>
-          <LinkButton href="/assignments/new">Create your first assignment</LinkButton>
+          <LinkButton href={`/assignments/new?courseId=${course.id}`}>Create your first assignment</LinkButton>
         </div>
       ) : (
-        <div className="space-y-8">
-          {byCourse.map(({ course, assignments: courseAssignments }) => (
-            <div key={course.id}>
-              <div className="flex items-center gap-2 mb-3">
-                <BookOpen className="h-4 w-4 text-muted-foreground" />
-                <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
-                  {course.code} — {course.name}
-                  <span className="ml-2 font-normal normal-case">{course.semester}</span>
-                </h2>
-              </div>
-              <div className="space-y-2">
-                {courseAssignments.map((a) => (
-                  <AssignmentRow key={a.id} assignment={a} />
-                ))}
-              </div>
-            </div>
+        <div className="rounded-xl border divide-y divide-border overflow-hidden">
+          {assignments.map((a) => (
+            <AssignmentRow key={a.id} assignment={a} />
           ))}
-          {unassigned.length > 0 && (
-            <div>
-              <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide mb-3">
-                Other
-              </h2>
-              {unassigned.map((a) => (
-                <AssignmentRow key={a.id} assignment={a} />
-              ))}
-            </div>
-          )}
         </div>
       )}
     </PageContainer>
   );
 }
 
-type AssignmentRow = Awaited<ReturnType<typeof getAllAssignments>>[number];
+type AssignmentRow = Awaited<ReturnType<typeof getAssignmentsForCourse>>[number];
 
 function AssignmentRow({ assignment: a }: { assignment: AssignmentRow }) {
+  const pct = a.stats.total > 0 ? Math.round((a.stats.graded / a.stats.total) * 100) : 0;
+
   return (
-    <Card className="hover:border-primary/50 transition-colors">
-      <CardContent className="px-4 py-3 flex items-center gap-4">
-        <Link href={`/assignments/${a.id}`} className="flex-1 min-w-0 flex items-center gap-4">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="font-medium truncate">{a.name}</span>
-              {a.rubricName && (
-                <Badge variant="secondary" className="text-xs shrink-0">
-                  {a.rubricName}
-                </Badge>
-              )}
-            </div>
-            {a.dueDate && (
-              <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
-                <Calendar className="h-3 w-3" />
-                Due {new Date(a.dueDate).toLocaleDateString()}
-              </div>
+    <div className="flex items-center gap-4 px-4 py-2.5 hover:bg-muted/40 transition-colors group">
+      <Link href={`/assignments/${a.id}`} className="flex-1 min-w-0 flex items-center gap-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-medium truncate">{a.name}</span>
+            {a.rubricName && (
+              <Badge variant="secondary" className="text-xs shrink-0">
+                {a.rubricName}
+              </Badge>
             )}
           </div>
-          <div className="flex items-center gap-3 shrink-0">
-            <span className="text-sm text-muted-foreground">{a.pointsPossible} pts</span>
-            <Badge variant="outline" className="text-xs capitalize">
-              {a.submissionType}
-            </Badge>
+          <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground flex-wrap">
+            {a.dueDate && (
+              <span className="flex items-center gap-1">
+                <Calendar className="h-3 w-3" />
+                Due {new Date(a.dueDate).toLocaleDateString()}
+              </span>
+            )}
+            {a.stats.total > 0 && (
+              <span className="flex items-center gap-1">
+                {a.stats.graded === a.stats.total ? (
+                  <CheckCircle2 className="h-3 w-3 text-green-500" />
+                ) : a.stats.graded > 0 || a.stats.inProgress > 0 ? (
+                  <Clock className="h-3 w-3 text-yellow-500" />
+                ) : (
+                  <Circle className="h-3 w-3" />
+                )}
+                {a.stats.graded}/{a.stats.total} graded
+              </span>
+            )}
           </div>
-        </Link>
-        <Link
-          href={`/assignments/${a.id}/edit`}
-          className="shrink-0 p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-          title="Edit assignment"
-        >
-          <Pencil className="h-3.5 w-3.5" />
-        </Link>
-      </CardContent>
-    </Card>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          {a.stats.total > 0 && (
+            <div className="w-20">
+              <div className="text-xs text-right text-muted-foreground mb-1">{pct}%</div>
+              <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                <div className="h-full bg-green-500 transition-all" style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+          )}
+          <span className="text-sm text-muted-foreground">{a.pointsPossible} pts</span>
+          <Badge variant="outline" className="text-xs capitalize">
+            {a.submissionType}
+          </Badge>
+        </div>
+      </Link>
+      <Link
+        href={`/assignments/${a.id}/edit`}
+        className="shrink-0 p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+        title="Edit assignment"
+      >
+        <Pencil className="h-3.5 w-3.5" />
+      </Link>
+    </div>
   );
 }

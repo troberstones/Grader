@@ -12,6 +12,7 @@ import {
 import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { GradeStatus } from "@/types/grading";
+import { requireCapability } from "@/lib/auth/require";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ export type StudentWithGrade = {
 // ─── Get grade sheet data for an assignment ───────────────────────────────────
 
 export async function getGradeSheet(assignmentId: number): Promise<StudentWithGrade[]> {
+  await requireCapability("course.view");
   // All students enrolled in the assignment's course
   // We join via assignment → course → enrollments → students
   const { assignments } = await import("@/db/schema");
@@ -124,6 +126,7 @@ export async function saveGrade({
   entries: { criteriaId: number; levelId: number; score: number }[];
   feedback: string;
 }) {
+  await requireCapability("grade.write");
   // Determine status
   // Load all criteria for this assignment's rubric to know total count
   const { assignments } = await import("@/db/schema");
@@ -214,6 +217,7 @@ export async function saveGrade({
 // ─── Clear a student's grade (reset to ungraded) ──────────────────────────────
 
 export async function clearGrade(assignmentId: number, studentId: number) {
+  await requireCapability("grade.write");
   const existing = await db
     .select({ id: grades.id })
     .from(grades)
@@ -229,6 +233,7 @@ export async function clearGrade(assignmentId: number, studentId: number) {
 // ─── Export grades as CSV for Learning Suite ──────────────────────────────────
 
 export async function exportGradesCSV(assignmentId: number): Promise<string> {
+  await requireCapability("grade.write");
   const rows = await db
     .select({
       netId: students.netId,

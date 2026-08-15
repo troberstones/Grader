@@ -54,6 +54,7 @@ uniform int uChannel;        // 0 rgb, 1 r, 2 g, 3 b, 4 a, 5 luma
 uniform int uTransform;      // 0 native, 1 srgb, 2 display-p3, 3 rec709
 uniform bool uOutputP3;      // the drawing buffer really is Display-P3
 uniform bool uLinearSource;  // texels are already linear light, and may exceed 1
+uniform mat3 uPrimaries;     // source working space -> linear sRGB; identity for sRGB
 uniform bool uFlipY;         // texture origin differs between sources
 uniform int uBlend;          // see BLEND_* below
 uniform bool uPremultiplied;
@@ -105,6 +106,16 @@ void main() {
   // file worth reading, and the decode curve would bend data that was never
   // encoded with it.
   vec3 lin = uLinearSource ? max(c, 0.0) : toLinear3(clamp(c, 0.0, 1.0));
+
+  // Into sRGB primaries before anything reads the values as colour. A render in
+  // ACES primaries left untransformed is not slightly off: AP0 encloses the
+  // whole spectral locus, so its numbers land on far less saturated colours and
+  // the image reads as flat and washed rather than as a missing transform.
+  //
+  // This has to come before the luma weights below, which are Rec.709 and mean
+  // nothing against any other set of primaries. No clamp here — out-of-gamut
+  // colours legitimately go negative, and the encode clamps once at the end.
+  lin = uPrimaries * lin;
 
   lin *= pow(2.0, uExposure);
 

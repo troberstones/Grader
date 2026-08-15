@@ -12,6 +12,7 @@ import { GLRenderer, type ViewParams } from "../render/gl";
 import { createSource, DecodedVideoSource, VideoElementSource } from "../sources";
 import type { CacheStats, FrameSource, SourceContext } from "../sources/types";
 import { LayeredSource } from "../sources/layered";
+import { sharedLedger, storedCacheLimit } from "../sources/ledger";
 import type { SessionApi } from "./useSession";
 
 /** Master heartbeat. Cheap: one small message, and idle beats change nothing. */
@@ -19,6 +20,8 @@ const SYNC_INTERVAL_MS = 5_000;
 
 export interface ViewerApi {
   state: ViewerState;
+  /** The detected memory tier. Exposed so the cache control can offer "Auto". */
+  budget: Budget;
   item: ReviewItem | null;
   items: ReviewItem[];
   source: FrameSource | null;
@@ -125,6 +128,17 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   const invalidate = useCallback(() => {
     dirtyRef.current = true;
   }, []);
+
+  // Size the tab-wide frame ledger before any source can reserve against it —
+  // declared above the source effect so it runs first. The ledger's own default
+  // is a conservative 512 MB, which on a workstation would cap an HDR sequence
+  // at a fraction of what actually fits.
+  //
+  // A ceiling set by hand wins over detection: only the person at the machine
+  // knows they have a shot open that is worth holding whole.
+  useEffect(() => {
+    sharedLedger(storedCacheLimit() ?? budget.ram);
+  }, [budget.ram]);
 
   // ── Source lifecycle ────────────────────────────────────────────────────────
   const getSource = useCallback(
@@ -388,6 +402,10 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
       flipV: st.flipV,
       rotate: st.rotate,
       color: st.color,
+      // A property of the file, not of the session, so it is deliberately not
+      // part of ViewerState and never travels on the sync bus — every host
+      // reads the same item and derives the same transform.
+      sourcePrimaries: it?.colorSpace?.primaries,
     };
   }, [glCanvasRef, containerRef]);
 
@@ -485,6 +503,17 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
         }
       }
 
+      // Before the early return below, not after it. Cache state carries on
+      // changing while the picture does not — frames arrive behind a settled
+      // image, and the ceiling can move under it — so tying the readout to
+      // whether a draw happened froze it at whatever was true when the last
+      // frame was painted. Which was usually "nothing cached yet, decoding".
+      const now = performance.now();
+      if (now - lastStatsAt > 400) {
+        lastStatsAt = now;
+        setStats(src.stats());
+      }
+
       if (!dirtyRef.current) {
         // Video elements and in-flight decodes keep the frame moving even when
         // nothing in React changed.
@@ -533,12 +562,6 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
       }
 
       drawOverlayRef.current(params, frame);
-
-      const now = performance.now();
-      if (now - lastStatsAt > 400) {
-        lastStatsAt = now;
-        setStats(src.stats());
-      }
     };
 
     rafRef.current = requestAnimationFrame(loop);
@@ -569,6 +592,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   }, [containerRef, overlayCanvasRef, invalidate]);
 
   return {
+    budget,
     state,
     item,
     items,

@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { reviewMedia, reviewPrefs, reviewStrokes, submissions } from "@/db/schema";
 import { ingestFile } from "@grader/art-review/server";
 import type { FrameMarker, ReviewItem } from "@grader/art-review";
+import { requireCapability } from "@/lib/auth/require";
 
 /**
  * Server side of ReviewDataAdapter.
@@ -49,6 +50,7 @@ const inFlight = new Map<number, Promise<void>>();
  * the presence of review_media rows, not by re-running ffmpeg.
  */
 export async function ensureIngested(submissionId: number): Promise<void> {
+  await requireCapability("course.view");
   const existing = await db
     .select({ id: reviewMedia.id })
     .from(reviewMedia)
@@ -151,6 +153,7 @@ export async function ensureIngested(submissionId: number): Promise<void> {
 // ── Playlist ──────────────────────────────────────────────────────────────────
 
 export async function listReviewItems(contextId: string): Promise<ReviewItem[]> {
+  await requireCapability("course.view");
   const { assignmentId, studentId } = await parseContext(contextId);
 
   const subs = await db
@@ -194,12 +197,21 @@ export async function listReviewItems(contextId: string): Promise<ReviewItem[]> 
     const composite = media.find((m) => m.variant === "composite");
     const manifest = media.find((m) => m.variant === "page" && m.idx === -1);
     const poster = media.find((m) => m.variant === "poster");
-    const primary = proxy ?? composite ?? media.find((m) => m.variant === "original");
+    // Already ordered by idx above, so this is frame order.
+    const frames = media.filter((m) => m.variant === "frame");
+    const primary = proxy ?? composite ?? frames[0] ?? media.find((m) => m.variant === "original");
 
     const kind = (primary?.kind ?? (sub.mediaType === "video" ? "video" : "still")) as ReviewItem["kind"];
     const url = primary?.variant === "original" || !primary
       ? `/api/submissions/${sub.id}/file`
       : `/api/review/media/${primary.id}`;
+
+    // A sequence addresses its frames individually; frameCount follows the
+    // urls rather than the stored count, so a frame that failed to decode
+    // cannot leave the transport seeking past the end of the list.
+    const frameUrls = frames.length
+      ? frames.map((f) => `/api/review/media/${f.id}`)
+      : undefined;
 
     items.push({
       id: itemIdFor(sub.id),
@@ -209,7 +221,8 @@ export async function listReviewItems(contextId: string): Promise<ReviewItem[]> 
       url,
       width: primary?.width ?? 1600,
       height: primary?.height ?? 900,
-      frameCount: Math.max(1, primary?.frameCount ?? 1),
+      frameCount: Math.max(1, frameUrls?.length ?? primary?.frameCount ?? 1),
+      frameUrls,
       fps: primary?.fps ?? null,
       duration: primary?.duration ?? null,
       posterUrl: poster ? `/api/review/media/${poster.id}` : undefined,
@@ -231,6 +244,7 @@ export async function getStrokes(
   itemId: string,
   sinceSeq?: number,
 ): Promise<{ strokes: StoredStrokeRow[]; deleted: number[]; head: number }> {
+  await requireCapability("course.view");
   const base = and(
     eq(reviewStrokes.itemId, itemId),
     sinceSeq ? gt(reviewStrokes.seq, sinceSeq) : undefined,
@@ -274,6 +288,7 @@ export async function appendStrokes(
   itemId: string,
   strokes: { localId: string; frameIn: number; frameOut: number; authorId: string; b: string }[],
 ): Promise<StoredStrokeRow[]> {
+  await requireCapability("grade.write");
   if (strokes.length === 0) return [];
 
   const headRow = await db
@@ -336,6 +351,7 @@ export async function appendStrokes(
 
 /** Soft delete keeps `seq` monotonic, so every peer's sync cursor stays valid. */
 export async function deleteStrokes(itemId: string, ids: number[]): Promise<void> {
+  await requireCapability("grade.write");
   if (ids.length === 0) return;
   for (const id of ids) {
     await db
@@ -347,6 +363,7 @@ export async function deleteStrokes(itemId: string, ids: number[]): Promise<void
 
 /** Timeline ticks straight from the index — no stroke bodies decoded. */
 export async function getMarkers(itemId: string): Promise<FrameMarker[]> {
+  await requireCapability("course.view");
   const rows = await db
     .select({
       frameIn: reviewStrokes.frameIn,
@@ -368,6 +385,7 @@ export async function getMarkers(itemId: string): Promise<FrameMarker[]> {
 // ── Preferences ───────────────────────────────────────────────────────────────
 
 export async function savePrefs(contextId: string, prefs: Record<string, unknown>): Promise<void> {
+  await requireCapability("grade.write");
   await db
     .insert(reviewPrefs)
     .values({ contextId, data: JSON.stringify(prefs) })
@@ -378,6 +396,7 @@ export async function savePrefs(contextId: string, prefs: Record<string, unknown
 }
 
 export async function loadPrefs(contextId: string): Promise<Record<string, unknown> | null> {
+  await requireCapability("course.view");
   const rows = await db.select().from(reviewPrefs).where(eq(reviewPrefs.contextId, contextId));
   if (!rows[0]) return null;
   try {

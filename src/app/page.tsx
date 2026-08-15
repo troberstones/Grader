@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LinkButton } from "@/components/ui/link-button";
 import { BookOpen, ClipboardList, Grid3X3 } from "lucide-react";
 import Link from "next/link";
+import { formatTerm } from "@/lib/terms";
 
 export default async function DashboardPage() {
   const allCourses = await getCourses();
@@ -55,7 +56,7 @@ export default async function DashboardPage() {
                   </CardHeader>
                   <CardContent>
                     <p className="text-sm text-muted-foreground">
-                      {course.code} {course.section ? `- ${course.section}` : ""} &middot; {course.semester}
+                      {course.code} {course.section ? `- ${course.section}` : ""} &middot; {formatTerm(course.year, course.term)}
                     </p>
                   </CardContent>
                 </Card>

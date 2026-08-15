@@ -2,11 +2,16 @@
 
 Written 2026-08-12, when the rubric gained a dock beside the art reviewer.
 
-This is a note, not a claim. Grader currently has **no authentication of any
-kind** — no login, no session, no middleware. Anything that can reach the port
-can read and write every grade. That is a deliberate trade for a single-
-instructor tool on a studio LAN, and it is the thing to fix first if any of the
-assumptions below stop holding.
+> **Updated 2026-08-14.** Grader now has authentication *and* authorization:
+> every server action and same-origin route handler requires a signed-in
+> session with the right capability. What is still open on purpose is the
+> Learning Suite bridge (`/api/ls-bridge/*`, `/api/submissions/upload`) — a
+> browser extension calls these cross-origin, which is structurally
+> incompatible with cookie sessions. Read "Known gaps" below.
+
+This is a note, not a claim. Grader has real authorization as of 2026-08-14 for
+everything reachable from its own signed-in browser tab. The Learning Suite
+bridge is the one deliberate exception, not an oversight — see gap #1.
 
 ## The invariant worth protecting
 
@@ -39,29 +44,97 @@ structural property, which is why the structure is worth keeping.
 
 Roughly in the order they'd matter if the tool left the studio:
 
-1. **No authentication.** Any device on the subnet can open any assignment and
-   change grades. There is not even a shared password.
+1. **~~No authentication.~~ ~~The API is not.~~ One corner of it still is, on
+   purpose.** `src/proxy.ts` redirects unauthenticated page requests, the root
+   layout re-checks the session against the database, and every server action
+   (`src/actions/*.ts`) and same-origin route handler now calls
+   `requireCapability()` / `apiRequireCapability()`
+   (`src/lib/auth/require.ts`, `src/lib/auth/api.ts`) before touching the
+   database. That covers `/api/submissions/[id]/file`, `/api/review/*`, and
+   `/api/sync/*` — all fetched from grader's own signed-in tab, so the session
+   cookie travels normally.
+
+   **`/api/ls-bridge/*` and `/api/submissions/upload` stay open.** A Chrome
+   extension content script running inside Learning Suite's own origin calls
+   these directly. That is cross-origin by definition: the routes answer with
+   `Access-Control-Allow-Origin: *` so the extension can reach them at all, and
+   a wildcard origin forbids credentialed requests by spec — the session
+   cookie could not travel here even if grader tried to send it, and
+   `sameSite=lax` would block it on the way in regardless. Gating these with a
+   cookie check wouldn't add security, it would just break the LS sync. A real
+   fix needs a *machine* credential — a shared API key the extension sends in
+   a header — which is a separate feature, not implemented yet. Until then,
+   anything that can reach the port can sync rosters, assignments, and files
+   through these four routes. This is the largest remaining gap.
 2. **`allowedDevOrigins` uses subnet wildcards** (`192.168.86.*` and friends, in
    `next.config.ts`). Necessary because DHCP moves the studio machine between
    sessions, but it means any host on those subnets is a permitted origin.
-3. **No authorization model.** `author.id` is hard-coded to `"instructor"` in
-   the review route. The stroke schema already carries `author_id` per stroke,
-   so peer critique is a migration away — but visibility rules and moderation
-   do not exist yet, and nothing distinguishes one author from another.
-4. **The follower has no way to verify the master.** Whoever posts to
-   `/api/sync` first with `playback-master` is the master. On a trusted LAN this
-   is fine; on an open network it is a hijack.
-5. **Student media is served without a check.** `/api/review/media/[mediaId]`
-   and `/api/submissions/[id]/file` will hand a submission to any requester.
+3. **Authorization exists globally, not per course.** `can()` in
+   `src/lib/auth/roles.ts` decides on a *resource*, and global roles
+   (admin / instructor / assistant) are enforced — the admin console is
+   genuinely admin-only. But `course_members` does not exist yet, so every
+   active instructor can reach every course. The assumption is greppable as
+   `COURSE_SCOPING_PENDING`.
+
+   `author.id` is still hard-coded to `"instructor"` in the review route, so
+   strokes do not yet carry a real author even though the schema has the column.
+4. **The follower has no way to verify the master.** `/api/sync/*` now
+   requires a signed-in session — confirmed with the studio: the machine
+   plugged into the projector signs in like anything else — but any signed-in
+   account can post `playback-master` first and become master. That narrows
+   the earlier "anything on the subnet" hijack to "anyone with an account,"
+   which is the right size for a multi-instructor tool but is still not a
+   real claim check. Worth a real `sender` credential if this ever hosts more
+   than one crit at a time.
+5. **~~Student media is served without a check.~~** Fixed alongside the rest of
+   this sweep: `/api/review/media/[mediaId]`, `/api/review/layers/[id]`, and
+   `/api/submissions/[id]/file` all require `course.view` now.
+
+6. **Sessions travel over plain HTTP.** Cookies are `httpOnly` and
+   `sameSite=lax` but not `secure`, because the studio LAN has no TLS and a
+   secure cookie would simply never be sent. Set `SECURE_COOKIES=1` when this
+   moves behind HTTPS — the flag is configuration, not a code change.
+
+7. **No rate limiting on sign-in.** Failures are generic and constant-time-ish,
+   but nothing slows down repeated attempts.
 
 ## What is already fenced off
+
+- **Every server action and same-origin route handler checks a capability.**
+  `requireCapability()` (actions) and `apiRequireCapability()` (route
+  handlers) both call `can(user, capability, resource)` — every exported
+  function in a `"use server"` file is independently reachable by RPC id
+  whether or not a page currently calls it, so the check lives inside each
+  function rather than at whichever page happens to call it today. Reads need
+  `course.view`; writes need `course.edit`, `grade.write`, or `course.create`
+  depending on what they touch. This is still global rather than per-course —
+  see gap #3, `COURSE_SCOPING_PENDING`.
 
 - `/api/review/diagnostics` returns 404 unless `NODE_ENV === "development"`,
   caps the body at 512 KB, and rebuilds the filename from a sanitised stem, so
   it cannot be used to write outside `storage/diagnostics/`.
 
+- **Credentials.** Passwords are scrypt (N=16384, r=8, p=1) with a per-password
+  salt, compared with `timingSafeEqual`. Session and invitation tokens are 32
+  bytes of `randomBytes`; only their SHA-256 is stored, so read access to the
+  database does not confer the ability to forge either. Verified: the invite
+  token issued in testing appears nowhere in `invites` except as its hash.
+
+- **Sessions are rows, not JWTs**, so disabling an account takes effect on the
+  next request rather than whenever a token happens to expire. `getCurrentUser`
+  drops every session belonging to a non-active account on sight.
+
+- **Invitations are single-use.** Acceptance consumes the token in the same
+  statement that checks it is unconsumed, so two submissions of one link cannot
+  both create a session.
+
+- **The last administrator cannot be demoted or disabled**, and nobody can
+  disable their own account — otherwise account management becomes permanently
+  unreachable without hand-editing the database.
+
 ## Before this is exposed to anything but the studio LAN
 
-At minimum: put an auth check in middleware covering every `/assignments` and
-`/api` route, drop the origin wildcards to specific hosts, and decide what a
-student is allowed to see before `author.id` stops being a constant.
+At minimum: give the LS bridge a machine credential instead of leaving it
+open, drop the origin wildcards to specific hosts, set `SECURE_COOKIES=1`
+behind TLS, and decide what a student is allowed to see before `author.id`
+stops being a constant.

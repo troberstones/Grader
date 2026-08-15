@@ -38,6 +38,8 @@ export class DecodedVideoSource implements FrameSource {
   private listeners = new Set<() => void>();
   private version = 0;
   private disposed = false;
+  private trimming = false;
+  private offLedger: (() => void) | null = null;
   private error: string | undefined;
   private decodedCount = 0;
   private decoding = false;
@@ -57,7 +59,12 @@ export class DecodedVideoSource implements FrameSource {
     this.width = item.width;
     this.height = item.height;
     this.frameCount = Math.max(1, item.frameCount);
-    this.ledger = ledger ?? sharedLedger(budget.ram);
+    // Take the ledger as it is rather than sizing it. The viewer sets the
+    // ceiling once, from detection or from whatever the instructor chose, and a
+    // source resizing it on construction quietly reverted that choice the next
+    // time a video was opened.
+    this.ledger = ledger ?? sharedLedger();
+    this.offLedger = this.ledger.onChange(() => this.trim());
 
     const choice = chooseCacheSize(
       budget,
@@ -301,6 +308,29 @@ export class DecodedVideoSource implements FrameSource {
     this.frames.clear();
   }
 
+  /**
+   * Give frames back when the ceiling moves down under us.
+   *
+   * A decoded video holds the largest buffers here, so leaving it alone while
+   * the stills trimmed would have made the control look broken: the number
+   * would barely move. Re-entrant, because each release emits the change that
+   * triggered this.
+   */
+  private trim(): void {
+    if (this.trimming || this.disposed) return;
+    this.trimming = true;
+    try {
+      while (this.ledger.pressure > 1 && this.frames.size > 1) {
+        const before = this.frames.size;
+        this.evictFurthest(this.windowCenter, this.bytesPerFrame);
+        if (this.frames.size === before) break;
+      }
+    } finally {
+      this.trimming = false;
+    }
+    this.emit();
+  }
+
   peek(frame: number): FrameRef | null {
     const f = Math.min(this.frameCount - 1, Math.max(0, Math.round(frame)));
     this.windowCenter = f;
@@ -383,6 +413,8 @@ export class DecodedVideoSource implements FrameSource {
 
   dispose(): void {
     this.disposed = true;
+    this.offLedger?.();
+    this.offLedger = null;
     this.releaseAll();
     this.listeners.clear();
     this.scratch = null;
