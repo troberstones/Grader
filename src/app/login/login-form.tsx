@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useActionState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -11,31 +11,19 @@ import { signIn } from "@/actions/auth";
 
 export function LoginForm({ next }: { next: string }) {
   const router = useRouter();
-  const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
+  const [state, formAction, pending] = useActionState(signIn, null);
 
-  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = new FormData(e.currentTarget);
-    const email = String(form.get("email") ?? "");
-    const password = String(form.get("password") ?? "");
-
-    setError(null);
-    startTransition(async () => {
-      const result = await signIn(email, password);
-      if (!result.ok) {
-        setError(result.error ?? "Could not sign in.");
-        return;
-      }
+  useEffect(() => {
+    if (state?.ok) {
       router.replace(next);
       // The layout renders the signed-in user, so the tree has to be re-fetched
       // rather than served from the client router cache.
       router.refresh();
-    });
-  }
+    }
+  }, [state, next, router]);
 
   return (
-    <form onSubmit={onSubmit} className="space-y-5">
+    <form action={formAction} className="space-y-5">
       <div className="space-y-2">
         <Label htmlFor="email">Email</Label>
         <Input
@@ -61,7 +49,7 @@ export function LoginForm({ next }: { next: string }) {
         />
       </div>
 
-      <FormError>{error}</FormError>
+      <FormError>{state && !state.ok ? state.error : null}</FormError>
 
       <Button type="submit" className="w-full" disabled={pending}>
         {pending ? "Signing in…" : "Sign in"}

@@ -48,11 +48,19 @@ async function requestMeta() {
  * difference tells an unauthenticated caller which email addresses are real.
  * A disabled account is the one exception worth naming, since the person
  * affected needs to know to ask an administrator rather than keep retrying.
+ *
+ * Signature is `(prevState, formData)` so `useActionState` can bind it
+ * directly to `<form action={...}>` — that gives the form a real fallback
+ * (a plain HTTP POST) when client JS never runs, instead of the button doing
+ * nothing at all. See login-form.tsx.
  */
-export async function signIn(email: string, password: string): Promise<ActionResult> {
+export async function signIn(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const email = String(formData.get("email") ?? "");
+  const password = String(formData.get("password") ?? "");
+
   if (await needsBootstrap()) return fail("No accounts exist yet. Set up the first administrator.");
 
-  const user = await findUserByEmail(email ?? "");
+  const user = await findUserByEmail(email);
 
   // Always run a verification, even with no user, so that a missing account and
   // a wrong password take a comparable amount of time.
@@ -86,24 +94,29 @@ export async function signOut(): Promise<ActionResult> {
  * Only possible while no account exists — the check is re-read here rather than
  * trusted from the page, because a page that renders is not an authorization
  * decision.
+ *
+ * `(prevState, formData)` signature, same reasoning as `signIn` — this is the
+ * only entry point into a brand-new deployment, so it has to work even if
+ * client JS never loads. The password-match check moved here from the client
+ * component for the same reason: a client-only wrapper around this function
+ * can't be handed to `<form action>`, only the real server action can.
  */
-export async function bootstrapAdmin(input: {
-  name: string;
-  email: string;
-  password: string;
-}): Promise<ActionResult> {
+export async function bootstrapAdmin(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
   if (!(await needsBootstrap())) return fail("An account already exists. Sign in instead.");
 
-  const name = input.name?.trim();
-  const email = normaliseEmail(input.email ?? "");
+  const name = String(formData.get("name") ?? "").trim();
+  const email = normaliseEmail(String(formData.get("email") ?? ""));
+  const password = String(formData.get("password") ?? "");
+  const confirm = String(formData.get("confirm") ?? "");
 
   if (!name) return fail("Enter your name.");
   if (!isEmail(email)) return fail("Enter a valid email address.");
+  if (password !== confirm) return fail("The two passwords do not match.");
 
-  const problem = passwordProblem(input.password ?? "");
+  const problem = passwordProblem(password);
   if (problem) return fail(problem);
 
-  const passwordHash = await hashPassword(input.password);
+  const passwordHash = await hashPassword(password);
 
   const [created] = await db
     .insert(users)
@@ -209,12 +222,26 @@ export async function inspectInvite(token: string): Promise<InviteDetails | null
  *
  * The invitation is consumed inside the same statement that checks it is
  * unconsumed, so two submissions of the same link cannot both create a session.
+ *
+ * `(token, prevState, formData)` — bound with `acceptInvite.bind(null, token)`
+ * before being handed to `useActionState`, same reasoning as `bootstrapAdmin`:
+ * this is an entry point that has to work without client JS.
  */
-export async function acceptInvite(token: string, input: { name?: string; password: string }): Promise<ActionResult> {
+export async function acceptInvite(
+  token: string,
+  _prevState: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
   const details = await inspectInvite(token);
   if (!details) return fail("This invitation is no longer valid. Ask for a new one.");
 
-  const problem = passwordProblem(input.password ?? "");
+  const password = String(formData.get("password") ?? "");
+  const confirm = String(formData.get("confirm") ?? "");
+  const name = String(formData.get("name") ?? "").trim();
+
+  if (password !== confirm) return fail("The two passwords do not match.");
+
+  const problem = passwordProblem(password);
   if (problem) return fail(problem);
 
   const claimed = await db
@@ -225,8 +252,7 @@ export async function acceptInvite(token: string, input: { name?: string; passwo
 
   if (claimed.length === 0) return fail("This invitation has already been used.");
 
-  const passwordHash = await hashPassword(input.password);
-  const name = input.name?.trim();
+  const passwordHash = await hashPassword(password);
 
   await db
     .update(users)

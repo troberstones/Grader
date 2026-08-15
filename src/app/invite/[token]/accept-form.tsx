@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useActionState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -12,34 +12,17 @@ import { MIN_PASSWORD_LENGTH } from "@/lib/auth/password";
 
 export function AcceptForm({ token, name }: { token: string; name: string }) {
   const router = useRouter();
-  const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
+  const [state, formAction, pending] = useActionState(acceptInvite.bind(null, token), null);
 
-  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = new FormData(e.currentTarget);
-    const password = String(form.get("password") ?? "");
-    const confirm = String(form.get("confirm") ?? "");
-
-    if (password !== confirm) {
-      setError("The two passwords do not match.");
-      return;
-    }
-
-    setError(null);
-    startTransition(async () => {
-      const result = await acceptInvite(token, { name: String(form.get("name") ?? ""), password });
-      if (!result.ok) {
-        setError(result.error ?? "Could not set your password.");
-        return;
-      }
+  useEffect(() => {
+    if (state?.ok) {
       router.replace("/");
       router.refresh();
-    });
-  }
+    }
+  }, [state, router]);
 
   return (
-    <form onSubmit={onSubmit} className="space-y-5">
+    <form action={formAction} className="space-y-5">
       <div className="space-y-2">
         <Label htmlFor="name">Your name</Label>
         <Input id="name" name="name" defaultValue={name} required disabled={pending} />
@@ -68,7 +51,7 @@ export function AcceptForm({ token, name }: { token: string; name: string }) {
         <Input id="confirm" name="confirm" type="password" autoComplete="new-password" required disabled={pending} />
       </div>
 
-      <FormError>{error}</FormError>
+      <FormError>{state && !state.ok ? state.error : null}</FormError>
 
       <Button type="submit" className="w-full" disabled={pending}>
         {pending ? "Setting up…" : "Set password and sign in"}
