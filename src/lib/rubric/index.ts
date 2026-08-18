@@ -25,8 +25,11 @@ export {
   round1,
 } from "./bands";
 
-export { bandTable, computeScore, previewOutcomes } from "./score";
+export { bandTable, computeScore, criterionPoints, previewOutcomes } from "./score";
 export type { PreviewRow } from "./score";
 
 export { repairMessage, validateRubric } from "./validate";
 export type { Issue, ValidationResult } from "./validate";
+
+export { fromSelections, isShareModel, toNormalRubric, toSelections } from "./adapter";
+export type { DbCriterionRow, DbLevelRow, DbRubricRow, DbSelectionRow } from "./adapter";

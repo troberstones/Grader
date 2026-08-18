@@ -1,8 +1,8 @@
 "use server";
 
 import { db } from "@/db";
-import { assignments, courses, rubrics, rubricCriteria, rubricLevels, grades } from "@/db/schema";
-import { eq, desc, and } from "drizzle-orm";
+import { assignments, courses, courseMembers, rubrics, rubricCriteria, rubricLevels, grades } from "@/db/schema";
+import { eq, desc, and, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireCapability } from "@/lib/auth/require";
 import type { Term } from "@/lib/terms";
@@ -69,7 +69,15 @@ export async function getAssignmentsForCourse(courseId: number) {
 }
 
 export async function getAllAssignments() {
-  await requireCapability("course.view");
+  const user = await requireCapability("course.view");
+  const membershipFilter =
+    user.globalRole === "admin"
+      ? undefined
+      : inArray(
+          courses.id,
+          db.select({ courseId: courseMembers.courseId }).from(courseMembers).where(eq(courseMembers.userId, user.id))
+        );
+
   const rows = await db
     .select({
       id: assignments.id,
@@ -93,14 +101,17 @@ export async function getAllAssignments() {
     .from(assignments)
     .leftJoin(rubrics, eq(assignments.rubricId, rubrics.id))
     .innerJoin(courses, eq(assignments.courseId, courses.id))
-    .where(and(eq(assignments.archived, 0), eq(courses.archived, 0)))
+    .where(
+      membershipFilter
+        ? and(eq(assignments.archived, 0), eq(courses.archived, 0), membershipFilter)
+        : and(eq(assignments.archived, 0), eq(courses.archived, 0))
+    )
     .orderBy(desc(assignments.createdAt));
 
   return rows;
 }
 
 export async function getAssignment(id: number) {
-  await requireCapability("course.view");
   const row = await db
     .select({
       id: assignments.id,
@@ -122,6 +133,7 @@ export async function getAssignment(id: number) {
 
   if (!row[0]) return null;
   const a = row[0];
+  await requireCapability("course.view", { kind: "assignment", assignmentId: id, courseId: a.courseId });
 
   // Load course
   const courseRow = await db.select().from(courses).where(eq(courses.id, a.courseId));
@@ -131,14 +143,17 @@ export async function getAssignment(id: number) {
   let rubric: {
     id: number;
     name: string;
-    settings?: { gradingMode?: "v3"; bandEdges?: [number, number, number] };
+    settings?: { gradingMode?: "v3"; model?: "share"; bandEdges?: [number, number, number] };
     criteria: {
       id: number;
       name: string;
       description: string | null;
       sortOrder: number;
       weight: number;
-      levels: { id: number; level: number; label: string; description: string; points: number }[];
+      archived: number;
+      // Null for share-model criteria (src/lib/rubric/) — points are
+      // computed from weight/share + the rubric's bandEdges, not stored.
+      levels: { id: number; level: number; label: string; description: string; points: number | null }[];
     }[];
   } | null = null;
 
@@ -148,7 +163,7 @@ export async function getAssignment(id: number) {
       const criteria = await db
         .select()
         .from(rubricCriteria)
-        .where(eq(rubricCriteria.rubricId, a.rubricId))
+        .where(and(eq(rubricCriteria.rubricId, a.rubricId), eq(rubricCriteria.archived, 0)))
         .orderBy(rubricCriteria.sortOrder);
 
       const criteriaWithLevels = await Promise.all(
@@ -220,7 +235,9 @@ export async function updateAssignment(
     lmsAssignmentId?: string | null;
   }
 ) {
-  await requireCapability("course.edit");
+  const row = await db.select({ courseId: assignments.courseId }).from(assignments).where(eq(assignments.id, id));
+  if (!row[0]) return;
+  await requireCapability("course.edit", { kind: "assignment", assignmentId: id, courseId: row[0].courseId });
   await db
     .update(assignments)
     .set({ ...data, updatedAt: new Date().toISOString() })
@@ -231,18 +248,18 @@ export async function updateAssignment(
 }
 
 export async function deleteAssignment(id: number) {
-  await requireCapability("course.edit");
   const row = await db.select({ courseId: assignments.courseId }).from(assignments).where(eq(assignments.id, id));
   if (!row[0]) return;
+  await requireCapability("course.edit", { kind: "assignment", assignmentId: id, courseId: row[0].courseId });
   await db.delete(assignments).where(eq(assignments.id, id));
   revalidatePath(`/courses/${row[0].courseId}`);
   revalidatePath("/assignments");
 }
 
 export async function archiveAssignment(id: number) {
-  await requireCapability("course.edit");
   const row = await db.select({ courseId: assignments.courseId }).from(assignments).where(eq(assignments.id, id));
   if (!row[0]) return;
+  await requireCapability("course.edit", { kind: "assignment", assignmentId: id, courseId: row[0].courseId });
   await db.update(assignments).set({ archived: 1 }).where(eq(assignments.id, id));
   revalidatePath(`/courses/${row[0].courseId}`);
   revalidatePath("/assignments");

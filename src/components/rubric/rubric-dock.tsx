@@ -1,6 +1,6 @@
 "use client";
 
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, UserX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RubricGradingPanel } from "@/components/rubric/rubric-grading-panel";
@@ -47,6 +47,15 @@ export function RubricDock({ assignment }: { assignment: Assignment }) {
             title="Clear grade"
           >
             <RotateCcw className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={grading.handleMarkMissing}
+            disabled={grading.saving}
+            title="Mark as not submitted — distinct from a grade of zero"
+          >
+            <UserX className="h-3.5 w-3.5" />
           </Button>
         </div>
         <RubricGradingPanel grading={grading} dense />

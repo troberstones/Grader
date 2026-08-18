@@ -2,6 +2,8 @@
 
 import { db } from "@/db";
 import {
+  assignments,
+  rubrics,
   grades,
   gradeEntries,
   students,
@@ -13,6 +15,8 @@ import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { GradeStatus } from "@/types/grading";
 import { requireCapability } from "@/lib/auth/require";
+import { assignmentResource } from "@/lib/auth/resource-lookup";
+import { computeScore, criterionPoints, toNormalRubric, toSelections } from "@/lib/rubric";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,6 +25,7 @@ export type GradeEntry = {
   levelId: number | null;
   score: number | null;
   comment: string | null;
+  nudge: number | null;
 };
 
 export type StudentGrade = {
@@ -45,17 +50,10 @@ export type StudentWithGrade = {
 // ─── Get grade sheet data for an assignment ───────────────────────────────────
 
 export async function getGradeSheet(assignmentId: number): Promise<StudentWithGrade[]> {
-  await requireCapability("course.view");
-  // All students enrolled in the assignment's course
-  // We join via assignment → course → enrollments → students
-  const { assignments } = await import("@/db/schema");
-  const assignmentRow = await db
-    .select({ courseId: assignments.courseId })
-    .from(assignments)
-    .where(eq(assignments.id, assignmentId));
-  if (!assignmentRow[0]) return [];
-
-  const courseId = assignmentRow[0].courseId;
+  const resource = await assignmentResource(assignmentId);
+  await requireCapability("course.view", resource);
+  if (resource.kind !== "assignment") return [];
+  const courseId = resource.courseId;
 
   const enrolled = await db
     .select({
@@ -94,6 +92,7 @@ export async function getGradeSheet(assignmentId: number): Promise<StudentWithGr
           levelId: e.levelId,
           score: e.score,
           comment: e.comment,
+          nudge: e.nudge,
         }))
       : [];
     return {
@@ -126,10 +125,9 @@ export async function saveGrade({
   entries: { criteriaId: number; levelId: number; score: number }[];
   feedback: string;
 }) {
-  await requireCapability("grade.write");
+  await requireCapability("grade.write", await assignmentResource(assignmentId));
   // Determine status
   // Load all criteria for this assignment's rubric to know total count
-  const { assignments } = await import("@/db/schema");
   const assignmentRow = await db
     .select({ rubricId: assignments.rubricId })
     .from(assignments)
@@ -214,10 +212,151 @@ export async function saveGrade({
   return { success: true, status, totalScore };
 }
 
+// ─── Save a grade for a share-model rubric (src/lib/rubric/) ─────────────────
+
+/**
+ * Same shape of job as `saveGrade`, for a rubric authored by the share-model
+ * editor. Re-fetches the rubric server-side rather than trusting anything
+ * client-computed. `grades.totalScore` is written from `computeScore(...)
+ * .points` — rounded exactly once — never from summing the per-entry scores
+ * below, which are informational only (see `criterionPoints`).
+ */
+export async function saveShareGrade({
+  assignmentId,
+  studentId,
+  entries,
+  feedback,
+}: {
+  assignmentId: number;
+  studentId: number;
+  entries: { criteriaId: number; levelId: number; nudge?: number }[];
+  feedback: string;
+}) {
+  await requireCapability("grade.write", await assignmentResource(assignmentId));
+
+  const assignmentRow = await db
+    .select({ rubricId: assignments.rubricId, pointsPossible: assignments.pointsPossible })
+    .from(assignments)
+    .where(eq(assignments.id, assignmentId));
+  const a = assignmentRow[0];
+  if (!a?.rubricId) throw new Error("This assignment has no rubric attached.");
+
+  const rubricRow = await db.select().from(rubrics).where(eq(rubrics.id, a.rubricId));
+  const rubricRecord = rubricRow[0];
+  if (!rubricRecord) throw new Error("Rubric not found.");
+
+  const criteriaRows = await db
+    .select()
+    .from(rubricCriteria)
+    .where(and(eq(rubricCriteria.rubricId, a.rubricId), eq(rubricCriteria.archived, 0)))
+    .orderBy(rubricCriteria.sortOrder);
+  const criteria = await Promise.all(
+    criteriaRows.map(async (c) => {
+      const levels = await db.select().from(rubricLevels).where(eq(rubricLevels.criteriaId, c.id)).orderBy(rubricLevels.level);
+      return { id: c.id, name: c.name, description: c.description, share: c.weight, levels };
+    }),
+  );
+
+  const normal = toNormalRubric({
+    name: rubricRecord.name,
+    description: rubricRecord.description,
+    settings: rubricRecord.settings ? JSON.parse(rubricRecord.settings) : null,
+    criteria,
+  });
+  const selections = toSelections(criteria, entries);
+  const result = computeScore(normal, selections, a.pointsPossible);
+  const outcomeByCriterionIndex = new Map(result.perCriterion.map((o) => [o.criterionIndex, o]));
+
+  const status: GradeStatus = result.scored === 0 ? "ungraded" : result.complete ? "graded" : "in_progress";
+  const totalScore = result.points ?? 0;
+
+  const existing = await db
+    .select({ id: grades.id })
+    .from(grades)
+    .where(and(eq(grades.assignmentId, assignmentId), eq(grades.studentId, studentId)));
+
+  let gradeId: number;
+  if (existing.length > 0) {
+    gradeId = existing[0].id;
+    await db
+      .update(grades)
+      .set({
+        totalScore,
+        feedback: feedback || null,
+        status,
+        gradedAt: status === "graded" ? new Date().toISOString() : null,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(grades.id, gradeId));
+  } else {
+    const result = await db
+      .insert(grades)
+      .values({
+        assignmentId,
+        studentId,
+        totalScore,
+        feedback: feedback || null,
+        status,
+        gradedAt: status === "graded" ? new Date().toISOString() : null,
+      })
+      .returning();
+    gradeId = result[0].id;
+  }
+
+  for (const entry of entries) {
+    const criterionIndex = criteria.findIndex((c) => c.id === entry.criteriaId);
+    const outcome = criterionIndex >= 0 ? outcomeByCriterionIndex.get(criterionIndex) : undefined;
+    const score = outcome ? criterionPoints(normal, outcome, a.pointsPossible) : null;
+    const nudge = entry.nudge ?? 0;
+
+    const existingEntry = await db
+      .select({ id: gradeEntries.id })
+      .from(gradeEntries)
+      .where(and(eq(gradeEntries.gradeId, gradeId), eq(gradeEntries.criteriaId, entry.criteriaId)));
+
+    if (existingEntry.length > 0) {
+      await db
+        .update(gradeEntries)
+        .set({ levelId: entry.levelId, score, nudge })
+        .where(eq(gradeEntries.id, existingEntry[0].id));
+    } else {
+      await db.insert(gradeEntries).values({ gradeId, criteriaId: entry.criteriaId, levelId: entry.levelId, score, nudge });
+    }
+  }
+
+  revalidatePath(`/assignments/${assignmentId}`);
+  return { success: true, status, totalScore };
+}
+
+/**
+ * Distinct from a criterion graded at level 0: nothing was submitted at all.
+ * A nonzero band floor is only defensible if these two states read
+ * differently — see docs/rubric-authoring.md. Model-agnostic: works
+ * regardless of which editor authored the rubric.
+ */
+export async function markMissing(assignmentId: number, studentId: number) {
+  await requireCapability("grade.write", await assignmentResource(assignmentId));
+  const existing = await db
+    .select({ id: grades.id })
+    .from(grades)
+    .where(and(eq(grades.assignmentId, assignmentId), eq(grades.studentId, studentId)));
+
+  if (existing.length > 0) {
+    await db.delete(gradeEntries).where(eq(gradeEntries.gradeId, existing[0].id));
+    await db
+      .update(grades)
+      .set({ totalScore: 0, feedback: null, status: "missing", gradedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+      .where(eq(grades.id, existing[0].id));
+  } else {
+    await db.insert(grades).values({ assignmentId, studentId, totalScore: 0, status: "missing", gradedAt: new Date().toISOString() });
+  }
+  revalidatePath(`/assignments/${assignmentId}`);
+}
+
 // ─── Clear a student's grade (reset to ungraded) ──────────────────────────────
 
 export async function clearGrade(assignmentId: number, studentId: number) {
-  await requireCapability("grade.write");
+  await requireCapability("grade.write", await assignmentResource(assignmentId));
   const existing = await db
     .select({ id: grades.id })
     .from(grades)
@@ -233,7 +372,7 @@ export async function clearGrade(assignmentId: number, studentId: number) {
 // ─── Export grades as CSV for Learning Suite ──────────────────────────────────
 
 export async function exportGradesCSV(assignmentId: number): Promise<string> {
-  await requireCapability("grade.write");
+  await requireCapability("grade.write", await assignmentResource(assignmentId));
   const rows = await db
     .select({
       netId: students.netId,

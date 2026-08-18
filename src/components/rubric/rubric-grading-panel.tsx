@@ -1,55 +1,96 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { V3GradingView } from "@/components/rubric/v3-grading-view";
+import { RUBRIC_GRADING_VIEWS } from "@/components/rubric/grading-registry";
 import type { RubricGrading } from "@/hooks/use-rubric-grading";
 import { cn, formatScore } from "@/lib/utils";
 
-type Level = {
-  id: number;
-  level: number;
-  label: string;
-  description: string;
-  points: number;
-};
-
-const levelsHighToLow = (levels: Level[]) => [...levels].sort((a, b) => b.level - a.level);
+const VIEW_PREF_KEY = "rubric-grading-view-pref";
 
 interface Props {
   grading: RubricGrading;
   /**
    * Docked beside the art reviewer rather than filling the page: tighter
    * padding, and the score/feedback block stacks instead of sitting in a
-   * two-column grid. The criterion table is unchanged — it scrolls sideways
-   * inside its own container, which is what it already did on a narrow window.
+   * two-column grid. The grading view itself is unchanged — it scrolls
+   * sideways inside its own container, which is what it already did on a
+   * narrow window.
    */
   dense?: boolean;
+}
+
+/**
+ * Switches on `grading.model` rather than indexing `RUBRIC_GRADING_VIEWS`
+ * generically — a plain index makes the "grading" prop's type the
+ * intersection of every registered view's prop type (TypeScript can't know
+ * in advance which one a given key resolves to), which collapses to `never`
+ * since `PointsGrading`/`ShareGrading` conflict. A switch lets each branch's
+ * `grading` narrow for real.
+ */
+function GradingView({ grading, sharePref }: { grading: RubricGrading; sharePref: "share-slider" | "share-matrix" }) {
+  switch (grading.model) {
+    case "points": {
+      const isV3 = grading.assignment.rubric?.settings?.gradingMode === "v3";
+      const View = isV3 ? RUBRIC_GRADING_VIEWS.v3 : RUBRIC_GRADING_VIEWS.legacy;
+      return <View grading={grading} />;
+    }
+    case "share": {
+      const View = sharePref === "share-slider" ? RUBRIC_GRADING_VIEWS["share-slider"] : RUBRIC_GRADING_VIEWS["share-matrix"];
+      return <View grading={grading} />;
+    }
+  }
+}
+
+/** {displayScore, gradedCount, totalCount, complete}, read off whichever model is active. */
+function summarize(grading: RubricGrading) {
+  if (grading.model === "share") {
+    const r = grading.scoreResult;
+    return {
+      displayScore: r?.points ?? 0,
+      gradedCount: r?.scored ?? 0,
+      totalCount: r?.total ?? grading.criteria.length,
+      complete: r?.complete ?? false,
+    };
+  }
+  return {
+    displayScore: grading.totalScore,
+    gradedCount: grading.gradedCriteria,
+    totalCount: grading.criteria.length,
+    complete: grading.allGraded,
+  };
 }
 
 /**
  * The rubric scoring surface. Rendered full-width on the grade sheet and inside
  * the dock on the review route; both drive the same `useRubricGrading` state, so
  * a score entered in one place is the same save as in the other.
+ *
+ * Dispatches to a registered grading view (grading-registry.ts) by model —
+ * legacy/v3 render exactly as they always have; a share-model rubric offers a
+ * slider/matrix toggle, since comparing those two is the point of building
+ * both.
  */
 export function RubricGradingPanel({ grading, dense = false }: Props) {
-  const {
-    assignment,
-    criteria,
-    entryMap,
-    feedback,
-    setFeedback,
-    totalScore,
-    gradedCriteria,
-    allGraded,
-    saving,
-    selectLevel,
-    setEntries,
-    handleSave,
-  } = grading;
+  const { assignment, criteria, feedback, setFeedback, saving, handleSave } = grading;
+
+  // Deliberately deferred to an effect rather than a lazy useState
+  // initializer: this component renders during SSR, where localStorage
+  // isn't available, so reading it synchronously would mismatch what the
+  // client then renders. Always paints "share-matrix" first, corrects right
+  // after mount if a stored preference differs.
+  const [sharePref, setSharePref] = useState<"share-slider" | "share-matrix">("share-matrix");
+  useEffect(() => {
+    const stored = window.localStorage.getItem(VIEW_PREF_KEY);
+    if (stored === "share-slider" || stored === "share-matrix") setSharePref(stored);
+  }, []);
+  function chooseSharePref(pref: "share-slider" | "share-matrix") {
+    setSharePref(pref);
+    window.localStorage.setItem(VIEW_PREF_KEY, pref);
+  }
 
   if (criteria.length === 0) {
     return (
@@ -66,111 +107,43 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
     );
   }
 
+  const { displayScore, gradedCount, totalCount, complete } = summarize(grading);
+
   return (
     <div className={cn("flex-1 overflow-auto", dense ? "px-3 py-3" : "px-6 py-4")}>
-      {assignment.rubric?.settings?.gradingMode === "v3" ? (
-        <V3GradingView
-          criteria={criteria}
-          pointsPossible={assignment.pointsPossible}
-          bandEdges={assignment.rubric.settings?.bandEdges ?? [20, 45, 70]}
-          initialEntries={Object.entries(entryMap).map(([cid, e]) => ({
-            criteriaId: Number(cid),
-            levelId: e.levelId,
-            score: e.score,
-          }))}
-          onEntriesChange={(entries) => setEntries(entries)}
-        />
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr>
-                <th className="text-left py-2 pr-4 font-semibold w-40 shrink-0 align-bottom">
-                  Criterion
-                </th>
-                {levelsHighToLow(criteria[0]?.levels ?? []).map((lvl) => (
-                  <th
-                    key={lvl.level}
-                    className="text-center px-2 py-2 font-semibold min-w-[160px] align-bottom"
-                  >
-                    <div>{lvl.label}</div>
-                    <div className="text-xs font-normal text-muted-foreground">
-                      {lvl.points} pts
-                    </div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {criteria.map((criterion) => {
-                const selected = entryMap[criterion.id];
-                return (
-                  <tr key={criterion.id} className="border-t">
-                    <td className="py-2 pr-4 align-top">
-                      <div className="font-medium">{criterion.name}</div>
-                      {criterion.description && (
-                        <div className="text-xs text-muted-foreground mt-0.5">
-                          {criterion.description}
-                        </div>
-                      )}
-                    </td>
-                    {levelsHighToLow(criterion.levels).map((lvl) => {
-                      const isSelected = selected?.levelId === lvl.id;
-                      return (
-                        <td key={lvl.id} className="px-2 py-2 align-top">
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <button
-                                  type="button"
-                                  onClick={() => selectLevel(criterion.id, lvl.id, lvl.points)}
-                                  className={cn(
-                                    "w-full text-left p-2.5 rounded border text-xs transition-all min-h-[80px]",
-                                    "hover:border-primary/60 hover:bg-primary/5",
-                                    isSelected
-                                      ? "border-primary bg-primary/10 font-medium ring-1 ring-primary/30"
-                                      : "border-border bg-background",
-                                  )}
-                                />
-                              }
-                            >
-                              <div className="line-clamp-4">
-                                {lvl.description || (
-                                  <span className="text-muted-foreground italic">
-                                    No description
-                                  </span>
-                                )}
-                              </div>
-                              {isSelected && (
-                                <div className="mt-1.5 text-primary font-semibold">
-                                  ✓ {lvl.points} pts
-                                </div>
-                              )}
-                            </TooltipTrigger>
-                            {lvl.description && (
-                              <TooltipContent side="bottom" className="max-w-xs text-xs">
-                                {lvl.description}
-                              </TooltipContent>
-                            )}
-                          </Tooltip>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {grading.model === "share" && (
+        <div className="mb-3 flex items-center gap-1 rounded-md border text-xs overflow-hidden self-start w-fit">
+          <button
+            type="button"
+            onClick={() => chooseSharePref("share-matrix")}
+            className={cn(
+              "px-2.5 py-1 transition-colors",
+              sharePref === "share-matrix"
+                ? "bg-primary text-primary-foreground font-medium"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Matrix
+          </button>
+          <button
+            type="button"
+            onClick={() => chooseSharePref("share-slider")}
+            className={cn(
+              "px-2.5 py-1 transition-colors",
+              sharePref === "share-slider"
+                ? "bg-primary text-primary-foreground font-medium"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Slider
+          </button>
         </div>
       )}
 
+      <GradingView grading={grading} sharePref={sharePref} />
+
       {/* Feedback + total */}
-      <div
-        className={cn(
-          "mt-6 grid grid-cols-1 gap-4",
-          !dense && "md:grid-cols-[1fr_auto]",
-        )}
-      >
+      <div className={cn("mt-6 grid grid-cols-1 gap-4", !dense && "md:grid-cols-[1fr_auto]")}>
         <div className="space-y-1.5">
           <label className="text-sm font-medium">Feedback (optional)</label>
           <Textarea
@@ -184,35 +157,24 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
         <div
           className={cn(
             "flex gap-3",
-            dense
-              ? "flex-row flex-wrap items-center justify-between"
-              : "flex-col items-end justify-end",
+            dense ? "flex-row flex-wrap items-center justify-between" : "flex-col items-end justify-end",
           )}
         >
           <div className={dense ? "text-left min-w-0" : "text-right"}>
-            <div
-              className={cn(
-                "font-bold tabular-nums",
-                dense ? "text-2xl" : "text-3xl",
-              )}
-            >
-              {formatScore(totalScore)}
-              <span className="text-base font-normal text-muted-foreground ml-1">
-                / {assignment.pointsPossible}
-              </span>
+            <div className={cn("font-bold tabular-nums", dense ? "text-2xl" : "text-3xl")}>
+              {formatScore(displayScore)}
+              <span className="text-base font-normal text-muted-foreground ml-1">/ {assignment.pointsPossible}</span>
             </div>
             <div className="text-xs text-muted-foreground">
-              {gradedCriteria} of {criteria.length} criteria
+              {gradedCount} of {totalCount} criteria
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            {saving && (
-              <span className="text-xs text-muted-foreground animate-pulse">Saving…</span>
-            )}
+            {saving && <span className="text-xs text-muted-foreground animate-pulse">Saving…</span>}
             <Button
               onClick={() => handleSave(true)}
-              disabled={saving || !allGraded}
+              disabled={saving || !complete}
               className="bg-green-600 hover:bg-green-700 text-white"
             >
               <CheckCircle2 className="h-4 w-4 mr-1.5" />

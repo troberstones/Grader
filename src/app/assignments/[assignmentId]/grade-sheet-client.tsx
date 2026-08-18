@@ -15,6 +15,7 @@ import {
   CloudDownload,
   Upload,
   Link,
+  UserX,
 } from "lucide-react";
 import {
   Dialog,
@@ -95,7 +96,7 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
   }
 
   const grading = useRubricGrading(assignment);
-  const { selectedStudent, saving, exporting, handleClear, exportCsv } = grading;
+  const { selectedStudent, saving, exporting, handleClear, handleMarkMissing, exportCsv } = grading;
 
   async function handleExport() {
     await exportCsv(assignment.name);
@@ -121,6 +122,15 @@ export function GradeSheetClient({ assignment }: GradeSheetClientProps) {
                     title="Clear grade"
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={handleMarkMissing}
+                    disabled={saving}
+                    title="Mark as not submitted — distinct from a grade of zero"
+                  >
+                    <UserX className="h-3.5 w-3.5" />
                   </Button>
                   {lsReady && (
                     <>

@@ -124,24 +124,30 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="rubric">Rubric (optional)</Label>
-              <Select
-                value={rubricId || null}
-                onValueChange={(v) => setRubricId(v ?? "none")}
-              >
-                <SelectTrigger id="rubric">
-                  <SelectValue placeholder="Select a rubric…" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No rubric</SelectItem>
-                  {rubrics.map((r) => (
-                    <SelectItem key={r.id} value={String(r.id)}>
-                      {r.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-2">
+                <Select
+                  value={rubricId || null}
+                  onValueChange={(v) => setRubricId(v ?? "none")}
+                >
+                  <SelectTrigger id="rubric" className="flex-1">
+                    <SelectValue placeholder="Select a rubric…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No rubric</SelectItem>
+                    {rubrics.map((r) => (
+                      <SelectItem key={r.id} value={String(r.id)}>
+                        {r.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <LinkButton href="/rubrics/new" target="_blank" variant="outline" size="sm">
+                  Create new…
+                </LinkButton>
+              </div>
               <p className="text-xs text-muted-foreground">
-                Changing the rubric will not delete existing grade entries.
+                Changing the rubric will not delete existing grade entries. Opens the rubric editor in a
+                new tab — refresh this page afterward to select it here.
               </p>
             </div>
 

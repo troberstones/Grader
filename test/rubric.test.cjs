@@ -4,8 +4,9 @@ const test = require("node:test");
 const assert = require("node:assert");
 
 const { BAND_PRESETS, fractionFor, levelFractions, bandEdgesProblem, letterFor, round1 } = require("./.build/bands");
-const { computeScore, previewOutcomes, bandTable } = require("./.build/score");
+const { computeScore, criterionPoints, previewOutcomes, bandTable } = require("./.build/score");
 const { validateRubric, repairMessage } = require("./.build/validate");
+const { toNormalRubric, toSelections, fromSelections, isShareModel } = require("./.build/adapter");
 
 const ADVANCED = BAND_PRESETS.advanced; // [0.55, 0.74, 0.88]
 const V1_BANDS = [0.12, 0.4, 0.72]; // what the original rubrics used
@@ -50,6 +51,22 @@ function valid(input) {
 }
 
 const allAt = (n, level) => Array.from({ length: n }, (_, i) => ({ criterionIndex: i, level }));
+
+/** A DB-shaped criterion row: level ids are levelIdsStart + level (0-3). */
+function dbCriterion(id, name, share, levelIdsStart) {
+  return {
+    id,
+    name,
+    description: null,
+    share,
+    levels: [0, 1, 2, 3].map((level) => ({
+      id: levelIdsStart + level,
+      level,
+      label: `L${level}`,
+      description: `Description for level ${level} of ${name}`,
+    })),
+  };
+}
 
 // ─── band arithmetic ────────────────────────────────────────────────────
 
@@ -216,6 +233,27 @@ test("selections outside the rubric are ignored rather than trusted", () => {
   assert.strictEqual(s.percent, 100);
 });
 
+test("criterionPoints sums to the total when every criterion is scored", () => {
+  const r = valid(rubric(2));
+  const selections = [{ criterionIndex: 0, level: 3 }, { criterionIndex: 1, level: 0 }];
+  const score = computeScore(r, selections, 100);
+  const p0 = criterionPoints(r, score.perCriterion[0], 100);
+  const p1 = criterionPoints(r, score.perCriterion[1], 100);
+  assert.strictEqual(round1(p0 + p1), score.points);
+});
+
+test("criterionPoints stays stable regardless of what else gets scored later", () => {
+  const r = valid(rubric(2));
+  // Only one of two equal-share criteria scored: computeScore reports the
+  // grade "so far" (100%, since the one scored criterion is mastery)...
+  const score = computeScore(r, [{ criterionIndex: 0, level: 3 }], 100);
+  assert.strictEqual(score.points, 100);
+  // ...but this criterion is only half the rubric's total share, so its own
+  // stable number is 50 — it must not jump to 100 just because nothing else
+  // is scored yet, and must not later jump again once the other one is.
+  assert.strictEqual(criterionPoints(r, score.perCriterion[0], 100), 50);
+});
+
 test("nudges reach the score", () => {
   const r = valid(rubric(2));
   const plain = computeScore(r, allAt(2, 2), 100).percent;
@@ -353,6 +391,72 @@ test("every error names where it happened", () => {
   for (const e of result.errors) {
     assert.ok(e.where && e.where.length > 0, "an error with no location is unactionable");
   }
+});
+
+// ─── the DB-row adapter ─────────────────────────────────────────────────
+
+test("isShareModel checks settings.model, not the legacy gradingMode flag", () => {
+  assert.strictEqual(isShareModel({ settings: { model: "share" } }), true);
+  assert.strictEqual(isShareModel({ settings: { gradingMode: "v3" } }), false);
+  assert.strictEqual(isShareModel({ settings: null }), false);
+});
+
+test("toNormalRubric maps db rows to the pure shape, defaulting bandEdges", () => {
+  const dbRubric = {
+    name: "Shading",
+    description: "desc",
+    settings: null,
+    criteria: [
+      dbCriterion(10, "Light Response", 2, 100),
+      dbCriterion(11, "Composition", 1, 200),
+    ],
+  };
+  const normal = toNormalRubric(dbRubric);
+  assert.strictEqual(normal.version, 1);
+  assert.strictEqual(normal.name, "Shading");
+  assert.deepStrictEqual(normal.bandEdges, BAND_PRESETS.advanced);
+  assert.strictEqual(normal.criteria.length, 2);
+  assert.strictEqual(normal.criteria[0].share, 2);
+  assert.strictEqual(normal.criteria[0].levels[3].label, "L3");
+});
+
+test("toNormalRubric carries an explicit bandEdges through instead of defaulting", () => {
+  const dbRubric = {
+    name: "X",
+    description: null,
+    settings: { model: "share", bandEdges: [0.6, 0.8, 0.92] },
+    criteria: [dbCriterion(1, "A", 1, 1)],
+  };
+  assert.deepStrictEqual(toNormalRubric(dbRubric).bandEdges, [0.6, 0.8, 0.92]);
+});
+
+test("selections round-trip through db criteria/level ids and back to indices", () => {
+  const criteria = [dbCriterion(10, "Light Response", 1, 100), dbCriterion(11, "Composition", 1, 200)];
+  const selections = [
+    { criterionIndex: 0, level: 3, nudge: 1 },
+    { criterionIndex: 1, level: 0, nudge: 0 },
+  ];
+  const entries = fromSelections(criteria, selections);
+  assert.deepStrictEqual(entries, [
+    { criteriaId: 10, levelId: 103, nudge: 1 },
+    { criteriaId: 11, levelId: 200, nudge: 0 },
+  ]);
+  assert.deepStrictEqual(toSelections(criteria, entries), selections);
+});
+
+test("toSelections skips an entry with no level chosen or an unrecognised criterion", () => {
+  const criteria = [dbCriterion(10, "Light Response", 1, 100)];
+  const entries = [
+    { criteriaId: 10, levelId: null },
+    { criteriaId: 999, levelId: 100 },
+  ];
+  assert.deepStrictEqual(toSelections(criteria, entries), []);
+});
+
+test("toSelections normalises an out-of-range nudge to 0 rather than trusting it", () => {
+  const criteria = [dbCriterion(10, "Light Response", 1, 100)];
+  const entries = [{ criteriaId: 10, levelId: 103, nudge: 7 }];
+  assert.deepStrictEqual(toSelections(criteria, entries), [{ criterionIndex: 0, level: 3, nudge: 0 }]);
 });
 
 // ─── the repair loop ────────────────────────────────────────────────────

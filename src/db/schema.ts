@@ -59,7 +59,14 @@ export const rubricCriteria = sqliteTable("rubric_criteria", {
   name: text("name").notNull(),
   description: text("description"),
   sortOrder: integer("sort_order").notNull(),
+  // Read as "share" (relative importance) by the share-model engine
+  // (src/lib/rubric/) — not renamed at the DB level because the legacy
+  // editors (rubric-editor*.tsx) still read/write it as "weight".
   weight: real("weight").notNull().default(1.0),
+  // Soft-delete for the share-model editor's update path: a criterion with
+  // existing grade_entries can't be hard-deleted (FK), so it's archived
+  // instead. Always 0 for rows never touched by that path.
+  archived: integer("archived").notNull().default(0),
 });
 
 export const rubricLevels = sqliteTable("rubric_levels", {
@@ -68,7 +75,10 @@ export const rubricLevels = sqliteTable("rubric_levels", {
   level: integer("level").notNull(), // 0=lowest, 3=Professional
   label: text("label").notNull(),
   description: text("description").notNull(),
-  points: real("points").notNull(),
+  // Nullable: share-model rubrics (src/lib/rubric/) store no points here —
+  // they're computed from the criterion's share and the rubric's bandEdges.
+  // v1/v2/v3 always write a real number.
+  points: real("points"),
 });
 
 // ─── Assignments ────────────────────────────────────────
@@ -133,6 +143,9 @@ export const gradeEntries = sqliteTable("grade_entries", {
   levelId: integer("level_id").references(() => rubricLevels.id),
   score: real("score"),
   comment: text("comment"),
+  // Share-model only (src/lib/rubric/): -1|0|1, a third of the way toward
+  // the neighbouring band. Null/unused for legacy (v1/v2/v3) entries.
+  nudge: integer("nudge"),
 }, (table) => [
   uniqueIndex("grade_entry_unique_idx").on(table.gradeId, table.criteriaId),
 ]);

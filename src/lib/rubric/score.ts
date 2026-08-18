@@ -88,6 +88,18 @@ export function computeScore(
   };
 }
 
+/**
+ * One criterion's points, for display only — never summed to produce the
+ * official total (that's `computeScore(...).points`, rounded once). Uses the
+ * *whole-rubric* share total, not the scored-so-far total `computeScore`
+ * uses internally, so this number doesn't visibly shift every time the
+ * grader touches an unrelated criterion mid-session.
+ */
+export function criterionPoints(rubric: NormalRubric, outcome: CriterionOutcome, pointsPossible: number): number {
+  const totalShare = rubric.criteria.reduce((sum, c) => sum + c.share, 0);
+  return round1(((outcome.fraction * outcome.share) / totalShare) * pointsPossible);
+}
+
 // ─── Authoring preview ──────────────────────────────────────────────────
 
 export interface PreviewRow {

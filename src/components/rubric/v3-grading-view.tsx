@@ -142,7 +142,9 @@ interface Level {
   level: number;
   label: string;
   description: string;
-  points: number;
+  // Never read below — points are recomputed from weight+bandEdges. Null
+  // only for share-model criteria, which this view never renders.
+  points: number | null;
 }
 
 interface Criterion {

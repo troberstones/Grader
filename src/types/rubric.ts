@@ -14,6 +14,10 @@ export interface RubricCriterion {
 
 export interface RubricSettings {
   gradingMode?: "v3";
+  // Marks a rubric authored by the new share-model editor (src/lib/rubric/).
+  // Coexists with gradingMode: "v3" above — different rubrics carry one or
+  // the other, never both.
+  model?: "share";
   bandEdges?: [number, number, number];
 }
 

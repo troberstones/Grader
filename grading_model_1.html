@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unified Grading — the working model</title>
+<style>
+  :root{
+    --ink:#1A1D23; --slate:#333A45; --amber:#E8A33D; --ambdk:#B87A1E;
+    --card:#F1F3F5; --card2:#E4E7EB; --muted:#6B7280; --white:#fff;
+    --green:#3F7D58; --red:#A63D40; --blue:#2F6FA8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--white);color:var(--ink);
+    font-family:Calibri,"Segoe UI",Arial,sans-serif;padding:26px 32px 48px;max-width:1180px}
+  .kicker{font-size:13px;font-weight:700;letter-spacing:2px;color:var(--ambdk);text-transform:uppercase;margin-bottom:6px}
+  h1{font-family:Cambria,Georgia,serif;font-size:33px;margin:0 0 4px;letter-spacing:-.4px}
+  h2{font-family:Cambria,Georgia,serif;font-size:21px;margin:0 0 10px}
+  .sub{font-size:16px;color:var(--slate);margin-bottom:20px}
+  .types{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:16px}
+  .type{flex:1 1 165px;min-width:145px;padding:12px 14px;border-radius:8px;border:2px solid var(--card2);
+    background:var(--white);cursor:pointer;transition:.12s;text-align:left;font-family:inherit}
+  .type:hover{border-color:var(--amber)}
+  .type.on{background:var(--ink);border-color:var(--ink)}
+  .type .n{font-size:11px;font-weight:700;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase}
+  .type.on .n{color:var(--amber)}
+  .type .t{font-family:Cambria,Georgia,serif;font-size:18px;font-weight:700;margin-top:3px}
+  .type.on .t{color:var(--white)}
+  .type.proposed{border-style:dashed}
+  .desc{background:var(--card);border-radius:8px;padding:15px 19px;margin-bottom:20px}
+  .desc .purpose{font-family:Cambria,Georgia,serif;font-size:20px;font-weight:700;margin-bottom:4px}
+  .desc .a{font-size:15px;color:var(--slate);margin-bottom:8px}
+  .desc .a b{color:var(--ambdk)}
+  .desc .classes{font-size:13.5px;color:var(--muted);margin-bottom:10px}
+  .desc .classes b{color:var(--slate)}
+  .rules{border-top:1px solid var(--card2);padding-top:10px;margin-top:4px}
+  .rules .rh{font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--ambdk);margin-bottom:6px}
+  .rules ul{margin:0;padding-left:18px;font-size:14px;color:var(--slate);line-height:1.55}
+  .rows{border-top:1px solid var(--card2)}
+  .row{padding:13px 4px;border-bottom:1px solid var(--card2)}
+  .rtop{display:grid;grid-template-columns:280px 1fr 84px;align-items:center;gap:18px}
+  .lbl .name{font-family:Cambria,Georgia,serif;font-size:17.5px;font-weight:700}
+  .lbl .hint{font-size:12.5px;color:var(--muted);margin-top:2px;line-height:1.35}
+  input[type=range]{width:100%;accent-color:var(--amber);height:24px;cursor:pointer}
+  input[type=range]:disabled{accent-color:#C4C8CE;cursor:not-allowed}
+  .val{font-family:Cambria,Georgia,serif;font-size:28px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+  .val.locked{color:var(--muted)}
+  .detog{font-size:12px;color:var(--blue);cursor:pointer;user-select:none;margin-top:6px;display:inline-block}
+  .detog input{vertical-align:-1px;margin-right:4px}
+  .skills{margin:9px 0 2px 0;padding:10px 12px;background:var(--card);border-radius:7px}
+  .skills.warn{background:#FBEFEF;outline:2px solid var(--red)}
+  .skillrow{display:grid;grid-template-columns:1fr 130px 58px 26px;gap:9px;align-items:center;margin-bottom:6px}
+  .skillrow input[type=text]{width:100%;font-family:inherit;font-size:13.5px;padding:5px 7px;
+    border:1px solid var(--card2);border-radius:5px;background:var(--white);color:var(--ink)}
+  .skillrow .sv{font-family:Cambria,Georgia,serif;font-size:17px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+  .skx{cursor:pointer;color:var(--muted);text-align:center;font-size:16px}
+  .skx:hover{color:var(--red)}
+  .skfoot{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;color:var(--muted);margin-top:8px}
+  .skfoot b{color:var(--ink)}
+  .skfoot .off{color:var(--red);font-weight:700}
+  .total{display:flex;align-items:center;justify-content:space-between;margin-top:18px;padding:15px 19px;
+    border-radius:8px;background:var(--card);border:3px solid transparent;transition:.15s}
+  .total.bad{border-color:var(--red);background:#FBEFEF}
+  .total .lab{font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted)}
+  .total .msg{font-size:13.5px;color:var(--red);font-weight:700;display:none}
+  .total.bad .msg{display:block}
+  .total .num{font-family:Cambria,Georgia,serif;font-size:36px;font-weight:700;font-variant-numeric:tabular-nums}
+  .total.bad .num{color:var(--red)}
+  button.act{font-family:inherit;font-size:13.5px;padding:8px 14px;border-radius:6px;border:1px solid var(--card2);
+    background:var(--white);cursor:pointer;color:var(--slate)}
+  button.act:hover{border-color:var(--amber);color:var(--ink)}
+  button.act.solid{background:var(--ink);color:var(--white);border-color:var(--ink)}
+  .actions{margin-top:14px;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  .pane{margin-top:26px;border:1px solid var(--card2);border-radius:9px;padding:16px 19px}
+  .pane .ph{display:flex;justify-content:space-between;align-items:center;cursor:pointer}
+  .pane .body{margin-top:14px}
+  .pane.closed .body{display:none}
+  .chev{color:var(--muted);font-size:13px}
+  textarea{width:100%;font-family:inherit;font-size:13.5px;padding:8px;border:1px solid var(--card2);
+    border-radius:6px;min-height:60px;resize:vertical;background:var(--white);color:var(--ink)}
+  input[type=text].wide{width:260px;font-family:inherit;font-size:13.5px;padding:6px 8px;
+    border:1px solid var(--card2);border-radius:6px}
+  .accrow{display:grid;grid-template-columns:280px 1fr 130px;gap:18px;align-items:center;
+    padding:9px 0;border-bottom:1px solid var(--card2)}
+  .accrow .res{font-size:13.5px;text-align:right;color:var(--slate);font-variant-numeric:tabular-nums}
+  .accrow .res b{font-family:Cambria,Georgia,serif;font-size:19px;color:var(--ink)}
+  .tpl{display:flex;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--card2);
+    border-radius:6px;margin-bottom:7px;font-size:13.5px}
+  .tpl .tn{font-weight:700;flex:1}
+  .tpl .tm{color:var(--muted);font-size:12.5px}
+  .chip{display:inline-block;background:var(--ink);color:var(--amber);font-size:10.5px;font-weight:700;
+    letter-spacing:1px;padding:3px 8px;border-radius:4px;text-transform:uppercase;margin-left:8px;vertical-align:2px}
+  .chip.blue{background:var(--blue);color:#fff}
+  .note{margin-top:24px;font-size:13px;color:var(--muted);line-height:1.55;border-top:1px solid var(--card2);padding-top:14px}
+  .note b{color:var(--slate)}
+  .flag{background:#FBEFEF;border:1px solid rgba(166,61,64,.4);border-radius:7px;padding:9px 12px;
+    font-size:13px;color:var(--slate);margin-top:10px}
+  .flag b{color:var(--red)}
+  @media print{ body{padding:0} button,.detog,.skx{display:none!important} .pane.closed .body{display:block} }
+</style>
+</head>
+<body>
+
+<div class="kicker">Unified grading · working model · 2026-07-31</div>
+<h1>Four class types. Four categories. The weights move.</h1>
+<div class="sub">Same four things measured in every class. What changes is <b>what the class is for</b> — and the weights follow. This page is a draft to argue with, not a ruling.</div>
+
+<div class="types" id="types"></div>
+<div class="desc" id="desc"></div>
+
+<h2>The starting template</h2>
+<div class="rows" id="rows"></div>
+
+<div class="total" id="total">
+  <div>
+    <div class="lab">Total</div>
+    <div class="msg">Must equal 100% before a template can be saved.</div>
+  </div>
+  <div class="num" id="totalNum">100%</div>
+</div>
+
+<div class="actions">
+  <button class="act" id="reset">Reset to default</button>
+  <span style="font-size:13px;color:var(--muted)">Sliders move in 5% steps. Turn on <b>detail mode</b> under any category to grade named skills instead.</span>
+</div>
+
+<!-- ACCOMMODATIONS -->
+<div class="pane closed" id="paneAcc">
+  <div class="ph" onclick="togglePane('paneAcc')">
+    <h2 style="margin:0">Accommodations <span class="chip blue">per student · per class</span></h2>
+    <span class="chev">▾ show</span>
+  </div>
+  <div class="body">
+    <div style="font-size:14px;color:var(--slate);margin-bottom:12px">
+      Set <b>once per student, per class</b> — never per assignment. A handicap, not extra credit: the standard stays where it is, the entry point moves. Every accommodation carries a written reason, and no adjusted score goes above 100%.
+    </div>
+    <div style="margin-bottom:10px">
+      <input type="text" class="wide" id="accStudent" placeholder="Student name" oninput="renderAcc()">
+    </div>
+    <textarea id="accWhy" placeholder="Why. Official accommodation from the office, or our own documented judgment — write it here. This field is the record." oninput="renderAcc()"></textarea>
+    <div id="accRows" style="margin-top:14px"></div>
+    <div class="flag"><b>Open policy question, not a build question:</b> the offsets below run 0–100%. On Thursday's slide the cap was <b>+10% on a category</b>. Decide which before this ships — an uncapped offset is a different instrument than a handicap.</div>
+  </div>
+</div>
+
+<!-- TEMPLATES -->
+<div class="pane closed" id="paneTpl">
+  <div class="ph" onclick="togglePane('paneTpl')">
+    <h2 style="margin:0">Templates <span class="chip">app feature</span></h2>
+    <span class="chev">▾ show</span>
+  </div>
+  <div class="body">
+    <div style="font-size:14px;color:var(--slate);margin-bottom:12px">
+      The class type suggests a starting template. Save your own, load it, copy one type's template into another class.
+      <b>Worked example:</b> a Foundational class still has a final that should be judged like portfolio work — so save a copy of the Portfolio weights as <i>Class Final</i> and use it for that one assignment.
+    </div>
+    <div class="actions" style="margin-top:0">
+      <input type="text" class="wide" id="tplName" placeholder="Template name (e.g. Class Final)">
+      <button class="act solid" onclick="saveTpl()">Save current as template</button>
+      <button class="act" onclick="seedExample()">Load the Class Final example</button>
+      <button class="act" onclick="exportAll()">Export JSON</button>
+    </div>
+    <div id="tplList" style="margin-top:14px"></div>
+  </div>
+</div>
+
+<div class="note">
+  <b>What this page still doesn't show:</b> the 1–10 sliders faculty actually touch during critique, and the timestamped voice notes tied to the video. Those live in Chris's app — this page is the layer underneath it.
+  <br><br>
+  <b>Categories 1–3 are objective-ish. Category 4 is deliberately the subjective one</b> — which is why it carries almost nothing in Foundational and the most in Portfolio.
+</div>
+
+<script>
+const TYPES = [
+  { key:'found', name:'Foundational', purpose:'Build individual competence in one specific skill.',
+    a:'An A is <b>achievable by execution</b> — do all the work, well.',
+    classes:'CSANM 150 · CSANM 210 Visual Narrative · figure / gesture drawing',
+    w:[20,60,15,5],
+    rules:[
+      '<b>Grade named skills by default.</b> Detail mode should be ON in most Foundational assignments — this is the type where the specific skill is the point.',
+      '<b>No more than three skills in one assignment.</b> If an assignment is teaching more than three things, it is not a good Foundational assignment.',
+      '<b>Smaller assignments.</b> Short, sweet, snappy. The 180 rule, the 30° rule, eye trace — that is an assignment.',
+      'Solo work only. No group assignments.',
+      'This class does not produce portfolio work and should not pretend to.',
+      '<i>Exception:</i> a final may be graded as portfolio work — save a Class Final template for it.'
+    ]},
+  { key:'applied', name:'Applied Foundations', purpose:'Apply learned skills inside a larger, integrative project.',
+    a:'Execution <b>plus the work is remarkable</b> within its discipline. Not necessarily shippable.',
+    classes:'CSANM 250 · Storyboarding · CSANM 342 Real-Time',
+    w:[20,40,25,15],
+    rules:[
+      'Bigger project, one discipline, individual accountability.',
+      'Detail mode optional — grade at the category level, drill into skills where a specific weakness needs naming.',
+      'Collaboration minimal and scoped. This is not a production.',
+      'If a faculty member’s entire load reads as Applied Foundations, that is a finding — those classes should be maturing into Portfolio classes.'
+    ]},
+  { key:'port', name:'Portfolio', purpose:'Produce work that gets the student hired.',
+    a:'<b>Industry standard. It goes on the reel.</b> Full stop.',
+    classes:'Previs · Character / Environment (post-split)',
+    w:[10,20,40,30],
+    rules:[
+      'Weights flatten out on purpose — at this level everything matters at once.',
+      'Individual work. Their reel, their name.',
+      'High autonomy, clear end state, minimal scaffolding.',
+      'An A here is the industry bar, not effort. "Fine" does not get hired.'
+    ]},
+  { key:'studio', name:'Studio', purpose:'Navigate real ambiguity with real dependencies — this is the job.',
+    a:'Delivered <b>quota and quality</b>, on scope, on time.',
+    classes:'CSANM 450 / 452 · CSANM 459 / 460R · IP class',
+    w:[25,20,30,25],
+    rules:[
+      'The only tier where collaboration is a learning goal.',
+      'Delivery-weighted: quota met, quality bar, scope, on time.',
+      'Capstone is not a fifth type — it is the integration layer the first three feed into.',
+      'If another class is running heavy team assignments, it is imitating this tier and should stop.'
+    ]},
+  { key:'sem', name:'Seminar', purpose:'Knowledge, argument, professional judgment.', proposed:true,
+    a:'Engagement <b>plus written deliverables above the brief</b>.',
+    classes:'DESAN 460 Business & Ethics — the class that fits none of the other four',
+    w:[35,15,10,40],
+    rules:[
+      'Proposed fifth type. Named now so faculty do not find the gap in the room.',
+      'Discussion-based; the deliverable is written, not visual.',
+      'Intentionality carries the most weight here of any type.'
+    ]}
+];
+
+const CATS = [
+  ['Presentation + Process','Did you follow the spec? Does it look professional? Did you show your thinking and iterate?'],
+  ['Technical Proficiency','Do you understand and execute the core skill — the thing this assignment is about?'],
+  ['Craft / Design','Does the art work? Composition, appeal, visual storytelling.'],
+  ['Intentionality','Did you make choices? Can I see the thinking behind them? (the subjective axis, on purpose)']
+];
+
+const DEFAULT_SKILLS = [
+  ['Spec followed','Iteration shown'],
+  ['180° rule','30° rule','Eye trace'],
+  ['Composition','Appeal'],
+  ['Choices defended']
+];
+
+let cur = 0;
+let w = [...TYPES[0].w];
+let detail = [false,false,false,false];
+let skills = [[],[],[],[]];
+let acc = [0,0,0,0];
+let templates = [];
+
+/* ---------- type buttons ---------- */
+const typesEl = document.getElementById('types');
+TYPES.forEach((t,i)=>{
+  const b = document.createElement('button');
+  b.className = 'type' + (t.proposed?' proposed':'');
+  b.innerHTML = `<div class="n">Type ${i+1}${t.proposed?' · proposed':''}</div><div class="t">${t.name}</div>`;
+  b.onclick = ()=>{ cur=i; w=[...TYPES[i].w]; detail=[false,false,false,false]; skills=[[],[],[],[]]; render(); };
+  typesEl.appendChild(b);
+});
+
+/* ---------- rows ---------- */
+function buildRows(){
+  const rowsEl = document.getElementById('rows');
+  rowsEl.innerHTML = CATS.map((c,i)=>`
+    <div class="row">
+      <div class="rtop">
+        <div class="lbl">
+          <div class="name">${c[0]}</div>
+          <div class="hint">${c[1]}</div>
+          <label class="detog"><input type="checkbox" id="d${i}" onchange="toggleDetail(${i})">grade named skills</label>
+        </div>
+        <div><input type="range" min="0" max="100" step="5" id="s${i}" oninput="setW(${i}, +this.value)"></div>
+        <div class="val" id="v${i}">0%</div>
+      </div>
+      <div id="sk${i}"></div>
+    </div>`).join('');
+}
+
+function setW(i,v){ if(detail[i]) return; w[i]=v; render(); }
+
+function toggleDetail(i){
+  detail[i] = !detail[i];
+  if(detail[i] && skills[i].length===0){
+    skills[i] = DEFAULT_SKILLS[i].map((n,k)=>({n:n, v: k===0 ? w[i] : 0}));
+  }
+  render();
+}
+function addSkill(i){ skills[i].push({n:'', v:0}); render(); }
+function rmSkill(i,k){ skills[i].splice(k,1); render(); }
+function setSkillName(i,k,v){ skills[i][k].n = v; }
+function setSkillVal(i,k,v){ skills[i][k].v = +v; render(); }
+function skillSum(i){ return skills[i].reduce((a,s)=>a+s.v,0); }
+
+function renderSkills(i){
+  const host = document.getElementById('sk'+i);
+  if(!detail[i]){ host.innerHTML=''; return; }
+  const sum = skillSum(i), tgt = w[i], diff = tgt - sum;
+  const tooMany = TYPES[cur].key==='found' && skills[i].length>3;
+  host.innerHTML = `
+    <div class="skills ${(diff!==0||tooMany)?'warn':''}">
+      ${skills[i].map((s,k)=>`
+        <div class="skillrow">
+          <input type="text" value="${s.n.replace(/"/g,'&quot;')}" placeholder="skill being graded"
+                 oninput="setSkillName(${i},${k},this.value)">
+          <input type="range" min="0" max="100" step="5" value="${s.v}" oninput="setSkillVal(${i},${k},this.value)">
+          <div class="sv">${s.v}%</div>
+          <div class="skx" onclick="rmSkill(${i},${k})">×</div>
+        </div>`).join('')}
+      <div class="skfoot">
+        <button class="act" onclick="addSkill(${i})">+ skill</button>
+        <div>
+          skills total <b>${sum}%</b> of a locked <b>${tgt}%</b>
+          ${diff!==0?`<span class="off"> · ${diff>0?diff+'% unassigned':Math.abs(diff)+'% over'}</span>`:' · balanced'}
+          ${tooMany?`<span class="off"> · more than three skills in a Foundational assignment</span>`:''}
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ---------- accommodations ---------- */
+function renderAcc(){
+  const host = document.getElementById('accRows');
+  host.innerHTML = CATS.map((c,i)=>{
+    const base = w[i], off = acc[i], adj = Math.min(100, base + off);
+    return `<div class="accrow">
+      <div class="lbl"><div class="name" style="font-size:15px">${c[0]}</div>
+        <div class="hint">base ${base}%</div></div>
+      <div><input type="range" min="0" max="100" step="5" value="${off}" oninput="acc[${i}]=+this.value;renderAcc()"></div>
+      <div class="res">offset +${off}% → <b>${adj}%</b></div>
+    </div>`;
+  }).join('') + `<div style="font-size:12.5px;color:var(--muted);margin-top:9px">
+    ${document.getElementById('accStudent').value.trim()
+      ? (document.getElementById('accWhy').value.trim()
+         ? 'Recorded for <b>'+document.getElementById('accStudent').value.trim()+'</b>. Applies to every assignment in this class.'
+         : '<span style="color:var(--red);font-weight:700">A written reason is required before this can be saved.</span>')
+      : 'Enter a student name to attach this accommodation.'}
+  </div>`;
+}
+
+/* ---------- templates ---------- */
+function snapshot(){
+  return { name:'', type:TYPES[cur].name, w:[...w],
+           detail:[...detail], skills:JSON.parse(JSON.stringify(skills)) };
+}
+function saveTpl(){
+  const n = document.getElementById('tplName').value.trim();
+  if(!n){ alert('Give the template a name.'); return; }
+  if(w.reduce((a,b)=>a+b,0)!==100){ alert('Weights must total 100% before saving.'); return; }
+  const t = snapshot(); t.name = n;
+  templates.push(t);
+  document.getElementById('tplName').value='';
+  renderTpl();
+}
+function loadTpl(k){
+  const t = templates[k];
+  w = [...t.w]; detail = [...t.detail]; skills = JSON.parse(JSON.stringify(t.skills));
+  render();
+}
+function rmTpl(k){ templates.splice(k,1); renderTpl(); }
+function seedExample(){
+  const port = TYPES.find(t=>t.key==='port');
+  templates.push({ name:'Class Final', type:'Foundational (copied from Portfolio)',
+                   w:[...port.w], detail:[false,false,false,false], skills:[[],[],[],[]] });
+  renderTpl();
+  document.getElementById('paneTpl').classList.remove('closed');
+}
+function renderTpl(){
+  const host = document.getElementById('tplList');
+  if(!templates.length){ host.innerHTML = '<div style="font-size:13px;color:var(--muted)">No saved templates yet.</div>'; return; }
+  host.innerHTML = templates.map((t,k)=>`
+    <div class="tpl">
+      <span class="tn">${t.name}</span>
+      <span class="tm">${t.type} · ${t.w.join(' / ')}</span>
+      <button class="act" onclick="loadTpl(${k})">Load</button>
+      <button class="act" onclick="rmTpl(${k})">Delete</button>
+    </div>`).join('');
+}
+function exportAll(){
+  const payload = { generated:new Date().toISOString().slice(0,10), classType:TYPES[cur].name,
+    weights:Object.fromEntries(CATS.map((c,i)=>[c[0], w[i]])),
+    detailMode:Object.fromEntries(CATS.map((c,i)=>[c[0], detail[i] ? skills[i] : false])),
+    accommodation:{ student:document.getElementById('accStudent').value.trim(),
+                    reason:document.getElementById('accWhy').value.trim(),
+                    offsets:Object.fromEntries(CATS.map((c,i)=>[c[0], acc[i]])) },
+    templates };
+  const blob = new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'grading_model.json'; a.click();
+}
+
+function togglePane(id){ document.getElementById(id).classList.toggle('closed'); }
+
+/* ---------- main render ---------- */
+function render(){
+  [...typesEl.children].forEach((b,i)=>b.classList.toggle('on', i===cur));
+  const t = TYPES[cur];
+  document.getElementById('desc').innerHTML =
+    `<div class="purpose">${t.name}${t.proposed?'<span class="chip">proposed 5th</span>':''}</div>
+     <div class="a"><b>What it’s for:</b> ${t.purpose} &nbsp;·&nbsp; <b>What an A requires:</b> ${t.a}</div>
+     <div class="classes"><b>Classes:</b> ${t.classes}</div>
+     <div class="rules"><div class="rh">Rules for this type</div><ul>${t.rules.map(r=>`<li>${r}</li>`).join('')}</ul></div>`;
+
+  let sum = 0;
+  w.forEach((v,i)=>{
+    if(detail[i]) w[i] = v;
+    sum += w[i];
+    const s = document.getElementById('s'+i);
+    s.value = w[i]; s.disabled = detail[i];
+    const val = document.getElementById('v'+i);
+    val.textContent = w[i]+'%';
+    val.classList.toggle('locked', detail[i]);
+    document.getElementById('d'+i).checked = detail[i];
+    renderSkills(i);
+  });
+  document.getElementById('totalNum').textContent = sum+'%';
+  document.getElementById('total').classList.toggle('bad', sum!==100);
+  renderAcc();
+}
+
+document.getElementById('reset').onclick = ()=>{
+  w=[...TYPES[cur].w]; detail=[false,false,false,false]; skills=[[],[],[],[]]; render();
+};
+
+buildRows();
+renderTpl();
+render();
+</script>
+</body>
+</html>

@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { saveGrade, clearGrade, exportGradesCSV } from "@/actions/grades";
+import { saveGrade, saveShareGrade, clearGrade, exportGradesCSV, markMissing } from "@/actions/grades";
 import type { StudentGrade } from "@/actions/grades";
 
 type SavePayload = Parameters<typeof saveGrade>[0];
+type ShareSavePayload = Parameters<typeof saveShareGrade>[0];
 
 /**
  * Wraps the three grade server actions with loading state so GradeSheetClient
@@ -32,6 +33,35 @@ export function useGradeActions(assignmentId: number) {
       return null;
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** Same job as `save`, for a share-model rubric (src/lib/rubric/). */
+  async function saveShare(
+    payload: ShareSavePayload,
+  ): Promise<{ status: StudentGrade["status"]; totalScore: number } | null> {
+    setSaving(true);
+    try {
+      return await saveShareGrade(payload);
+    } catch (err) {
+      toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * Marks a student as having submitted nothing — distinct from graded at
+   * the lowest level. Shows a toast on error. Returns true on success.
+   */
+  async function markStudentMissing(studentId: number): Promise<boolean> {
+    try {
+      await markMissing(assignmentId, studentId);
+      return true;
+    } catch {
+      toast.error("Failed to mark missing");
+      return false;
     }
   }
 
@@ -75,5 +105,5 @@ export function useGradeActions(assignmentId: number) {
     }
   }
 
-  return { save, clear, exportCsv, saving, exporting };
+  return { save, saveShare, clear, markStudentMissing, exportCsv, saving, exporting };
 }

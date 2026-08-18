@@ -7,9 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/link-button";
 import { Grid3X3, Trash2, Copy, Download, Upload } from "lucide-react";
-import { deleteRubric, duplicateRubric, importRubricFromJSON } from "@/actions/rubrics";
+import { deleteRubric, duplicateRubric, importRubricFromJSON, createShareRubric } from "@/actions/rubrics";
 import { toast } from "sonner";
 import type { RubricJSON } from "@/types/rubric";
+import type { AuthoredRubric } from "@/lib/rubric";
 
 interface RubricItem {
   id: number;
@@ -28,9 +29,16 @@ export function RubricLibrary({ rubrics }: { rubrics: RubricItem[] }) {
     setImporting(true);
     try {
       const text = await file.text();
-      const json: RubricJSON = JSON.parse(text);
-      await importRubricFromJSON(json);
-      toast.success(`Imported rubric: ${json.name}`);
+      const parsed = JSON.parse(text);
+      // The share-model shape (src/lib/rubric/) has no `weight` on a
+      // criterion — legacy RubricJSON always does, it's a required field.
+      const isAuthored = parsed?.version === 1 && !("weight" in (parsed.criteria?.[0] ?? {}));
+      if (isAuthored) {
+        await createShareRubric(parsed as AuthoredRubric);
+      } else {
+        await importRubricFromJSON(parsed as RubricJSON);
+      }
+      toast.success(`Imported rubric: ${parsed.name}`);
     } catch {
       toast.error("Invalid rubric JSON file");
     } finally {
