@@ -17,6 +17,7 @@
 import { NextResponse } from "next/server";
 
 import { can, GLOBAL, type Capability, type Resource } from "./roles";
+import { resolveAuthContext } from "./course-context";
 import { getCurrentUser, type SessionUser } from "./session";
 
 type ApiAuthResult = { user: SessionUser; response?: undefined } | { user: null; response: NextResponse };
@@ -26,7 +27,8 @@ export async function apiRequireCapability(
   resource: Resource = GLOBAL,
 ): Promise<ApiAuthResult> {
   const user = await getCurrentUser();
-  if (!user || !can(user, capability, resource)) {
+  const ctx = user ? await resolveAuthContext(resource, user.id) : {};
+  if (!user || !can(user, capability, resource, ctx)) {
     const status = user ? 403 : 401;
     const error = user ? "Forbidden" : "Sign in required";
     return { user: null, response: NextResponse.json({ error }, { status }) };

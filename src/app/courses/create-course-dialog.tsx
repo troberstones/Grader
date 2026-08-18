@@ -31,6 +31,7 @@ export function CreateCourseDialog() {
       section: (formData.get("section") as string) || undefined,
       year: Number(formData.get("year")),
       term,
+      startDate: (formData.get("startDate") as string) || undefined,
     });
     setOpen(false);
   }
@@ -89,6 +90,13 @@ export function CreateCourseDialog() {
                 required
               />
             </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="startDate">Start date</Label>
+            <Input id="startDate" name="startDate" type="date" />
+            <p className="text-xs text-muted-foreground">
+              Optional — used to shift assignment due dates onto the new term if this course is ever copied.
+            </p>
           </div>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

@@ -1,6 +1,6 @@
 import path from "path";
 import fs from "fs/promises";
-import { SUBMISSIONS_DIR, THUMBNAILS_DIR, SUPPORTED_EXTENSIONS } from "./constants";
+import { SUBMISSIONS_DIR, THUMBNAILS_DIR, SUPPORTED_EXTENSIONS, classifyMediaType } from "./constants";
 
 export function getSubmissionDir(assignmentId: number, studentId: number): string {
   return path.join(process.cwd(), SUBMISSIONS_DIR, String(assignmentId), String(studentId));
@@ -15,10 +15,7 @@ export async function ensureDir(dirPath: string): Promise<void> {
 }
 
 export function getMediaType(fileName: string): "image" | "video" | null {
-  const ext = path.extname(fileName).toLowerCase();
-  const mime = SUPPORTED_EXTENSIONS[ext];
-  if (!mime) return null;
-  return mime.startsWith("image/") ? "image" : mime.startsWith("video/") ? "video" : null;
+  return classifyMediaType(fileName);
 }
 
 export function getMimeType(fileName: string): string | null {

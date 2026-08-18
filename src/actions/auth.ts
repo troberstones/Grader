@@ -185,10 +185,46 @@ export async function inviteUser(input: {
   return { ok: true, inviteUrl: `/invite/${token}` };
 }
 
+/**
+ * Issue a single-use link that lets an active user set a new password.
+ *
+ * There is no self-service "forgot password" anywhere in this app — no
+ * outbound email is sent from it at all, invite links are handed off by an
+ * admin manually, and that's the same shape this reuses. `inviteUser()`
+ * refuses to touch an already-active account, but `acceptInvite()` doesn't
+ * care whether the account was active already — it overwrites `passwordHash`
+ * and sets `status: "active"` unconditionally. So the only genuinely new
+ * piece here is issuing a token for someone `inviteUser()` would reject.
+ */
+export async function resetPassword(userId: number): Promise<ActionResult> {
+  const admin = await requireAdmin();
+
+  const target = await getUser(userId);
+  if (!target) return fail("No such account.");
+  if (target.status !== "active") return fail("Only an active account can be reset — enable it first.");
+
+  // Same reasoning as inviteUser(): an unconsumed link left lying around
+  // would let two different reset attempts both be valid at once.
+  await db.delete(invites).where(and(eq(invites.userId, userId), isNull(invites.acceptedAt)));
+
+  const token = generateToken();
+  await db.insert(invites).values({
+    userId,
+    tokenHash: hashToken(token),
+    invitedBy: admin.id,
+    expiresAt: expiryFromNow(INVITE_TTL_MS),
+  });
+
+  revalidatePath("/admin/users");
+  return { ok: true, inviteUrl: `/invite/${token}` };
+}
+
 export interface InviteDetails {
   name: string;
   email: string;
   globalRole: GlobalRole;
+  /** True when this token was issued for an already-active account (resetPassword()), not a fresh invite. */
+  isReset: boolean;
 }
 
 /** Look up an invitation for the acceptance page. Null when unusable. */
@@ -214,7 +250,11 @@ export async function inspectInvite(token: string): Promise<InviteDetails | null
   if (row.status === "disabled") return null;
   if (!isGlobalRole(row.globalRole)) return null;
 
-  return { name: row.name, email: row.email, globalRole: row.globalRole };
+  // Only resetPassword() issues a token for an account that's already
+  // active — inviteUser() refuses to. So the account's current status here
+  // (before the form below sets it to "active" regardless) is enough to
+  // tell the two cases apart, no separate flag needed on `invites`.
+  return { name: row.name, email: row.email, globalRole: row.globalRole, isReset: row.status === "active" };
 }
 
 /**
@@ -334,6 +374,7 @@ export interface AccountRow {
   lastLoginAt: string | null;
   pendingInvite: boolean;
   inviteExpired: boolean;
+  canViewArchive: boolean;
 }
 
 export async function listAccounts(): Promise<AccountRow[]> {
@@ -348,6 +389,7 @@ export async function listAccounts(): Promise<AccountRow[]> {
       status: users.status,
       createdAt: users.createdAt,
       lastLoginAt: users.lastLoginAt,
+      canViewArchive: users.canViewArchive,
       inviteExpiresAt: invites.expiresAt,
       inviteAcceptedAt: invites.acceptedAt,
     })
@@ -365,7 +407,16 @@ export async function listAccounts(): Promise<AccountRow[]> {
     lastLoginAt: r.lastLoginAt,
     pendingInvite: r.status === "invited" && !!r.inviteExpiresAt && !r.inviteAcceptedAt,
     inviteExpired: r.status === "invited" && (!r.inviteExpiresAt || isExpired(r.inviteExpiresAt)),
+    canViewArchive: r.canViewArchive === 1,
   }));
+}
+
+/** Admin-only, independent of course membership — see src/actions/archive.ts. */
+export async function setCanViewArchive(userId: number, value: boolean): Promise<ActionResult> {
+  await requireAdmin();
+  await db.update(users).set({ canViewArchive: value ? 1 : 0 }).where(eq(users.id, userId));
+  revalidatePath("/admin/users");
+  return ok;
 }
 
 /** The signed-in user, for the sidebar. Null rather than a redirect. */

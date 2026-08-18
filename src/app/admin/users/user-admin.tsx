@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Copy, Plus, UserMinus, UserPlus } from "lucide-react";
+import { Archive, Check, Copy, KeyRound, Plus, UserMinus, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -19,13 +19,21 @@ import {
 } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { GLOBAL_ROLES, ROLE_DESCRIPTIONS, ROLE_LABELS, isGlobalRole, type GlobalRole } from "@/lib/auth/roles";
-import { forceSignOut, inviteUser, setUserRole, setUserStatus, type AccountRow } from "@/actions/auth";
+import {
+  forceSignOut,
+  inviteUser,
+  resetPassword,
+  setCanViewArchive,
+  setUserRole,
+  setUserStatus,
+  type AccountRow,
+} from "@/actions/auth";
 
 export function UserAdmin({ accounts, currentUserId }: { accounts: AccountRow[]; currentUserId: number }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [inviteOpen, setInviteOpen] = useState(accounts.length <= 1);
-  const [inviteLink, setInviteLink] = useState<{ name: string; url: string } | null>(null);
+  const [inviteLink, setInviteLink] = useState<{ name: string; url: string; label: string } | null>(null);
   // Controlled rather than read from FormData: the role must be one of ours
   // whether or not the Select renders a hidden input.
   const [inviteRole, setInviteRole] = useState<GlobalRole>("instructor");
@@ -59,8 +67,24 @@ export function UserAdmin({ accounts, currentUserId }: { accounts: AccountRow[];
         return;
       }
 
-      setInviteLink({ name, url: new URL(result.inviteUrl, window.location.origin).toString() });
+      setInviteLink({ name, url: new URL(result.inviteUrl, window.location.origin).toString(), label: "Invitation" });
       form.reset();
+      router.refresh();
+    });
+  }
+
+  function onResetPassword(account: AccountRow) {
+    startTransition(async () => {
+      const result = await resetPassword(account.id);
+      if (!result.ok || !result.inviteUrl) {
+        toast.error(result.error ?? "Could not create a reset link.");
+        return;
+      }
+      setInviteLink({
+        name: account.name,
+        url: new URL(result.inviteUrl, window.location.origin).toString(),
+        label: "Password reset link",
+      });
       router.refresh();
     });
   }
@@ -122,7 +146,7 @@ export function UserAdmin({ accounts, currentUserId }: { accounts: AccountRow[];
 
       {/* The link is shown exactly once: only its hash is stored, so it cannot
           be retrieved later and a lost link needs a fresh invitation. */}
-      {inviteLink && <InviteLink name={inviteLink.name} url={inviteLink.url} />}
+      {inviteLink && <InviteLink name={inviteLink.name} url={inviteLink.url} label={inviteLink.label} />}
 
       {/* ── Accounts ───────────────────────────────────────────── */}
       <Card>
@@ -192,6 +216,31 @@ export function UserAdmin({ accounts, currentUserId }: { accounts: AccountRow[];
                     <TableCell className="text-right space-x-2 whitespace-nowrap">
                       {account.status === "active" && (
                         <Button
+                          variant={account.canViewArchive ? "secondary" : "ghost"}
+                          size="sm"
+                          disabled={pending}
+                          title="Toggle access to the cross-course student archive"
+                          onClick={() =>
+                            run(
+                              () => setCanViewArchive(account.id, !account.canViewArchive),
+                              account.canViewArchive
+                                ? `${account.name} can no longer view the archive.`
+                                : `${account.name} can now view the archive.`,
+                            )
+                          }
+                        >
+                          <Archive className="mr-2 h-4 w-4" />
+                          Archive
+                        </Button>
+                      )}
+                      {account.status === "active" && (
+                        <Button variant="ghost" size="sm" disabled={pending} onClick={() => onResetPassword(account)}>
+                          <KeyRound className="mr-2 h-4 w-4" />
+                          Reset password
+                        </Button>
+                      )}
+                      {account.status === "active" && (
+                        <Button
                           variant="ghost"
                           size="sm"
                           disabled={pending}
@@ -248,7 +297,7 @@ function StatusBadge({ account }: { account: AccountRow }) {
   return <Badge variant="outline">Active</Badge>;
 }
 
-function InviteLink({ name, url }: { name: string; url: string }) {
+function InviteLink({ name, url, label = "Invitation" }: { name: string; url: string; label?: string }) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -265,8 +314,7 @@ function InviteLink({ name, url }: { name: string; url: string }) {
     <Card>
       <CardContent className="pt-6">
         <p className="text-sm mb-3">
-          Invitation for <span className="font-medium">{name}</span>. Send them this link — it is shown
-          only once.
+          {label} for <span className="font-medium">{name}</span>. Send them this link — it is shown only once.
         </p>
         <div className="flex gap-2">
           <Input readOnly value={url} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />

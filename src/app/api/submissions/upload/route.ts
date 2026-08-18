@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs/promises";
 import { db } from "@/db";
-import { submissions } from "@/db/schema";
+import { submissions, reviewMedia } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { getSubmissionDir, getMediaType, getMimeType } from "@/lib/file-storage";
 import { MAX_FILE_SIZE } from "@/lib/constants";
@@ -86,6 +86,8 @@ export async function POST(request: NextRequest) {
         .where(eq(submissions.id, existing[0].id))
         .returning();
       submission = updated[0];
+      // The old file's derivatives no longer match what's on disk.
+      await db.delete(reviewMedia).where(eq(reviewMedia.submissionId, existing[0].id));
     } else {
       const inserted = await db
         .insert(submissions)

@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { annotations } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { requireCapability } from "@/lib/auth/require";
+import { submissionResource } from "@/lib/auth/resource-lookup";
 
 export type AnnotationFrame = {
   frameNumber: number | null;
@@ -11,7 +12,7 @@ export type AnnotationFrame = {
 };
 
 export async function getAnnotations(submissionId: number): Promise<AnnotationFrame[]> {
-  await requireCapability("course.view");
+  await requireCapability("course.view", await submissionResource(submissionId));
   const rows = await db
     .select({ frameNumber: annotations.frameNumber, annotationData: annotations.annotationData })
     .from(annotations)
@@ -23,7 +24,7 @@ export async function saveAnnotations(
   submissionId: number,
   frames: AnnotationFrame[]
 ) {
-  await requireCapability("grade.write");
+  await requireCapability("grade.write", await submissionResource(submissionId));
   // Replace all annotations for this submission
   await db.delete(annotations).where(eq(annotations.submissionId, submissionId));
 
@@ -39,7 +40,7 @@ export async function saveAnnotations(
 }
 
 export async function clearAnnotations(submissionId: number) {
-  await requireCapability("grade.write");
+  await requireCapability("grade.write", await submissionResource(submissionId));
   await db.delete(annotations).where(eq(annotations.submissionId, submissionId));
   return { success: true };
 }

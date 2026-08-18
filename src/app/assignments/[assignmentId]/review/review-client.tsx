@@ -10,8 +10,11 @@ import { useGrading } from "@/components/shared/grading-context";
 import { StudentNavBar } from "@/components/shared/student-nav-bar";
 import { useViewLayout } from "@/components/shared/view-layout";
 import { RubricDock } from "@/components/rubric/rubric-dock";
+import { MediaDropZone } from "@/components/review/media-drop-zone";
 import { useReviewChannel } from "@/lib/review-channel";
+import { uploadFiles } from "@/lib/media-upload";
 import type { getAssignment } from "@/actions/assignments";
+import { deleteSubmission } from "@/actions/submissions";
 import {
   appendStrokes,
   deleteStrokes,
@@ -71,6 +74,7 @@ export function ReviewClient({ assignment, author }: Props) {
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const contextId = useMemo(
     () => (selectedStudentId ? `assignment:${assignmentId}:student:${selectedStudentId}` : null),
@@ -105,7 +109,7 @@ export function ReviewClient({ assignment, author }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [contextId]);
+  }, [contextId, refreshKey]);
 
   const adapter: ReviewDataAdapter = useMemo(
     () => ({
@@ -119,6 +123,14 @@ export function ReviewClient({ assignment, author }: Props) {
         const res = await fetch(`/api/review/layers/${submissionId}`);
         if (!res.ok) throw new Error("no layer manifest");
         return res.json();
+      },
+      addItems: async (contextId, files) => {
+        const m = contextId.match(/^assignment:(\d+):student:(\d+)$/);
+        if (!m) throw new Error("Unrecognized context.");
+        await uploadFiles(Number(m[1]), Number(m[2]), files);
+      },
+      removeItem: async (itemId) => {
+        await deleteSubmission(Number(itemId.replace("sub:", "")));
       },
       savePrefs,
       loadPrefs,
@@ -146,8 +158,14 @@ export function ReviewClient({ assignment, author }: Props) {
     <Centered>Preparing media for {student?.name ?? "student"}…</Centered>
   ) : error ? (
     <Centered tone="error">{error}</Centered>
-  ) : items.length === 0 ? (
-    <Centered>No submissions for {student?.name ?? "this student"}.</Centered>
+  ) : items.length === 0 && selectedStudentId ? (
+    <MediaDropZone
+      assignmentId={assignmentId}
+      studentId={selectedStudentId}
+      studentName={student?.name ?? "this student"}
+      submissionType={assignment.submissionType as "image" | "video" | "any"}
+      onUploaded={() => setRefreshKey((k) => k + 1)}
+    />
   ) : !channel ? null : (
     <ArtReviewer
       // Remount per student: sources, caches and stroke state are all scoped
@@ -157,6 +175,8 @@ export function ReviewClient({ assignment, author }: Props) {
       adapter={adapter}
       channel={channel}
       author={author}
+      contextId={contextId!}
+      onItemsChanged={() => setRefreshKey((k) => k + 1)}
       pdfWorkerUrl="/pdf.worker.min.mjs"
       headerSlot={
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

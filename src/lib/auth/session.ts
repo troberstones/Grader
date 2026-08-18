@@ -54,6 +54,7 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
       netId: users.netId,
       globalRole: users.globalRole,
       status: users.status,
+      canViewArchive: users.canViewArchive,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
@@ -86,6 +87,7 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
     netId: row.netId,
     globalRole: row.globalRole,
     status: row.status,
+    canViewArchive: row.canViewArchive === 1,
   };
 });
 

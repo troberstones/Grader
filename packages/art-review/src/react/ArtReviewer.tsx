@@ -27,6 +27,7 @@ import { Playlist } from "./components/Playlist";
 import { Presence } from "./components/Presence";
 import { Timeline } from "./components/Timeline";
 import { InkRail, TransportBar, ViewBar, type ToolState } from "./components/Toolbar";
+import { readDroppedFiles } from "./dropFiles";
 import { isTypingTarget } from "./keymap";
 import { C, label, noSelect, select as selectStyle, selectableText, textButton } from "./styles";
 import { useAnnotations } from "./useAnnotations";
@@ -38,11 +39,15 @@ export interface ArtReviewerProps {
   adapter: ReviewDataAdapter;
   channel: ReviewChannel;
   author: Author;
+  /** Identifies the playlist for adapter.addItems — same id passed to listItems. */
+  contextId: string;
   initial?: Partial<ViewerState>;
   pdfWorkerUrl?: string;
   /** Rendered top-right — grader puts student navigation here. */
   headerSlot?: React.ReactNode;
   onPositionChange?: (itemIndex: number, frame: number) => void;
+  /** Called after addItems/removeItem succeeds, so the host can re-fetch listItems. */
+  onItemsChanged?: () => void;
 }
 
 const LASER_LIFETIME_MS = 1200;
@@ -61,10 +66,12 @@ export function ArtReviewer({
   adapter,
   channel,
   author,
+  contextId,
   initial,
   pdfWorkerUrl,
   headerSlot,
   onPositionChange,
+  onItemsChanged,
 }: ArtReviewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -78,12 +85,52 @@ export function ArtReviewer({
   const [showHelp, setShowHelp] = useState(false);
   const [audioOwner, setAudioOwner] = useState(false);
   const [textPrompt, setTextPrompt] = useState<{ x: number; y: number; value: string } | null>(null);
+  const [playlistBusy, setPlaylistBusy] = useState(false);
+  const [stageDragOver, setStageDragOver] = useState(false);
 
   const session = useSession(channel, author);
 
   // ── Item + annotations ──────────────────────────────────────────────────────
   const [itemIndex, setItemIndex] = useState(initial?.itemIndex ?? 0);
+  // items is host-owned and can shrink/grow under an add or remove without a
+  // remount (unlike a student switch, which changes contextId and remounts via
+  // the host's `key`) — clamp so a stale index never reads past the new end.
+  useEffect(() => {
+    if (itemIndex >= items.length && items.length > 0) setItemIndex(items.length - 1);
+  }, [items.length, itemIndex]);
   const currentItem = items[itemIndex] ?? null;
+
+  const handleAddFiles = useCallback(
+    async (files: File[]) => {
+      if (!adapter.addItems || files.length === 0) return;
+      setPlaylistBusy(true);
+      try {
+        await adapter.addItems(contextId, files);
+        onItemsChanged?.();
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : "Upload failed.");
+      } finally {
+        setPlaylistBusy(false);
+      }
+    },
+    [adapter, contextId, onItemsChanged],
+  );
+
+  const handleRemoveItem = useCallback(
+    async (itemId: string) => {
+      if (!adapter.removeItem) return;
+      setPlaylistBusy(true);
+      try {
+        await adapter.removeItem(itemId);
+        onItemsChanged?.();
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : "Remove failed.");
+      } finally {
+        setPlaylistBusy(false);
+      }
+    },
+    [adapter, onItemsChanged],
+  );
 
   const annotations = useAnnotations(
     adapter,
@@ -1098,6 +1145,15 @@ export function ArtReviewer({
           <span style={label}>Audio</span>
         </label>
         <MemoryReadout autoBytes={viewer.budget.ram} item={item} />
+        <Playlist
+          items={items}
+          index={state.itemIndex}
+          disabled={!canControl}
+          busy={playlistBusy}
+          onSelect={(i) => dispatch({ a: "goto", item: i, frame: 0 })}
+          onAdd={adapter.addItems ? handleAddFiles : undefined}
+          onRemove={adapter.removeItem ? handleRemoveItem : undefined}
+        />
         <div style={{ flex: 1, minWidth: 8 }} />
         {/* Shrinkable: the host's slot (assignment name, student nav) is wider
             than the panel once a sidebar is open, and an unshrinkable child
@@ -1120,13 +1176,6 @@ export function ArtReviewer({
         </button>
       </div>
 
-      <Playlist
-        items={items}
-        index={state.itemIndex}
-        disabled={!canControl}
-        onSelect={(i) => dispatch({ a: "goto", item: i, frame: 0 })}
-      />
-
       {/* stage */}
       {/* The floor lives here, on the flex row, not on the stage inside it.
           On the inner box the flex algorithm never sees it: the row shrinks,
@@ -1134,6 +1183,18 @@ export function ArtReviewer({
       <div style={{ display: "flex", gap: 8, flex: 1, minHeight: STAGE_MIN_HEIGHT }}>
         <div
           ref={containerRef}
+          onDragOver={(e) => {
+            if (!adapter.addItems) return;
+            e.preventDefault();
+            setStageDragOver(true);
+          }}
+          onDragLeave={() => setStageDragOver(false)}
+          onDrop={(e) => {
+            if (!adapter.addItems) return;
+            e.preventDefault();
+            setStageDragOver(false);
+            readDroppedFiles(e.dataTransfer).then(handleAddFiles);
+          }}
           style={{
             position: "relative",
             flex: 1,
@@ -1148,6 +1209,24 @@ export function ArtReviewer({
             ref={glCanvasRef}
             style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
           />
+          {adapter.addItems && stageDragOver && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 10,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "rgba(14,14,14,0.85)",
+                border: `2px dashed ${C.primary}`,
+                borderRadius: 8,
+                pointerEvents: "none",
+              }}
+            >
+              <span style={{ color: C.text, fontSize: 14 }}>Drop to add more artwork for this student</span>
+            </div>
+          )}
           <canvas
             ref={overlayRef}
             onPointerDown={onPointerDown}

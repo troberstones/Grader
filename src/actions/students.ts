@@ -2,15 +2,30 @@
 
 import { db } from "@/db";
 import { students, courseEnrollments } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { parseCSV } from "@/lib/csv";
 import { normalizeRosterRow } from "@/lib/learning-suite";
 import type { LMSRosterRow } from "@/types/learning-suite";
 import { requireCapability } from "@/lib/auth/require";
 
-export async function getStudentsForCourse(courseId: number) {
+/**
+ * Just the count, for stat cards on pages a department-visibility bypass can
+ * legitimately reach (browsing a course to decide whether to copy it) — see
+ * roster.view in src/lib/auth/roles.ts for why the actual names/netIds/
+ * emails below stay member-only even there.
+ */
+export async function getEnrollmentCount(courseId: number): Promise<number> {
   await requireCapability("course.view", { kind: "course", courseId });
+  const [row] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(courseEnrollments)
+    .where(eq(courseEnrollments.courseId, courseId));
+  return row?.n ?? 0;
+}
+
+export async function getStudentsForCourse(courseId: number) {
+  await requireCapability("roster.view", { kind: "course", courseId });
   return db
     .select({
       id: students.id,

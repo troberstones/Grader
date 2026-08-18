@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCourse } from "@/actions/courses";
-import { getStudentsForCourse } from "@/actions/students";
+import { getEnrollmentCount } from "@/actions/students";
 import { getAssignmentsForCourse } from "@/actions/assignments";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Users, Plus, ClipboardList, Calendar, Pencil } from "lucide-react";
 import { formatTerm } from "@/lib/terms";
 import { TrackActiveCourse } from "./track-active-course";
+import { CopyCourseDialog } from "./copy-course-dialog";
 
 export const dynamic = "force-dynamic";
 
@@ -21,9 +22,9 @@ export default async function CourseDetailPage({
   params: Promise<{ courseId: string }>;
 }) {
   const { courseId } = await params;
-  const [course, students, assignments] = await Promise.all([
+  const [course, studentCount, assignments] = await Promise.all([
     getCourse(Number(courseId)),
-    getStudentsForCourse(Number(courseId)),
+    getEnrollmentCount(Number(courseId)),
     getAssignmentsForCourse(Number(courseId)),
   ]);
   if (!course) notFound();
@@ -37,9 +38,10 @@ export default async function CourseDetailPage({
         actions={
           <div className="flex gap-2">
             <LsSyncAssignmentsButton courseId={course.id} />
+            <CopyCourseDialog sourceId={course.id} sourceName={course.name} sourceHasStartDate={!!course.startDate} />
             <LinkButton href={`/courses/${course.id}/roster`} variant="outline">
               <Users className="mr-2 h-4 w-4" />
-              Roster ({students.length})
+              Roster ({studentCount})
             </LinkButton>
             <LinkButton href={`/assignments/new?courseId=${course.id}`}>
               <Plus className="mr-2 h-4 w-4" />
@@ -56,7 +58,7 @@ export default async function CourseDetailPage({
             <CardTitle className="text-sm font-medium text-muted-foreground">Students</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{students.length}</div>
+            <div className="text-2xl font-bold">{studentCount}</div>
           </CardContent>
         </Card>
         <Card>

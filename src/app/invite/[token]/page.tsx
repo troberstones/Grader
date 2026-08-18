@@ -30,8 +30,12 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
 
   return (
     <AuthShell
-      title="Set your password"
-      subtitle={`You have been invited to Art Grader as ${invite.email}.`}
+      title={invite.isReset ? "Choose a new password" : "Set your password"}
+      subtitle={
+        invite.isReset
+          ? `Set a new password for ${invite.email}. Your old one will stop working.`
+          : `You have been invited to Art Grader as ${invite.email}.`
+      }
       footer={`${ROLE_LABELS[invite.globalRole]} — ${ROLE_DESCRIPTIONS[invite.globalRole]}`}
     >
       <AcceptForm token={token} name={invite.name} />

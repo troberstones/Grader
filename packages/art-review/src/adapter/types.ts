@@ -49,6 +49,18 @@ export interface ReviewDataAdapter {
   /** PSD layer tree. Only called for items of kind `layered`. */
   getLayers(itemId: string): Promise<LayerManifest>;
 
+  /**
+   * Writes more files into a context's playlist (e.g. a second angle, a
+   * revision) and resolves once every one is durably saved. Optional — a host
+   * that omits it gets no add affordance (no "+ Add" control, no stage drop
+   * target). The caller re-fetches via `listItems` afterward; this does not
+   * return the new items itself.
+   */
+  addItems?(contextId: string, files: File[]): Promise<void>;
+
+  /** Removes one item from a context's playlist. Optional — omitted hosts get no remove affordance. */
+  removeItem?(itemId: string): Promise<void>;
+
   /** Persist per-user viewer preferences (fps, loop, flips) for a context. */
   savePrefs?(contextId: string, prefs: Record<string, unknown>): Promise<void>;
   loadPrefs?(contextId: string): Promise<Record<string, unknown> | null>;

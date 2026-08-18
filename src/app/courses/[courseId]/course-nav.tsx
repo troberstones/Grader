@@ -2,23 +2,30 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Users } from "lucide-react";
+import { LayoutDashboard, Users, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { CourseRole } from "@/lib/auth/roles";
 
 export function CourseNav({
   courseId,
   courseName,
   courseCode,
+  viewerRole,
 }: {
   courseId: number;
   courseName: string;
   courseCode: string;
+  viewerRole: CourseRole | null;
 }) {
   const pathname = usePathname();
 
   const items = [
     { href: `/courses/${courseId}`, label: "Overview", icon: LayoutDashboard, exact: true },
     { href: `/courses/${courseId}/roster`, label: "Roster", icon: Users, exact: false },
+    // course.members.manage is owner-only — no dead link for anyone else.
+    ...(viewerRole === "owner"
+      ? [{ href: `/courses/${courseId}/members`, label: "Members", icon: ShieldCheck, exact: false }]
+      : []),
   ];
 
   return (

@@ -8,11 +8,13 @@
  *
  * Failures throw rather than redirect, matching how the rest of the app
  * already handles action errors: callers wrap actions in try/catch and show
- * `err.message` via toast. COURSE_SCOPING_PENDING means every check below is
- * still against the global resource — see src/lib/auth/roles.ts.
+ * `err.message` via toast. Course/assignment/submission/student resources
+ * are resolved against `course_members` via resolveAuthContext() before
+ * `can()` runs — see src/lib/auth/course-context.ts and roles.ts.
  */
 
 import { can, GLOBAL, type Capability, type Resource } from "./roles";
+import { resolveAuthContext } from "./course-context";
 import { getCurrentUser, type SessionUser } from "./session";
 
 export async function requireCapability(
@@ -20,7 +22,8 @@ export async function requireCapability(
   resource: Resource = GLOBAL,
 ): Promise<SessionUser> {
   const user = await getCurrentUser();
-  if (!user || !can(user, capability, resource)) {
+  const ctx = user ? await resolveAuthContext(resource, user.id) : {};
+  if (!user || !can(user, capability, resource, ctx)) {
     throw new Error(user ? "You do not have permission to do that." : "Sign in required.");
   }
   return user;

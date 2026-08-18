@@ -13,11 +13,15 @@
  * a database and safe to call from anywhere.
  */
 
-export const GLOBAL_ROLES = ["admin", "instructor", "assistant"] as const;
+export const GLOBAL_ROLES = ["admin", "instructor", "assistant", "student"] as const;
 export type GlobalRole = (typeof GLOBAL_ROLES)[number];
 
 export const USER_STATUSES = ["invited", "active", "disabled"] as const;
 export type UserStatus = (typeof USER_STATUSES)[number];
+
+/** Per-course role, stored in `course_members`. See the table in can() below. */
+export const COURSE_ROLES = ["owner", "instructor", "ta", "observer"] as const;
+export type CourseRole = (typeof COURSE_ROLES)[number];
 
 export function isGlobalRole(v: unknown): v is GlobalRole {
   return typeof v === "string" && (GLOBAL_ROLES as readonly string[]).includes(v);
@@ -27,11 +31,16 @@ export function isUserStatus(v: unknown): v is UserStatus {
   return typeof v === "string" && (USER_STATUSES as readonly string[]).includes(v);
 }
 
+export function isCourseRole(v: unknown): v is CourseRole {
+  return typeof v === "string" && (COURSE_ROLES as readonly string[]).includes(v);
+}
+
 /** The minimum an authorization decision needs. Never the password hash. */
 export interface Principal {
   id: number;
   globalRole: GlobalRole;
   status: UserStatus;
+  canViewArchive: boolean;
 }
 
 export type Capability =
@@ -39,16 +48,37 @@ export type Capability =
   | "course.create"
   | "course.view"
   | "course.edit" // assignments, rubrics, roster
+  | "course.members.manage" // add/remove/reassign course_members rows
+  | "roster.view" // student names/netIds/emails — never covered by department visibility
   | "grade.write"
-  | "grade.publish";
+  | "grade.publish"
+  | "archive.view"; // a student's cross-course submissions/grades/annotations
 
 export type Resource =
   | { kind: "global" }
   | { kind: "course"; courseId: number }
   | { kind: "assignment"; assignmentId: number; courseId: number }
-  | { kind: "submission"; submissionId: number; courseId: number };
+  | { kind: "submission"; submissionId: number; courseId: number }
+  | { kind: "student"; studentId: number };
 
 export const GLOBAL: Resource = { kind: "global" };
+
+/**
+ * Resolved course/student context for the `resource` passed to `can()`.
+ *
+ * `can()` stays a pure function of its arguments — no database access — so
+ * whichever caller needs a real answer (requireCapability / apiRequireCapability)
+ * resolves this first, via resolveAuthContext() in ./course-context, and passes
+ * it in. See docs/accounts-and-courses.md for why resource-shaped checks matter.
+ */
+export interface AuthContext {
+  /** This user's role in the resource's course, or null if not a member. */
+  courseMembership?: CourseRole | null;
+  /** The resource's course visibility. Only meaningful without membership. */
+  courseVisibility?: "private" | "department";
+  /** True if the resource's studentId is linked (students.userId) to this user. */
+  isOwnStudentRecord?: boolean;
+}
 
 /**
  * Per-course membership does not exist yet — `course_members` lands with course
@@ -57,13 +87,17 @@ export const GLOBAL: Resource = { kind: "global" };
  * This constant is exported so the places making that assumption are greppable
  * rather than merely commented. Search for it before believing that course
  * authorization is enforced.
+ *
+ * @deprecated Closed by course_members + AuthContext below. Kept as a marker
+ * during the migration window in case any stray call site still assumes it.
  */
-export const COURSE_SCOPING_PENDING = true;
+export const COURSE_SCOPING_PENDING = false;
 
 export function can(
   user: Principal | null | undefined,
   capability: Capability,
   resource: Resource = GLOBAL,
+  ctx: AuthContext = {},
 ): boolean {
   // A disabled or not-yet-accepted account can do nothing at all. This is the
   // check that makes "disable" meaningful, so it comes before everything.
@@ -79,12 +113,63 @@ export function can(
       return user.globalRole === "instructor";
 
     case "course.view":
+      if (resource.kind === "student") return false;
+      if (resource.kind === "global") {
+        // Coarse "is this the kind of user who may call a listing action"
+        // gate — the listing action itself filters rows to what the caller
+        // is actually a member of. See getCourses()/getCourseTerms().
+        return user.globalRole === "instructor" || user.globalRole === "assistant";
+      }
+      if (ctx.courseMembership != null) return true;
+      // No membership: department-visible courses are still browsable (and
+      // therefore copyable) by any active instructor/assistant.
+      return (
+        ctx.courseVisibility === "department" &&
+        (user.globalRole === "instructor" || user.globalRole === "assistant")
+      );
+
     case "course.edit":
+      if (resource.kind === "student") return false;
+      if (resource.kind === "global") {
+        // Rubrics are a global library, not course-scoped (see
+        // docs/accounts-and-courses.md) — src/actions/rubrics.ts calls this
+        // capability with no resource, same as before course_members
+        // existed. Course/assignment/submission edits below are the ones
+        // that actually need membership.
+        return user.globalRole === "instructor" || user.globalRole === "assistant";
+      }
+      return ctx.courseMembership === "owner" || ctx.courseMembership === "instructor";
+
+    case "course.members.manage":
+      if (resource.kind !== "course") return false;
+      return ctx.courseMembership === "owner";
+
+    case "roster.view":
+      // Deliberately does NOT honor department visibility, unlike
+      // course.view. That bypass exists so a non-member can browse a
+      // course's assignment/rubric structure to decide whether to copy it —
+      // it was never meant to expose real student names/netIds/emails to
+      // every instructor in the department. Roster access stays
+      // membership-only, full stop.
+      if (resource.kind !== "course") return false;
+      return ctx.courseMembership != null;
+
     case "grade.write":
+      if (resource.kind === "global" || resource.kind === "student") return false;
+      return (
+        ctx.courseMembership === "owner" ||
+        ctx.courseMembership === "instructor" ||
+        ctx.courseMembership === "ta"
+      );
+
     case "grade.publish":
-      // COURSE_SCOPING_PENDING: should consult course_members for `resource`.
-      void resource;
-      return user.globalRole === "instructor" || user.globalRole === "assistant";
+      if (resource.kind === "global" || resource.kind === "student") return false;
+      return ctx.courseMembership === "owner" || ctx.courseMembership === "instructor";
+
+    case "archive.view":
+      if (resource.kind === "global") return user.canViewArchive === true;
+      if (resource.kind !== "student") return false;
+      return user.canViewArchive === true || ctx.isOwnStudentRecord === true;
 
     default:
       return false;
@@ -100,10 +185,27 @@ export const ROLE_LABELS: Record<GlobalRole, string> = {
   admin: "Administrator",
   instructor: "Instructor",
   assistant: "Assistant",
+  student: "Student",
 };
 
 export const ROLE_DESCRIPTIONS: Record<GlobalRole, string> = {
   admin: "Manages accounts and roles, and can reach every course.",
-  instructor: "Creates and teaches courses.",
+  instructor: "Creates courses and is added as a member of others.",
   assistant: "Grades in courses they are added to, but creates none.",
+  // Not yet selectable from the invite UI — see docs/student-accounts-plan.md.
+  student: "Views their own archived work once student login exists.",
+};
+
+export const COURSE_ROLE_LABELS: Record<CourseRole, string> = {
+  owner: "Owner",
+  instructor: "Instructor",
+  ta: "TA",
+  observer: "Observer",
+};
+
+export const COURSE_ROLE_DESCRIPTIONS: Record<CourseRole, string> = {
+  owner: "Full control: roster, assignments, rubrics, grading, publishing, and members.",
+  instructor: "Full control except managing course members.",
+  ta: "Views roster and assignments and can grade, but cannot publish or edit rubrics.",
+  observer: "Views the roster and assignments; cannot grade.",
 };

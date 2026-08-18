@@ -5,6 +5,14 @@ const nextConfig: NextConfig = {
   // not be pulled into a client bundle.
   serverExternalPackages: ["better-sqlite3", "sharp", "ag-psd"],
 
+  // Default Server Action body limit is 1MB — far below one raw artwork file,
+  // let alone a multi-frame EXR sequence uploaded in one request.
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "3gb",
+    },
+  },
+
   // The art review module ships TypeScript source rather than a build step, so
   // Next compiles it as part of the app.
   transpilePackages: ["@grader/art-review"],

@@ -1,6 +1,7 @@
 import { sqliteTable, text, integer, real, blob, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 import type { Term } from "@/lib/terms";
+import type { CourseRole } from "@/lib/auth/roles";
 
 // ─── Courses ────────────────────────────────────────────
 
@@ -13,9 +14,37 @@ export const courses = sqliteTable("courses", {
   term: text("term").notNull().$type<Term>(), // see src/lib/terms.ts
   lmsCourseId: text("lms_course_id"),
   archived: integer("archived").notNull().default(0),
+  // 'department': any active instructor/assistant can view and copy it.
+  // 'private': only course_members can view it; excluded from copy-source browsing.
+  visibility: text("visibility").notNull().default("department"), // 'private' | 'department'
+  // Copy provenance. lineageId is a self-reference: the first course in a copy
+  // family points at its own id, every copy points at the same value, so the
+  // whole family is one query. copiedFromId is one hop back, for "copied from X".
+  lineageId: integer("lineage_id"),
+  copiedFromId: integer("copied_from_id"),
+  // Anchor for rebasing assignment due dates when this course is copied — see
+  // copyCourse() in src/actions/courses.ts.
+  startDate: text("start_date"),
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
   updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),
 });
+
+// ─── Course Members ─────────────────────────────────────
+// Per-course roles, closing COURSE_SCOPING_PENDING (src/lib/auth/roles.ts).
+// A course always needs at least one 'owner' — enforced in
+// src/actions/course-members.ts, not here.
+
+export const courseMembers = sqliteTable("course_members", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  courseId: integer("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: text("role").notNull().$type<CourseRole>(), // see src/lib/auth/roles.ts
+  addedAt: text("added_at").notNull().default(sql`(datetime('now'))`),
+  addedBy: integer("added_by").references(() => users.id),
+}, (table) => [
+  uniqueIndex("course_members_unique_idx").on(table.courseId, table.userId),
+  index("course_members_user_idx").on(table.userId),
+]);
 
 // ─── Students ───────────────────────────────────────────
 
@@ -26,6 +55,10 @@ export const students = sqliteTable("students", {
   name: text("name").notNull(),
   sortName: text("sort_name").notNull(),
   email: text("email"),
+  // Nullable link to a login account. Unpopulated until student login exists
+  // (see docs/student-accounts-plan.md) — exists now so that becomes a
+  // population step later, not an identity merge.
+  userId: integer("user_id").references(() => users.id),
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
 }, (table) => [
   uniqueIndex("students_net_id_idx").on(table.netId),
@@ -95,6 +128,9 @@ export const assignments = sqliteTable("assignments", {
   lmsAssignmentId: text("lms_assignment_id"),
   lmsGradebookId: text("lms_gradebook_id"),
   lmsDiscussionUrl: text("lms_discussion_url"),
+  // Preserved across course copy so a copied course's assignment order
+  // matches the original.
+  sortOrder: integer("sort_order").notNull().default(0),
   archived: integer("archived").notNull().default(0),
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
   updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),
@@ -249,6 +285,11 @@ export const users = sqliteTable("users", {
   // The course whose detail page the instructor last opened — scopes the
   // global Assignments nav item instead of it always listing everything.
   activeCourseId: integer("active_course_id"),
+  // Admin-grantable, independent of any course membership: sees any
+  // student's cross-course archive (src/actions/archive.ts). Deliberately
+  // not implied by sharing a student with another instructor — teaching a
+  // student in one course must not silently expose their record elsewhere.
+  canViewArchive: integer("can_view_archive").notNull().default(0),
 }, (table) => [
   uniqueIndex("users_email_idx").on(table.email),
   uniqueIndex("users_net_id_idx").on(table.netId),
