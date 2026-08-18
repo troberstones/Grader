@@ -1,7 +1,6 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,15 +10,8 @@ import { acceptInvite } from "@/actions/auth";
 import { MIN_PASSWORD_LENGTH } from "@/lib/auth/password";
 
 export function AcceptForm({ token, name }: { token: string; name: string }) {
-  const router = useRouter();
+  // acceptInvite() redirects itself on success — nothing to react to here.
   const [state, formAction, pending] = useActionState(acceptInvite.bind(null, token), null);
-
-  useEffect(() => {
-    if (state?.ok) {
-      router.replace("/");
-      router.refresh();
-    }
-  }, [state, router]);
 
   return (
     <form action={formAction} className="space-y-5">

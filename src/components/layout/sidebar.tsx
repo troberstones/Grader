@@ -12,6 +12,7 @@ import {
   Archive,
   Home,
   LogOut,
+  Settings,
   Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -105,15 +106,26 @@ export function Sidebar({ account }: { account: SidebarAccount | null }) {
 }
 
 function AccountFooter({ account }: { account: SidebarAccount }) {
+  const pathname = usePathname();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const isActive = pathname.startsWith("/account");
 
   return (
     <div className="px-3 pb-4 pt-2">
-      <div className="px-3 py-2">
-        <div className="text-sm font-medium truncate">{account.name}</div>
-        <div className="text-xs text-muted-foreground truncate">{account.email}</div>
-      </div>
+      <Link
+        href="/account"
+        className={cn(
+          "flex items-center justify-between gap-2 px-3 py-2 rounded-md transition-all duration-150",
+          isActive ? "bg-primary/10" : "hover:bg-accent",
+        )}
+      >
+        <div className="min-w-0">
+          <div className={cn("text-sm font-medium truncate", isActive ? "text-primary" : "")}>{account.name}</div>
+          <div className="text-xs text-muted-foreground truncate">{account.email}</div>
+        </div>
+        <Settings className={cn("h-3.5 w-3.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground")} />
+      </Link>
       <button
         type="button"
         disabled={pending}

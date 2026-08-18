@@ -1,7 +1,6 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,15 +10,8 @@ import { bootstrapAdmin } from "@/actions/auth";
 import { MIN_PASSWORD_LENGTH } from "@/lib/auth/password";
 
 export function SetupForm() {
-  const router = useRouter();
+  // bootstrapAdmin() redirects itself on success — nothing to react to here.
   const [state, formAction, pending] = useActionState(bootstrapAdmin, null);
-
-  useEffect(() => {
-    if (state?.ok) {
-      router.replace("/");
-      router.refresh();
-    }
-  }, [state, router]);
 
   return (
     <form action={formAction} className="space-y-5">

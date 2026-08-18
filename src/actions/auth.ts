@@ -3,6 +3,7 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
 import { db } from "@/db";
 import { invites, users } from "@/db/schema";
@@ -19,6 +20,7 @@ import {
   needsBootstrap,
   normaliseEmail,
   requireAdmin,
+  requireUser,
 } from "@/lib/auth/session";
 
 export interface ActionResult {
@@ -100,6 +102,11 @@ export async function signOut(): Promise<ActionResult> {
  * client JS never loads. The password-match check moved here from the client
  * component for the same reason: a client-only wrapper around this function
  * can't be handed to `<form action>`, only the real server action can.
+ *
+ * Redirects itself on success rather than returning `ok` for the client to
+ * act on — a redirect here works whether or not client JS ever hydrated,
+ * where a `useEffect`-driven one does not. See acceptInvite() for the
+ * failure mode that motivated this.
  */
 export async function bootstrapAdmin(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
   if (!(await needsBootstrap())) return fail("An account already exists. Sign in instead.");
@@ -133,7 +140,7 @@ export async function bootstrapAdmin(_prevState: ActionResult | null, formData: 
 
   await createSession(created.id, await requestMeta());
   revalidatePath("/", "layout");
-  return ok;
+  redirect("/");
 }
 
 // ─── Invitations ────────────────────────────────────────────────────────
@@ -266,6 +273,15 @@ export async function inspectInvite(token: string): Promise<InviteDetails | null
  * `(token, prevState, formData)` — bound with `acceptInvite.bind(null, token)`
  * before being handed to `useActionState`, same reasoning as `bootstrapAdmin`:
  * this is an entry point that has to work without client JS.
+ *
+ * Redirects itself on success instead of returning `ok`. It used to return
+ * `ok` and let a client `useEffect` navigate away — but if that page ever
+ * re-renders before the client gets there (a slow/partial hydration, or the
+ * no-JS fallback this form is built to support), `page.tsx` re-checks the
+ * same token, finds it already consumed by the success that just happened,
+ * and shows "this invitation is not valid" — even though the password was
+ * changed and the session was created. Redirecting from here sidesteps that
+ * re-render happening at all.
  */
 export async function acceptInvite(
   token: string,
@@ -306,6 +322,62 @@ export async function acceptInvite(
 
   await createSession(claimed[0].userId, await requestMeta());
   revalidatePath("/admin/users");
+  redirect("/");
+}
+
+// ─── Self-service ───────────────────────────────────────────────────────
+// The signed-in user acting on their own account — distinct from "Account
+// administration" below, which is admin-on-someone-else and checks
+// `requireAdmin()`. These check `requireUser()` and always operate on
+// `getCurrentUser()`'s id, never a userId argument, so there is no id to
+// mix up with someone else's account.
+
+/**
+ * `(prevState, formData)` — same `useActionState` reasoning as the other auth
+ * forms, even though this one is never reached before sign-in: it keeps a
+ * plain HTML POST as a working fallback instead of a client-only handler.
+ */
+export async function updateOwnProfile(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const user = await requireUser();
+
+  const name = String(formData.get("name") ?? "").trim();
+  const email = normaliseEmail(String(formData.get("email") ?? ""));
+
+  if (!name) return fail("Enter your name.");
+  if (!isEmail(email)) return fail("Enter a valid email address.");
+
+  if (email !== user.email) {
+    const existing = await findUserByEmail(email);
+    if (existing && existing.id !== user.id) return fail(`${email} is already in use by another account.`);
+  }
+
+  await db.update(users).set({ name, email }).where(eq(users.id, user.id));
+  // The sidebar's name/email come from the root layout, not this route.
+  revalidatePath("/", "layout");
+  return ok;
+}
+
+/** Requires the current password, unlike an admin's resetPassword() — this is the account owner proving it's still them. */
+export async function changeOwnPassword(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const user = await requireUser();
+
+  const currentPassword = String(formData.get("currentPassword") ?? "");
+  const newPassword = String(formData.get("newPassword") ?? "");
+  const confirm = String(formData.get("confirm") ?? "");
+
+  const target = await getUser(user.id);
+  if (!(await verifyPassword(currentPassword, target?.passwordHash ?? null))) {
+    return fail("Your current password is incorrect.");
+  }
+
+  if (newPassword !== confirm) return fail("The two new passwords do not match.");
+
+  const problem = passwordProblem(newPassword);
+  if (problem) return fail(problem);
+
+  const passwordHash = await hashPassword(newPassword);
+  await db.update(users).set({ passwordHash }).where(eq(users.id, user.id));
+  revalidatePath("/account");
   return ok;
 }
 
