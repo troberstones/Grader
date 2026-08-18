@@ -33,7 +33,7 @@ export function UserAdmin({ accounts, currentUserId }: { accounts: AccountRow[];
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [inviteOpen, setInviteOpen] = useState(accounts.length <= 1);
-  const [inviteLink, setInviteLink] = useState<{ name: string; url: string; label: string } | null>(null);
+  const [inviteLink, setInviteLink] = useState<{ name: string; url: string; label: string; emailSent: boolean } | null>(null);
   // Controlled rather than read from FormData: the role must be one of ours
   // whether or not the Select renders a hidden input.
   const [inviteRole, setInviteRole] = useState<GlobalRole>("instructor");
@@ -67,7 +67,12 @@ export function UserAdmin({ accounts, currentUserId }: { accounts: AccountRow[];
         return;
       }
 
-      setInviteLink({ name, url: new URL(result.inviteUrl, window.location.origin).toString(), label: "Invitation" });
+      setInviteLink({
+        name,
+        url: new URL(result.inviteUrl, window.location.origin).toString(),
+        label: "Invitation",
+        emailSent: !!result.emailSent,
+      });
       form.reset();
       router.refresh();
     });
@@ -84,6 +89,7 @@ export function UserAdmin({ accounts, currentUserId }: { accounts: AccountRow[];
         name: account.name,
         url: new URL(result.inviteUrl, window.location.origin).toString(),
         label: "Password reset link",
+        emailSent: !!result.emailSent,
       });
       router.refresh();
     });
@@ -136,8 +142,9 @@ export function UserAdmin({ accounts, currentUserId }: { accounts: AccountRow[];
               </form>
 
               <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
-                No email is sent — this generates a link for you to pass on however you like. It works once,
-                expires in seven days, and the person sets their own password, which you never see.
+                This also emails the link when the server can send mail — copy it and share it directly if
+                email doesn&apos;t arrive. It works once, expires in seven days, and the person sets their own
+                password, which you never see.
               </p>
             </CardContent>
           </Card>
@@ -146,7 +153,9 @@ export function UserAdmin({ accounts, currentUserId }: { accounts: AccountRow[];
 
       {/* The link is shown exactly once: only its hash is stored, so it cannot
           be retrieved later and a lost link needs a fresh invitation. */}
-      {inviteLink && <InviteLink name={inviteLink.name} url={inviteLink.url} label={inviteLink.label} />}
+      {inviteLink && (
+        <InviteLink name={inviteLink.name} url={inviteLink.url} label={inviteLink.label} emailSent={inviteLink.emailSent} />
+      )}
 
       {/* ── Accounts ───────────────────────────────────────────── */}
       <Card>
@@ -297,7 +306,17 @@ function StatusBadge({ account }: { account: AccountRow }) {
   return <Badge variant="outline">Active</Badge>;
 }
 
-function InviteLink({ name, url, label = "Invitation" }: { name: string; url: string; label?: string }) {
+function InviteLink({
+  name,
+  url,
+  label = "Invitation",
+  emailSent,
+}: {
+  name: string;
+  url: string;
+  label?: string;
+  emailSent: boolean;
+}) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -323,6 +342,11 @@ function InviteLink({ name, url, label = "Invitation" }: { name: string; url: st
             <span className="ml-2">{copied ? "Copied" : "Copy"}</span>
           </Button>
         </div>
+        {emailSent ? (
+          <p className="mt-2 text-xs text-muted-foreground">Also emailed to the address on file.</p>
+        ) : (
+          <p className="mt-2 text-xs text-muted-foreground">Could not send an email — share this link directly.</p>
+        )}
       </CardContent>
     </Card>
   );

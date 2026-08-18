@@ -150,7 +150,10 @@ projector.
 - **Admin console** at `/admin/users`: invite, disable, re-enable, change global
   role, transfer course ownership, force-logout.
 
-Rate-limit login per IP and per email; return one generic failure message.
+Login is rate-limited two ways: per-account lockout (5 failed attempts locks
+it for 15 minutes) and a same-shaped per-IP throttle. Both return one generic
+failure message, except a locked account, which is named explicitly — see
+`src/lib/auth/lockout.ts` and `docs/security.md`.
 
 ## Terms
 
@@ -424,9 +427,13 @@ Recorded so they are choices rather than oversights.
 
 **Needed before this leaves the studio LAN:** enrollment state
 (`enrolled|dropped|waitlisted` — dropping a student must not delete their
-grades), an audit log of grade changes (not optional once a TA can grade),
-storage paths that include the course, soft-delete instead of `deleteCourse`'s
-hard delete, and backups of a database that now holds password hashes.
+grades), storage paths that include the course, and soft-delete instead of
+`deleteCourse`'s hard delete.
+
+**Done:** an audit log covering grade changes and other security-sensitive
+actions (`audit_log`, visible at `/admin/audit`), and daily backups of the
+database that now holds password hashes (`grader-backup.timer`) — see
+`docs/security.md`.
 
 **LMS completeness:** a gradebook matrix, weighted categories and letter scales,
 sections as entities, submission attempts and resubmission, late policy and

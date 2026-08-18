@@ -27,6 +27,10 @@ ssh "$REMOTE" "
   npm install
   npm run build
   systemctl --user restart grader.service
+  mkdir -p ~/.config/systemd/user
+  cp scripts/systemd/grader-backup.service scripts/systemd/grader-backup.timer ~/.config/systemd/user/
+  systemctl --user daemon-reload
+  systemctl --user enable --now grader-backup.timer
 "
 
 echo "==> Status"

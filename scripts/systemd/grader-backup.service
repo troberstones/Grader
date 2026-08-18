@@ -1,0 +1,14 @@
+# Installed by scripts/deploy-remote.sh into ~/.config/systemd/user/ on the
+# deploy host. Same hardcoded paths deploy-remote.sh already uses for
+# grader.service itself.
+[Unit]
+Description=Grader database backup (VACUUM INTO, with retention)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/work/cnh5/grader
+Environment=PATH=/work/cnh5/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin
+Environment=DB_PATH=/work/cnh5/grader/storage/grader.db
+Environment=BACKUP_DIR=/work/cnh5/grader/storage/backups
+Environment=RETENTION_DAYS=30
+ExecStart=/work/cnh5/.nvm/versions/node/v22.23.2/bin/node scripts/backup-db.mjs

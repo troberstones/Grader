@@ -7,6 +7,7 @@ import { revalidatePath } from "next/cache";
 import type { RubricJSON, RubricCriterion, RubricSettings } from "@/types/rubric";
 import { requireCapability } from "@/lib/auth/require";
 import { validateRubric, isShareModel, type AuthoredRubric } from "@/lib/rubric";
+import { writeAudit } from "@/lib/audit";
 
 export async function getRubrics() {
   await requireCapability("course.view");
@@ -257,13 +258,15 @@ export async function updateShareRubric(id: number, data: AuthoredRubric): Promi
 }
 
 export async function deleteRubric(id: number) {
-  await requireCapability("course.edit");
+  const actor = await requireCapability("course.edit");
+  const [rubric] = await db.select({ name: rubrics.name }).from(rubrics).where(eq(rubrics.id, id));
   const criteria = await db.select().from(rubricCriteria).where(eq(rubricCriteria.rubricId, id));
   for (const c of criteria) {
     await db.delete(rubricLevels).where(eq(rubricLevels.criteriaId, c.id));
   }
   await db.delete(rubricCriteria).where(eq(rubricCriteria.rubricId, id));
   await db.delete(rubrics).where(eq(rubrics.id, id));
+  await writeAudit(actor, { action: "rubric.delete", targetType: "rubric", targetId: id, detail: { name: rubric?.name } });
   revalidatePath("/rubrics");
 }
 

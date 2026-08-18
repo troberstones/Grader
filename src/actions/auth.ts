@@ -11,6 +11,15 @@ import { hashPassword, passwordProblem, verifyPassword } from "@/lib/auth/passwo
 import { expiryFromNow, generateToken, hashToken, isExpired, INVITE_TTL_MS, sqlTimestamp } from "@/lib/auth/tokens";
 import { isGlobalRole, type GlobalRole } from "@/lib/auth/roles";
 import {
+  isIpThrottled,
+  isLockedOut,
+  recordFailedLogin,
+  recordIpFailure,
+  resetFailedLogins,
+} from "@/lib/auth/lockout";
+import { writeAudit } from "@/lib/audit";
+import { sendInviteEmail } from "@/lib/email";
+import {
   countActiveAdmins,
   createSession,
   destroyAllSessions,
@@ -28,6 +37,8 @@ export interface ActionResult {
   error?: string;
   /** Set when the caller should show the invitation link to copy. */
   inviteUrl?: string;
+  /** Set by inviteUser()/resetPassword(): whether the best-effort email send succeeded. */
+  emailSent?: boolean;
 }
 
 const ok: ActionResult = { ok: true };
@@ -50,6 +61,15 @@ async function requestMeta() {
  * difference tells an unauthenticated caller which email addresses are real.
  * A disabled account is the one exception worth naming, since the person
  * affected needs to know to ask an administrator rather than keep retrying.
+ * A locked-out account is treated the same way, for the same reason —
+ * see src/lib/auth/lockout.ts.
+ *
+ * Two rate-limit layers run before any password work: an IP-wide throttle
+ * (catches a script trying many emails from one place) and per-account
+ * lockout (catches repeated guesses against one email, from anywhere). A
+ * locked account skips `verifyPassword()` entirely — there is no reason to
+ * pay the scrypt cost when the outcome is already fixed — but still counts
+ * as an attempt against the IP throttle.
  *
  * Signature is `(prevState, formData)` so `useActionState` can bind it
  * directly to `<form action={...}>` — that gives the form a real fallback
@@ -62,13 +82,27 @@ export async function signIn(_prevState: ActionResult | null, formData: FormData
 
   if (await needsBootstrap()) return fail("No accounts exist yet. Set up the first administrator.");
 
+  const meta = await requestMeta();
+  if (isIpThrottled(meta.ip)) {
+    return fail("Too many attempts from this network. Wait a few minutes and try again.");
+  }
+
   const user = await findUserByEmail(email);
+
+  if (user && isLockedOut(user)) {
+    recordIpFailure(meta.ip);
+    return fail("This account is temporarily locked after repeated failed attempts. Try again later.");
+  }
 
   // Always run a verification, even with no user, so that a missing account and
   // a wrong password take a comparable amount of time.
   const valid = await verifyPassword(password ?? "", user?.passwordHash ?? null);
 
-  if (!user || !valid) return fail("That email and password do not match.");
+  if (!user || !valid) {
+    recordIpFailure(meta.ip);
+    if (user) await recordFailedLogin(user.id);
+    return fail("That email and password do not match.");
+  }
 
   if (user.status === "disabled") {
     return fail("This account has been disabled. Ask an administrator to re-enable it.");
@@ -77,7 +111,8 @@ export async function signIn(_prevState: ActionResult | null, formData: FormData
     return fail("This account has not been set up yet. Use the invitation link you were sent.");
   }
 
-  await createSession(user.id, await requestMeta());
+  await resetFailedLogins(user.id);
+  await createSession(user.id, meta);
   await db.update(users).set({ lastLoginAt: sqlTimestamp(new Date()) }).where(eq(users.id, user.id));
 
   return ok;
@@ -188,20 +223,25 @@ export async function inviteUser(input: {
     expiresAt: expiryFromNow(INVITE_TTL_MS),
   });
 
+  const emailSent = await sendInviteEmail(email, name, `/invite/${token}`, false);
+  await writeAudit(admin, { action: "user.invite", targetType: "user", targetId: userId, detail: { email, role } });
   revalidatePath("/admin/users");
-  return { ok: true, inviteUrl: `/invite/${token}` };
+  return { ok: true, inviteUrl: `/invite/${token}`, emailSent };
 }
 
 /**
  * Issue a single-use link that lets an active user set a new password.
  *
- * There is no self-service "forgot password" anywhere in this app — no
- * outbound email is sent from it at all, invite links are handed off by an
- * admin manually, and that's the same shape this reuses. `inviteUser()`
- * refuses to touch an already-active account, but `acceptInvite()` doesn't
- * care whether the account was active already — it overwrites `passwordHash`
- * and sets `status: "active"` unconditionally. So the only genuinely new
- * piece here is issuing a token for someone `inviteUser()` would reject.
+ * There is no self-service "forgot password" anywhere in this app — invite
+ * and reset links are still handed off by an admin, who can always copy and
+ * share the link directly. The link is emailed too, best-effort, via the
+ * host's own local mail transport (see src/lib/email.ts) — that's additive,
+ * never a replacement, since a send failure must not block issuing the
+ * link. `inviteUser()` refuses to touch an already-active account, but
+ * `acceptInvite()` doesn't care whether the account was active already — it
+ * overwrites `passwordHash` and sets `status: "active"` unconditionally. So
+ * the only genuinely new piece here is issuing a token for someone
+ * `inviteUser()` would reject.
  */
 export async function resetPassword(userId: number): Promise<ActionResult> {
   const admin = await requireAdmin();
@@ -222,8 +262,10 @@ export async function resetPassword(userId: number): Promise<ActionResult> {
     expiresAt: expiryFromNow(INVITE_TTL_MS),
   });
 
+  const emailSent = await sendInviteEmail(target.email, target.name, `/invite/${token}`, true);
+  await writeAudit(admin, { action: "user.password_reset_issued", targetType: "user", targetId: userId, detail: { email: target.email } });
   revalidatePath("/admin/users");
-  return { ok: true, inviteUrl: `/invite/${token}` };
+  return { ok: true, inviteUrl: `/invite/${token}`, emailSent };
 }
 
 export interface InviteDetails {
@@ -401,6 +443,12 @@ export async function setUserRole(userId: number, role: string): Promise<ActionR
   }
 
   await db.update(users).set({ globalRole: role }).where(eq(users.id, userId));
+  await writeAudit(admin, {
+    action: "user.role_change",
+    targetType: "user",
+    targetId: userId,
+    detail: { from: target.globalRole, to: role },
+  });
   revalidatePath("/admin/users");
   return ok;
 }
@@ -422,14 +470,21 @@ export async function setUserStatus(userId: number, status: "active" | "disabled
   }
 
   await db.update(users).set({ status }).where(eq(users.id, userId));
+  await writeAudit(admin, {
+    action: "user.status_change",
+    targetType: "user",
+    targetId: userId,
+    detail: { from: target.status, to: status },
+  });
   revalidatePath("/admin/users");
   return ok;
 }
 
 /** Force a user to sign in again everywhere, without disabling the account. */
 export async function forceSignOut(userId: number): Promise<ActionResult> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   await destroyAllSessions(userId);
+  await writeAudit(admin, { action: "user.force_sign_out", targetType: "user", targetId: userId });
   revalidatePath("/admin/users");
   return ok;
 }

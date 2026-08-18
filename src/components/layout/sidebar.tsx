@@ -12,6 +12,7 @@ import {
   Archive,
   Home,
   LogOut,
+  ScrollText,
   Settings,
   Users,
 } from "lucide-react";
@@ -89,13 +90,28 @@ export function Sidebar({ account }: { account: SidebarAccount | null }) {
             href="/admin/users"
             className={cn(
               "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-150",
-              pathname.startsWith("/admin")
+              pathname.startsWith("/admin/users")
                 ? "text-primary bg-primary/10"
                 : "text-muted-foreground hover:text-foreground hover:bg-accent",
             )}
           >
-            <Users className={cn("h-4 w-4 shrink-0", pathname.startsWith("/admin") ? "text-primary" : "")} />
+            <Users className={cn("h-4 w-4 shrink-0", pathname.startsWith("/admin/users") ? "text-primary" : "")} />
             Accounts
+          </Link>
+        )}
+
+        {account?.globalRole === "admin" && (
+          <Link
+            href="/admin/audit"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-150",
+              pathname.startsWith("/admin/audit")
+                ? "text-primary bg-primary/10"
+                : "text-muted-foreground hover:text-foreground hover:bg-accent",
+            )}
+          >
+            <ScrollText className={cn("h-4 w-4 shrink-0", pathname.startsWith("/admin/audit") ? "text-primary" : "")} />
+            Audit log
           </Link>
         )}
       </nav>

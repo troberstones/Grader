@@ -7,6 +7,7 @@ import { revalidatePath } from "next/cache";
 import { requireCapability } from "@/lib/auth/require";
 import { isTerm, termSortKey, type Term } from "@/lib/terms";
 import { cloneRubric } from "./rubrics";
+import { writeAudit } from "@/lib/audit";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -154,10 +155,17 @@ export async function updateCourse(
 }
 
 export async function deleteCourse(id: number) {
-  await requireCapability("course.edit", { kind: "course", courseId: id });
+  const actor = await requireCapability("course.edit", { kind: "course", courseId: id });
+  const [course] = await db.select({ name: courses.name, code: courses.code }).from(courses).where(eq(courses.id, id));
   await db.delete(courseEnrollments).where(eq(courseEnrollments.courseId, id));
   await db.delete(assignments).where(eq(assignments.courseId, id));
   await db.delete(courses).where(eq(courses.id, id));
+  await writeAudit(actor, {
+    action: "course.delete",
+    targetType: "course",
+    targetId: id,
+    detail: { name: course?.name, code: course?.code },
+  });
   revalidatePath("/courses");
 }
 

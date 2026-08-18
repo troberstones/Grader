@@ -290,6 +290,11 @@ export const users = sqliteTable("users", {
   // not implied by sharing a student with another instructor — teaching a
   // student in one course must not silently expose their record elsewhere.
   canViewArchive: integer("can_view_archive").notNull().default(0),
+  // Login lockout — DB-backed rather than in-memory, same reasoning as
+  // sessions being rows: this state has to survive a restart and be
+  // authoritative. See src/lib/auth/lockout.ts.
+  failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
+  lockedUntil: text("locked_until"),
 }, (table) => [
   uniqueIndex("users_email_idx").on(table.email),
   uniqueIndex("users_net_id_idx").on(table.netId),
@@ -323,6 +328,29 @@ export const invites = sqliteTable("invites", {
 }, (table) => [
   uniqueIndex("invites_token_idx").on(table.tokenHash),
   index("invites_user_idx").on(table.userId),
+]);
+
+// Who did what to grades and accounts/courses/rubrics. Append-only — no
+// update or delete path anywhere in the app. Best-effort: a write failure
+// here (see src/lib/audit.ts) never blocks the action it's recording.
+export const auditLog = sqliteTable("audit_log", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  // No onDelete cascade: accounts are disabled, never hard-deleted, but even
+  // if that changes later, audit history must outlive the account it names.
+  actorId: integer("actor_id").references(() => users.id),
+  // Denormalized: users.email can change (updateOwnProfile), and an audit
+  // row should show what was true at the time, not what's true today.
+  actorEmail: text("actor_email").notNull(),
+  action: text("action").notNull(), // e.g. 'grade.save', 'user.role_change'
+  targetType: text("target_type"), // 'grade' | 'user' | 'course' | 'rubric' | null
+  targetId: integer("target_id"),
+  detail: text("detail"), // JSON, free-form context
+  ip: text("ip"),
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index("audit_log_actor_idx").on(table.actorId),
+  index("audit_log_target_idx").on(table.targetType, table.targetId),
+  index("audit_log_created_idx").on(table.createdAt),
 ]);
 
 // Per-user viewer preferences (fps, loop mode, flips) scoped to a context.

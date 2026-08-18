@@ -95,8 +95,8 @@ Roughly in the order they'd matter if the tool left the studio:
    secure cookie would simply never be sent. Set `SECURE_COOKIES=1` when this
    moves behind HTTPS — the flag is configuration, not a code change.
 
-7. **No rate limiting on sign-in.** Failures are generic and constant-time-ish,
-   but nothing slows down repeated attempts.
+7. **~~No rate limiting on sign-in.~~ Two layers now cover it.** See "What is
+   already fenced off" below.
 
 ## What is already fenced off
 
@@ -131,6 +131,43 @@ Roughly in the order they'd matter if the tool left the studio:
 - **The last administrator cannot be demoted or disabled**, and nobody can
   disable their own account — otherwise account management becomes permanently
   unreachable without hand-editing the database.
+
+- **Login is rate-limited two ways.** Per-account lockout
+  (`users.failedLoginAttempts` / `lockedUntil`) locks an account for 15
+  minutes after 5 failed attempts — durable, DB-backed, survives a restart.
+  A same-shaped IP throttle (20 failures per IP per 5 minutes) sits in front
+  of it, but is an in-memory `Map`, not a database table: grader runs as one
+  Node process under `systemd --user`, so that tradeoff is deliberate — a
+  restart clears the IP throttle, but the account-level lockout is the
+  durable backstop, and a restart isn't something an attacker controls the
+  timing of. See `src/lib/auth/lockout.ts`.
+
+- **Security-sensitive actions are logged.** Grade saves/clears/missing-marks,
+  role and status changes, forced sign-outs, invitations, and course/rubric
+  deletes all write to `audit_log` via `writeAudit()` (`src/lib/audit.ts`) —
+  best-effort, so a logging failure never blocks the action it's recording.
+  Visible to admins at `/admin/audit`.
+
+- **Invite and password-reset links are also emailed, best-effort.**
+  `src/lib/email.ts` sends through the deploy host's own local mail transport
+  (sendmail/postfix — no SMTP credentials, no third-party account),
+  configured via `APP_BASE_URL` / `MAIL_FROM` / `SENDMAIL_PATH`. This is
+  additive: the copy-link flow in `/admin/users` is unchanged and stays the
+  real mechanism regardless of whether the email arrives.
+
+## Backups
+
+`scripts/backup-db.mjs` runs daily via `grader-backup.timer` (installed by
+`scripts/deploy-remote.sh`), taking a `VACUUM INTO` snapshot into
+`storage/backups/` — same technique as the manual pre-migration snapshots
+already in `storage/` — and pruning anything older than 30 days.
+
+This protects against corruption, a bad migration, or an accidental delete.
+It does **not** protect against the host itself failing: `storage/backups/`
+is still local disk on the same machine as `storage/grader.db`, same caveat
+as the existing manual snapshots ("exists on one disk"). A real off-host
+backup is still worth doing before this holds anything nobody can afford to
+lose.
 
 ## Before this is exposed to anything but the studio LAN
 

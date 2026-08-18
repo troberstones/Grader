@@ -17,6 +17,7 @@ import type { GradeStatus } from "@/types/grading";
 import { requireCapability } from "@/lib/auth/require";
 import { assignmentResource } from "@/lib/auth/resource-lookup";
 import { computeScore, criterionPoints, toNormalRubric, toSelections } from "@/lib/rubric";
+import { writeAudit } from "@/lib/audit";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -125,7 +126,7 @@ export async function saveGrade({
   entries: { criteriaId: number; levelId: number; score: number }[];
   feedback: string;
 }) {
-  await requireCapability("grade.write", await assignmentResource(assignmentId));
+  const actor = await requireCapability("grade.write", await assignmentResource(assignmentId));
   // Determine status
   // Load all criteria for this assignment's rubric to know total count
   const assignmentRow = await db
@@ -208,6 +209,13 @@ export async function saveGrade({
     }
   }
 
+  await writeAudit(actor, {
+    action: "grade.save",
+    targetType: "grade",
+    targetId: gradeId,
+    detail: { assignmentId, studentId, totalScore, status },
+  });
+
   revalidatePath(`/assignments/${assignmentId}`);
   return { success: true, status, totalScore };
 }
@@ -232,7 +240,7 @@ export async function saveShareGrade({
   entries: { criteriaId: number; levelId: number; nudge?: number }[];
   feedback: string;
 }) {
-  await requireCapability("grade.write", await assignmentResource(assignmentId));
+  const actor = await requireCapability("grade.write", await assignmentResource(assignmentId));
 
   const assignmentRow = await db
     .select({ rubricId: assignments.rubricId, pointsPossible: assignments.pointsPossible })
@@ -324,6 +332,13 @@ export async function saveShareGrade({
     }
   }
 
+  await writeAudit(actor, {
+    action: "grade.save",
+    targetType: "grade",
+    targetId: gradeId,
+    detail: { assignmentId, studentId, totalScore, status },
+  });
+
   revalidatePath(`/assignments/${assignmentId}`);
   return { success: true, status, totalScore };
 }
@@ -335,28 +350,42 @@ export async function saveShareGrade({
  * regardless of which editor authored the rubric.
  */
 export async function markMissing(assignmentId: number, studentId: number) {
-  await requireCapability("grade.write", await assignmentResource(assignmentId));
+  const actor = await requireCapability("grade.write", await assignmentResource(assignmentId));
   const existing = await db
     .select({ id: grades.id })
     .from(grades)
     .where(and(eq(grades.assignmentId, assignmentId), eq(grades.studentId, studentId)));
 
+  let gradeId: number;
   if (existing.length > 0) {
-    await db.delete(gradeEntries).where(eq(gradeEntries.gradeId, existing[0].id));
+    gradeId = existing[0].id;
+    await db.delete(gradeEntries).where(eq(gradeEntries.gradeId, gradeId));
     await db
       .update(grades)
       .set({ totalScore: 0, feedback: null, status: "missing", gradedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
-      .where(eq(grades.id, existing[0].id));
+      .where(eq(grades.id, gradeId));
   } else {
-    await db.insert(grades).values({ assignmentId, studentId, totalScore: 0, status: "missing", gradedAt: new Date().toISOString() });
+    const [created] = await db
+      .insert(grades)
+      .values({ assignmentId, studentId, totalScore: 0, status: "missing", gradedAt: new Date().toISOString() })
+      .returning();
+    gradeId = created.id;
   }
+
+  await writeAudit(actor, {
+    action: "grade.mark_missing",
+    targetType: "grade",
+    targetId: gradeId,
+    detail: { assignmentId, studentId },
+  });
+
   revalidatePath(`/assignments/${assignmentId}`);
 }
 
 // ─── Clear a student's grade (reset to ungraded) ──────────────────────────────
 
 export async function clearGrade(assignmentId: number, studentId: number) {
-  await requireCapability("grade.write", await assignmentResource(assignmentId));
+  const actor = await requireCapability("grade.write", await assignmentResource(assignmentId));
   const existing = await db
     .select({ id: grades.id })
     .from(grades)
@@ -365,6 +394,12 @@ export async function clearGrade(assignmentId: number, studentId: number) {
   if (existing.length > 0) {
     // gradeEntries cascade delete via FK
     await db.delete(grades).where(eq(grades.id, existing[0].id));
+    await writeAudit(actor, {
+      action: "grade.clear",
+      targetType: "grade",
+      targetId: existing[0].id,
+      detail: { assignmentId, studentId },
+    });
   }
   revalidatePath(`/assignments/${assignmentId}`);
 }
