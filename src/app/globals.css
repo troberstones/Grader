@@ -51,11 +51,15 @@
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Editorial Gallery Design System — always dark
-   Surface hierarchy (lightest = most elevated):
+   Surface hierarchy (lightest = most elevated). Steps widened from the
+   original 0.070/0.094/0.118/0.167 — at this end of the lightness range,
+   sRGB gamma compresses small OKLCH deltas into near-nothing (measured
+   card-vs-background contrast was 1.03:1 against a 3:1 floor for UI
+   boundaries). Background is unchanged; only the tiers above it opened up.
      base      #0e0e0e  background
-     section   #131313  muted / secondary
-     card      #1a1919  interactive cards
-     overlay   #262626  popovers / elevated
+     section   #171717  muted / secondary
+     card      #212121  interactive cards
+     overlay   #2e2e2e  popovers / elevated
    Accent: signature orange  #ff9069 → #ff7948
    ───────────────────────────────────────────────────────────────────────────── */
 :root {
@@ -63,10 +67,10 @@
   --background:          oklch(0.070 0.000  0);   /* #0e0e0e — base layer       */
   --foreground:          oklch(0.910 0.006 55);   /* warm near-white, not #fff  */
 
-  --card:                oklch(0.118 0.002 30);   /* #1a1919 — interactive card  */
+  --card:                oklch(0.190 0.002 30);   /* interactive card — widened, see comment above */
   --card-foreground:     oklch(0.910 0.006 55);
 
-  --popover:             oklch(0.167 0.000  0);   /* #262626 — elevated overlay  */
+  --popover:             oklch(0.220 0.000  0);   /* elevated overlay — widened, see comment above */
   --popover-foreground:  oklch(0.910 0.006 55);
 
   /* Accent orange */
@@ -75,21 +79,29 @@
   --primary-foreground:  oklch(0.000 0.000  0);   /* black text on orange       */
 
   /* Neutral surfaces */
-  --secondary:           oklch(0.094 0.000  0);   /* #131313 — section bg       */
+  --secondary:           oklch(0.150 0.000  0);   /* section bg — widened, see comment above */
   --secondary-foreground:oklch(0.910 0.006 55);
 
-  --muted:               oklch(0.094 0.000  0);   /* #131313                    */
+  --muted:               oklch(0.150 0.000  0);
   --muted-foreground:    oklch(0.720 0.003 30);   /* #adaaaa — on-surface-variant */
 
-  --accent:              oklch(0.118 0.002 30);   /* #1a1919                    */
+  --accent:              oklch(0.190 0.002 30);   /* interactive card — widened, see comment above */
   --accent-foreground:   oklch(0.910 0.006 55);
 
   --destructive:         oklch(0.650 0.220 25);
 
-  /* Ghost border — barely perceptible, replaces harsh 1px lines             */
-  --border:              oklch(1.000 0.000  0 / 7%);
+  /* Ghost border — was 7% (measured 1.12:1 against the page, WCAG 1.4.11
+     wants 3:1 for UI boundaries); 38% clears the floor with headroom while
+     still reading as a hairline, not a rule.                              */
+  --border:              oklch(1.000 0.000  0 / 38%);
   --input:               oklch(0.040 0.000  0);   /* sunken input well          */
   --ring:                oklch(0.740 0.170 40 / 55%);
+
+  /* Ambient shadow for elements that need to read as "raised" — a black
+     drop shadow barely registers on a near-black ground by itself, so this
+     is a secondary cue alongside the widened surface steps above, not a
+     replacement for them. See DESIGN.md §4, "Ambient Shadows".            */
+  --shadow-card:          0 1px 0 rgba(0,0,0,0.35), 0 10px 26px -16px rgba(0,0,0,0.65);
 
   /* Chart palette radiating from the orange accent */
   --chart-1:             oklch(0.740 0.170 40);
