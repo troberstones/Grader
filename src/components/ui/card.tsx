@@ -12,9 +12,12 @@ function Card({
       data-slot="card"
       data-size={size}
       className={cn(
-        // No border — tonal depth via bg-card against bg, plus shadow-card
-        // (globals.css) as a secondary "raised" cue; see DESIGN.md §4.
-        "group/card flex flex-col gap-4 overflow-hidden rounded-xl bg-card py-4 text-sm text-card-foreground shadow-[var(--shadow-card)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:gap-3 data-[size=sm]:py-3 data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        // bg-card alone measures ~1.1:1 against the page — nowhere near the
+        // 3:1 WCAG 1.4.11 needs for a component boundary, and closing that
+        // by fill lightness alone means a visibly grey box. border-border
+        // (now a real, if quiet, hairline — see globals.css) carries the
+        // boundary instead; shadow-card is a secondary "raised" cue.
+        "group/card flex flex-col gap-4 overflow-hidden rounded-xl border border-border bg-card py-4 text-sm text-card-foreground shadow-[var(--shadow-card)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:gap-3 data-[size=sm]:py-3 data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
         className
       )}
       {...props}
