@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiRequireCapability } from "@/lib/auth/api";
+import { assignmentResource } from "@/lib/auth/resource-lookup";
 
 export const dynamic = "force-dynamic";
 
@@ -13,10 +14,10 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ assignmentId: string }> },
 ) {
-  const auth = await apiRequireCapability("course.view");
-  if (!auth.user) return auth.response;
-
   const { assignmentId } = await params;
+  const resource = await assignmentResource(Number(assignmentId));
+  const auth = await apiRequireCapability("roster.view", resource);
+  if (!auth.user) return auth.response;
 
   // Capture the controller so the cancel callback can remove it.
   let ctrl!: ReadableStreamDefaultController<Uint8Array>;
@@ -54,10 +55,11 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ assignmentId: string }> },
 ) {
-  const auth = await apiRequireCapability("course.view");
+  const { assignmentId } = await params;
+  const resource = await assignmentResource(Number(assignmentId));
+  const auth = await apiRequireCapability("roster.view", resource);
   if (!auth.user) return auth.response;
 
-  const { assignmentId } = await params;
   const body = (await req.json()) as { studentId: number; sender: string };
 
   const set = listeners.get(assignmentId);

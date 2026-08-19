@@ -14,7 +14,7 @@ import { MAX_FILE_SIZE, SEQUENCE_FRAME_EXTENSIONS } from "@/lib/constants";
 export type SubmissionRow = typeof submissions.$inferSelect;
 
 export async function getSubmission(assignmentId: number, studentId: number) {
-  await requireCapability("course.view", await assignmentResource(assignmentId));
+  await requireCapability("roster.view", await assignmentResource(assignmentId));
   const rows = await db
     .select()
     .from(submissions)
@@ -23,7 +23,7 @@ export async function getSubmission(assignmentId: number, studentId: number) {
 }
 
 export async function getSubmissionsForAssignment(assignmentId: number): Promise<Record<number, SubmissionRow[]>> {
-  await requireCapability("course.view", await assignmentResource(assignmentId));
+  await requireCapability("roster.view", await assignmentResource(assignmentId));
   const rows = await db.select().from(submissions).where(eq(submissions.assignmentId, assignmentId));
   const map: Record<number, SubmissionRow[]> = {};
   for (const row of rows) {

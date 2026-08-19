@@ -12,7 +12,7 @@ export type AnnotationFrame = {
 };
 
 export async function getAnnotations(submissionId: number): Promise<AnnotationFrame[]> {
-  await requireCapability("course.view", await submissionResource(submissionId));
+  await requireCapability("roster.view", await submissionResource(submissionId));
   const rows = await db
     .select({ frameNumber: annotations.frameNumber, annotationData: annotations.annotationData })
     .from(annotations)

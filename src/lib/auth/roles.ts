@@ -49,7 +49,7 @@ export type Capability =
   | "course.view"
   | "course.edit" // assignments, rubrics, roster
   | "course.members.manage" // add/remove/reassign course_members rows
-  | "roster.view" // student names/netIds/emails — never covered by department visibility
+  | "roster.view" // any real per-student data — names/netIds/emails, submissions, grades, review content — never covered by department visibility
   | "grade.write"
   | "grade.publish"
   | "archive.view"; // a student's cross-course submissions/grades/annotations
@@ -148,10 +148,12 @@ export function can(
       // Deliberately does NOT honor department visibility, unlike
       // course.view. That bypass exists so a non-member can browse a
       // course's assignment/rubric structure to decide whether to copy it —
-      // it was never meant to expose real student names/netIds/emails to
-      // every instructor in the department. Roster access stays
-      // membership-only, full stop.
-      if (resource.kind !== "course") return false;
+      // it was never meant to expose real per-student data (roster,
+      // submissions, grades, review content/annotations) to every
+      // instructor in the department. Gates all of that, not just the
+      // roster page, so it accepts any resource with a courseId — same
+      // pattern as course.edit/grade.write below.
+      if (resource.kind === "global" || resource.kind === "student") return false;
       return ctx.courseMembership != null;
 
     case "grade.write":

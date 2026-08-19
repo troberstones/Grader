@@ -58,7 +58,7 @@ const inFlight = new Map<number, Promise<void>>();
  * the presence of review_media rows, not by re-running ffmpeg.
  */
 export async function ensureIngested(submissionId: number): Promise<void> {
-  await requireCapability("course.view", await submissionResource(submissionId));
+  await requireCapability("roster.view", await submissionResource(submissionId));
   const existing = await db
     .select({ id: reviewMedia.id })
     .from(reviewMedia)
@@ -162,7 +162,7 @@ export async function ensureIngested(submissionId: number): Promise<void> {
 
 export async function listReviewItems(contextId: string): Promise<ReviewItem[]> {
   const { assignmentId, studentId } = await parseContext(contextId);
-  await requireCapability("course.view", await assignmentResource(assignmentId));
+  await requireCapability("roster.view", await assignmentResource(assignmentId));
 
   const subs = await db
     .select()
@@ -253,7 +253,7 @@ export async function getStrokes(
   sinceSeq?: number,
 ): Promise<{ strokes: StoredStrokeRow[]; deleted: number[]; head: number }> {
   const submissionId = parseItemId(itemId);
-  await requireCapability("course.view", submissionId !== null ? await submissionResource(submissionId) : GLOBAL);
+  await requireCapability("roster.view", submissionId !== null ? await submissionResource(submissionId) : GLOBAL);
   const base = and(
     eq(reviewStrokes.itemId, itemId),
     sinceSeq ? gt(reviewStrokes.seq, sinceSeq) : undefined,
@@ -375,7 +375,7 @@ export async function deleteStrokes(itemId: string, ids: number[]): Promise<void
 /** Timeline ticks straight from the index — no stroke bodies decoded. */
 export async function getMarkers(itemId: string): Promise<FrameMarker[]> {
   const submissionId = parseItemId(itemId);
-  await requireCapability("course.view", submissionId !== null ? await submissionResource(submissionId) : GLOBAL);
+  await requireCapability("roster.view", submissionId !== null ? await submissionResource(submissionId) : GLOBAL);
   const rows = await db
     .select({
       frameIn: reviewStrokes.frameIn,

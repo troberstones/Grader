@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { reviewMedia } from "@/db/schema";
 import { apiRequireCapability } from "@/lib/auth/api";
+import { submissionResource } from "@/lib/auth/resource-lookup";
 
 /**
  * PSD layer manifest.
@@ -25,12 +26,13 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ submissionId: string }> },
 ) {
-  const auth = await apiRequireCapability("course.view");
-  if (!auth.user) return auth.response;
-
   const { submissionId } = await params;
   const id = Number(submissionId);
   if (!Number.isInteger(id)) return new Response("Bad id", { status: 400 });
+
+  const resource = await submissionResource(id);
+  const auth = await apiRequireCapability("roster.view", resource);
+  if (!auth.user) return auth.response;
 
   const media = await db
     .select()

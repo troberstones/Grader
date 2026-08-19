@@ -40,6 +40,20 @@ If you ever add a sync action carrying grade data, or move the rubric inside
 `ArtReviewer`, you have broken this. There is no runtime guard; it is a
 structural property, which is why the structure is worth keeping.
 
+**Content — real annotation ink, not scores — is a related but separate
+invariant, and it used to be broken.** `useReviewChannel`
+(`src/lib/review-channel.ts`) rides the same global `/api/sync` bus to carry
+live stroke data, tagged with a `ctx` string and filtered only client-side —
+so until this was fixed, every connected instructor/assistant received every
+course's live annotation ink, not just their own. `/api/sync/route.ts` now
+resolves each broadcast's course (via its `assignmentId`, direct on the four
+`GlobalSyncPayload` types or parsed from `ctx` on art-review actions) and
+fans it out only to listeners with real `roster.view` access to that course —
+same capability the rest of this doc uses for real per-student content. The
+four safe event types are filtered by the same mechanism, closing a second,
+unrelated bug where navigate/playback events crossed between two unrelated
+instructors' sessions.
+
 ## Known gaps
 
 Roughly in the order they'd matter if the tool left the studio:
@@ -69,12 +83,15 @@ Roughly in the order they'd matter if the tool left the studio:
 2. **`allowedDevOrigins` uses subnet wildcards** (`192.168.86.*` and friends, in
    `next.config.ts`). Necessary because DHCP moves the studio machine between
    sessions, but it means any host on those subnets is a permitted origin.
-3. **Authorization exists globally, not per course.** `can()` in
-   `src/lib/auth/roles.ts` decides on a *resource*, and global roles
-   (admin / instructor / assistant) are enforced — the admin console is
-   genuinely admin-only. But `course_members` does not exist yet, so every
-   active instructor can reach every course. The assumption is greppable as
-   `COURSE_SCOPING_PENDING`.
+3. **~~Authorization exists globally, not per course.~~ Closed by
+   `course_members`.** `can()` in `src/lib/auth/roles.ts` decides on a
+   *resource*, and both global roles (admin/instructor/assistant) and
+   per-course membership are enforced — `COURSE_SCOPING_PENDING` (still
+   greppable, kept as a marker) is `false`. Real per-student content
+   (`roster.view`) is membership-only regardless of department visibility;
+   course *structure* (`course.view`) deliberately stays browsable across a
+   department so a course can be found and copied without joining it first —
+   see "Course copy" in `docs/accounts-and-courses.md`.
 
    `author.id` is still hard-coded to `"instructor"` in the review route, so
    strokes do not yet carry a real author even though the schema has the column.
@@ -86,9 +103,19 @@ Roughly in the order they'd matter if the tool left the studio:
    which is the right size for a multi-instructor tool but is still not a
    real claim check. Worth a real `sender` credential if this ever hosts more
    than one crit at a time.
-5. **~~Student media is served without a check.~~** Fixed alongside the rest of
-   this sweep: `/api/review/media/[mediaId]`, `/api/review/layers/[id]`, and
-   `/api/submissions/[id]/file` all require `course.view` now.
+5. **~~Student media is served without a check.~~ ~~And gated on the wrong
+   capability.~~** `/api/review/media/[mediaId]`, `/api/review/layers/[id]`,
+   and `/api/submissions/[id]/file` first required a signed-in session, then
+   (this sweep) `roster.view` — real course membership, not the department-
+   visibility bypass `course.view` grants. That bypass is deliberate for
+   course *structure* (see the "Course copy" note in
+   `docs/accounts-and-courses.md`), but several call sites were reusing it to
+   gate actual student content: submission files, review media/annotations,
+   and the grade sheet (`getGradeSheet` in `src/actions/grades.ts`) all
+   returned real data to any instructor/assistant on a department-visible
+   course, member or not. All now require `roster.view`
+   (`src/lib/auth/roles.ts`), which — unlike `course.view` — never honors
+   department visibility. See "What is already fenced off" below.
 
 6. **Sessions travel over plain HTTP.** Cookies are `httpOnly` and
    `sameSite=lax` but not `secure`, because the studio LAN has no TLS and a
@@ -105,10 +132,14 @@ Roughly in the order they'd matter if the tool left the studio:
   handlers) both call `can(user, capability, resource)` — every exported
   function in a `"use server"` file is independently reachable by RPC id
   whether or not a page currently calls it, so the check lives inside each
-  function rather than at whichever page happens to call it today. Reads need
-  `course.view`; writes need `course.edit`, `grade.write`, or `course.create`
-  depending on what they touch. This is still global rather than per-course —
-  see gap #3, `COURSE_SCOPING_PENDING`.
+  function rather than at whichever page happens to call it today. Reads of
+  course *structure* (assignments, rubrics, course metadata — deliberately
+  browsable across the department, see "Course copy" in
+  `docs/accounts-and-courses.md`) need `course.view`; reads of real
+  per-student *content* (roster, submissions, grades, review media/
+  annotations) need `roster.view`, which is membership-only regardless of
+  department visibility; writes need `course.edit`, `grade.write`, or
+  `course.create` depending on what they touch.
 
 - `/api/review/diagnostics` returns 404 unless `NODE_ENV === "development"`,
   caps the body at 512 KB, and rebuilds the filename from a sanitised stem, so

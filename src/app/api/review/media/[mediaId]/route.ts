@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { reviewMedia } from "@/db/schema";
 import { serveFile } from "@grader/art-review/server";
 import { apiRequireCapability } from "@/lib/auth/api";
+import { reviewMediaResource } from "@/lib/auth/resource-lookup";
 
 /**
  * Range-served derivatives.
@@ -30,12 +31,13 @@ export async function HEAD(
 }
 
 async function handle(request: Request, params: Promise<{ mediaId: string }>) {
-  const auth = await apiRequireCapability("course.view");
-  if (!auth.user) return auth.response;
-
   const { mediaId } = await params;
   const id = Number(mediaId);
   if (!Number.isInteger(id)) return new Response("Bad id", { status: 400 });
+
+  const resource = await reviewMediaResource(id);
+  const auth = await apiRequireCapability("roster.view", resource);
+  if (!auth.user) return auth.response;
 
   const rows = await db.select().from(reviewMedia).where(eq(reviewMedia.id, id));
   const media = rows[0];

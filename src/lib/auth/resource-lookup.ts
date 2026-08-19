@@ -8,7 +8,7 @@
 import { eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { assignments, submissions } from "@/db/schema";
+import { assignments, submissions, reviewMedia } from "@/db/schema";
 import { GLOBAL, type Resource } from "./roles";
 
 export async function assignmentResource(assignmentId: number): Promise<Resource> {
@@ -26,4 +26,16 @@ export async function submissionResource(submissionId: number): Promise<Resource
     .innerJoin(assignments, eq(submissions.assignmentId, assignments.id))
     .where(eq(submissions.id, submissionId));
   return row ? { kind: "submission", submissionId, courseId: row.courseId } : GLOBAL;
+}
+
+/** Resolves a `{kind:"submission"}` Resource from a review_media id — only the
+ * media id is available at these routes, not the submissionId directly. */
+export async function reviewMediaResource(mediaId: number): Promise<Resource> {
+  const [row] = await db
+    .select({ submissionId: reviewMedia.submissionId, courseId: assignments.courseId })
+    .from(reviewMedia)
+    .innerJoin(submissions, eq(reviewMedia.submissionId, submissions.id))
+    .innerJoin(assignments, eq(submissions.assignmentId, assignments.id))
+    .where(eq(reviewMedia.id, mediaId));
+  return row ? { kind: "submission", submissionId: row.submissionId, courseId: row.courseId } : GLOBAL;
 }

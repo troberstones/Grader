@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { courses, courseMembers, assignments, courseEnrollments, users } from "@/db/schema";
-import { eq, desc, and, inArray } from "drizzle-orm";
+import { eq, desc, and, or, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireCapability } from "@/lib/auth/require";
 import { isTerm, termSortKey, type Term } from "@/lib/terms";
@@ -53,6 +53,57 @@ export async function getCourseTerms(): Promise<{ year: number; term: Term }[]> 
     user.globalRole === "admin"
       ? eq(courses.archived, 0)
       : and(eq(courses.archived, 0), inArray(courses.id, myCourseIds(user.id)));
+
+  const rows = await db.selectDistinct({ year: courses.year, term: courses.term }).from(courses).where(where);
+
+  return rows
+    .filter((r): r is { year: number; term: Term } => isTerm(r.term))
+    .sort((a, b) => termSortKey(b.year, b.term) - termSortKey(a.year, a.term));
+}
+
+/**
+ * Everything usable as a copy source: the caller's own courses plus every
+ * department-visible course from any owner — the same set `copyCourse()`'s
+ * own `course.view` check on `sourceId` actually allows, so nothing shown
+ * here is a dead end. Minimal fields only — this is what the Copy Course
+ * picker browses, never roster or grade data (see roster.view in roles.ts).
+ */
+export async function getCoursesForCopy(): Promise<
+  { id: number; name: string; code: string; section: string | null; year: number; term: Term; startDate: string | null }[]
+> {
+  const user = await requireCapability("course.view");
+  const fields = {
+    id: courses.id,
+    name: courses.name,
+    code: courses.code,
+    section: courses.section,
+    year: courses.year,
+    term: courses.term,
+    startDate: courses.startDate,
+  };
+
+  if (user.globalRole === "admin") {
+    return db.select(fields).from(courses).where(eq(courses.archived, 0)).orderBy(desc(courses.createdAt));
+  }
+
+  const visibleFilter = or(eq(courses.visibility, "department"), inArray(courses.id, myCourseIds(user.id)));
+  return db
+    .select(fields)
+    .from(courses)
+    .where(and(eq(courses.archived, 0), visibleFilter))
+    .orderBy(desc(courses.createdAt));
+}
+
+/** Every year/term with at least one copy-source course — feeds the picker's term rail. */
+export async function getCourseTermsForCopy(): Promise<{ year: number; term: Term }[]> {
+  const user = await requireCapability("course.view");
+  const where =
+    user.globalRole === "admin"
+      ? eq(courses.archived, 0)
+      : and(
+          eq(courses.archived, 0),
+          or(eq(courses.visibility, "department"), inArray(courses.id, myCourseIds(user.id)))
+        );
 
   const rows = await db.selectDistinct({ year: courses.year, term: courses.term }).from(courses).where(where);
 

@@ -178,6 +178,16 @@ A copied course is independent from the moment it exists. There is no shared
 parent row and no inheritance — the professor is expected to revise assignments
 and rubrics for the new offering, which is the whole point.
 
+The source is picked from a year/term browser (`CopyCoursePicker`,
+`src/app/courses/copy-course-picker.tsx`) reusing `CoursesBrowser`'s term-rail
+layout — the sanctioned way to reach another professor's course without being
+a member of it. That's also why `course.view` stays permissive for
+department-visibility courses (below): it's what makes this picker possible.
+It only ever shows name/code/term, never roster or grade data — see
+`getCoursesForCopy()` in `src/actions/courses.ts` and `roster.view` in
+`src/lib/auth/roles.ts`, which is what keeps everything past "structure"
+membership-gated even on a department-visible course.
+
 ```ts
 courses  lineageId: integer,     // the first course's id; the family key
          copiedFromId: integer   // provenance, one hop back

@@ -52,7 +52,7 @@ export type StudentWithGrade = {
 
 export async function getGradeSheet(assignmentId: number): Promise<StudentWithGrade[]> {
   const resource = await assignmentResource(assignmentId);
-  await requireCapability("course.view", resource);
+  await requireCapability("roster.view", resource);
   if (resource.kind !== "assignment") return [];
   const courseId = resource.courseId;
 
