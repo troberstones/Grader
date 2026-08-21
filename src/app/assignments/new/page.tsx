@@ -2,6 +2,8 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { ChevronRight } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
@@ -11,13 +13,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { getCourses } from "@/actions/courses";
+import { getCourse } from "@/actions/courses";
 import { getRubrics } from "@/actions/rubrics";
 import { createAssignment } from "@/actions/assignments";
 import { toast } from "sonner";
 import { formatTerm, type Term } from "@/lib/terms";
 
-type Course = { id: number; name: string; code: string; year: number; term: Term };
+type Course = { id: number; name: string; code: string; section: string | null; year: number; term: Term };
 type Rubric = { id: number; name: string };
 
 export default function NewAssignmentPage() {
@@ -31,14 +33,15 @@ export default function NewAssignmentPage() {
 function NewAssignmentForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const preselectedCourseId = searchParams.get("courseId");
+  const courseIdParam = searchParams.get("courseId");
+  const courseId = courseIdParam ? Number(courseIdParam) : null;
 
-  const [courses, setCourses] = useState<Course[]>([]);
+  const [course, setCourse] = useState<Course | null>(null);
+  const [courseLoaded, setCourseLoaded] = useState(false);
   const [rubrics, setRubrics] = useState<Rubric[]>([]);
   const [saving, setSaving] = useState(false);
 
   // Form state
-  const [courseId, setCourseId] = useState(preselectedCourseId ?? "");
   const [rubricId, setRubricId] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -48,9 +51,32 @@ function NewAssignmentForm() {
   const [lmsAssignmentId, setLmsAssignmentId] = useState("");
 
   useEffect(() => {
-    getCourses().then(setCourses);
     getRubrics().then(setRubrics);
   }, []);
+
+  useEffect(() => {
+    if (!courseId) {
+      setCourseLoaded(true);
+      return;
+    }
+    getCourse(courseId).then((c) => {
+      setCourse(c);
+      setCourseLoaded(true);
+    });
+  }, [courseId]);
+
+  // Coming back from "Create a new rubric" (see the Rubric field below): it
+  // now exists but wasn't in the `rubrics` fetched above, so re-fetch and
+  // select it.
+  useEffect(() => {
+    const newRubricId = searchParams.get("newRubricId");
+    if (!newRubricId) return;
+    getRubrics().then(setRubrics);
+    setRubricId(newRubricId);
+    toast.success("Rubric created and selected");
+    router.replace(courseIdParam ? `/assignments/new?courseId=${courseIdParam}` : "/assignments/new");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   // Auto-set points from rubric
   useEffect(() => {
@@ -59,14 +85,14 @@ function NewAssignmentForm() {
   }, [rubricId]);
 
   async function handleCreate() {
-    if (!courseId || !name || !pointsPossible) {
-      toast.error("Please fill in Course, Name, and Points Possible");
+    if (!course || !name || !pointsPossible) {
+      toast.error("Please fill in Name and Points Possible");
       return;
     }
     setSaving(true);
     try {
       const assignment = await createAssignment({
-        courseId: Number(courseId),
+        courseId: course.id,
         rubricId: rubricId && rubricId !== "none" ? Number(rubricId) : null,
         name,
         description: description || undefined,
@@ -85,13 +111,45 @@ function NewAssignmentForm() {
     }
   }
 
+  if (courseLoaded && !course) {
+    return (
+      <PageContainer>
+        <Header title="New Assignment" />
+        <div className="max-w-2xl">
+          <p className="text-muted-foreground mb-4">
+            An assignment always belongs to a specific course. Open the course you want to add
+            this assignment to, then use its &quot;New Assignment&quot; button.
+          </p>
+          <LinkButton href="/courses">Go to Courses</LinkButton>
+        </div>
+      </PageContainer>
+    );
+  }
+
   return (
     <PageContainer>
       <Header
+        breadcrumb={
+          course && (
+            <nav className="flex items-center gap-1.5 text-sm text-muted-foreground mb-2">
+              <Link href="/courses" className="hover:text-foreground transition-colors">
+                Courses
+              </Link>
+              <ChevronRight className="h-3.5 w-3.5" />
+              <Link href={`/courses/${course.id}`} className="hover:text-foreground transition-colors">
+                {course.code}
+              </Link>
+            </nav>
+          )
+        }
         title="New Assignment"
-        description="Set up a grading assignment and link it to a rubric"
+        description={
+          course
+            ? `${course.name}${course.section ? ` · Section ${course.section}` : ""} · ${formatTerm(course.year, course.term)}`
+            : "Loading course…"
+        }
         actions={
-          <LinkButton href="/assignments" variant="outline">
+          <LinkButton href={course ? `/courses/${course.id}` : "/assignments"} variant="outline">
             Cancel
           </LinkButton>
         }
@@ -104,22 +162,6 @@ function NewAssignmentForm() {
             <CardTitle className="text-base">Assignment Details</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="course">Course *</Label>
-              <Select value={courseId || null} onValueChange={(v) => setCourseId(v ?? "")}>
-                <SelectTrigger id="course">
-                  <SelectValue placeholder="Select a course…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {courses.map((c) => (
-                    <SelectItem key={c.id} value={String(c.id)}>
-                      {c.code} — {c.name} ({formatTerm(c.year, c.term)})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
             <div className="space-y-2">
               <Label htmlFor="name">Assignment Name *</Label>
               <Input
@@ -154,7 +196,13 @@ function NewAssignmentForm() {
               <Label htmlFor="rubric">Rubric (optional)</Label>
               <Select value={rubricId || null} onValueChange={(v) => setRubricId(v ?? "")}>
                 <SelectTrigger id="rubric">
-                  <SelectValue placeholder="Select a rubric…" />
+                  <SelectValue placeholder="Select a rubric…">
+                    {(v: string | null) => {
+                      if (!v) return "Select a rubric…";
+                      if (v === "none") return "No rubric";
+                      return rubrics.find((r) => String(r.id) === v)?.name ?? v;
+                    }}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">No rubric</SelectItem>
@@ -167,9 +215,13 @@ function NewAssignmentForm() {
               </Select>
               <p className="text-xs text-muted-foreground">
                 A rubric lets you grade per-criterion.{" "}
-                <a href="/rubrics/new" target="_blank" className="underline">
+                <a
+                  href={`/rubrics/new?returnTo=${encodeURIComponent(courseIdParam ? `/assignments/new?courseId=${courseIdParam}` : "/assignments/new")}`}
+                  className="underline"
+                >
                   Create a new rubric
-                </a>
+                </a>{" "}
+                — saving it brings you back here with it selected.
               </p>
             </div>
 
@@ -236,10 +288,10 @@ function NewAssignmentForm() {
         </Card>
 
         <div className="flex justify-end gap-3">
-          <LinkButton href="/assignments" variant="outline">
+          <LinkButton href={course ? `/courses/${course.id}` : "/assignments"} variant="outline">
             Cancel
           </LinkButton>
-          <Button onClick={handleCreate} disabled={saving || !courseId || !name}>
+          <Button onClick={handleCreate} disabled={saving || !course || !name}>
             {saving ? "Creating…" : "Create Assignment"}
           </Button>
         </div>

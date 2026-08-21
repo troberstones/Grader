@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { getAssignment } from "@/actions/assignments";
 import { getCourses } from "@/actions/courses";
@@ -21,10 +22,12 @@ export default async function EditAssignmentPage({
   if (!assignment) notFound();
 
   return (
-    <EditAssignmentClient
-      assignment={assignment}
-      courses={courses}
-      rubrics={rubrics}
-    />
+    <Suspense fallback={<div className="p-8 text-muted-foreground">Loading…</div>}>
+      <EditAssignmentClient
+        assignment={assignment}
+        courses={courses}
+        rubrics={rubrics}
+      />
+    </Suspense>
   );
 }
