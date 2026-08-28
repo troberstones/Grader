@@ -77,6 +77,9 @@ way `db:init` builds the real one — it doesn't touch `storage/grader.db`.
 - [`docs/rubric-authoring.md`](docs/rubric-authoring.md) — the
   dimensionless rubric-scoring model (`src/lib/rubric/`).
 - [`DESIGN.md`](DESIGN.md) — the visual design system.
+- [`docs/open-threads.md`](docs/open-threads.md) — what has shipped but is not
+  yet trusted, and the traps that have already caught someone. Read it before
+  starting; prune it as things get closed.
 
 ## Deploying
 
