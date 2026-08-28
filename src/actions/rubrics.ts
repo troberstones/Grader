@@ -81,52 +81,6 @@ export async function createRubric(data: {
   return rubric[0];
 }
 
-export async function updateRubric(
-  id: number,
-  data: {
-    name: string;
-    description?: string;
-    settings?: RubricSettings;
-    criteria: Array<{
-      id?: number;
-      name: string;
-      description?: string;
-      weight: number;
-      levels: Array<{ id?: number; level: number; label: string; description: string; points: number }>;
-    }>;
-  }
-) {
-  await requireCapability("course.edit");
-  await db.update(rubrics).set({
-    name: data.name,
-    description: data.description,
-    settings: data.settings ? JSON.stringify(data.settings) : null,
-    updatedAt: new Date().toISOString(),
-  }).where(eq(rubrics.id, id));
-
-  // Delete existing criteria and re-insert (simplest for reordering)
-  const existingCriteria = await db.select().from(rubricCriteria).where(eq(rubricCriteria.rubricId, id));
-  for (const c of existingCriteria) {
-    await db.delete(rubricLevels).where(eq(rubricLevels.criteriaId, c.id));
-  }
-  await db.delete(rubricCriteria).where(eq(rubricCriteria.rubricId, id));
-
-  for (let i = 0; i < data.criteria.length; i++) {
-    const c = data.criteria[i];
-    const criterion = await db
-      .insert(rubricCriteria)
-      .values({ rubricId: id, name: c.name, description: c.description, sortOrder: i, weight: c.weight })
-      .returning();
-
-    for (const level of c.levels) {
-      await db.insert(rubricLevels).values({ criteriaId: criterion[0].id, level: level.level, label: level.label, description: level.description, points: level.points });
-    }
-  }
-
-  revalidatePath("/rubrics");
-  revalidatePath(`/rubrics/${id}`);
-}
-
 /**
  * Creates a rubric authored by the share-model editor (src/lib/rubric/) —
  * no stored points, just a per-criterion `share` (held in the `weight`
@@ -299,21 +253,6 @@ export async function duplicateRubric(id: number) {
   const original = await getRubric(id);
   if (!original) return null;
   return cloneRubric(id, `${original.name} (Copy)`);
-}
-
-export async function importRubricFromJSON(json: RubricJSON) {
-  await requireCapability("course.edit");
-  return createRubric({
-    name: json.name,
-    description: json.description,
-    settings: json.settings,
-    criteria: json.criteria.map((c) => ({
-      name: c.name,
-      description: c.description,
-      weight: c.weight,
-      levels: c.levels,
-    })),
-  });
 }
 
 export async function exportRubricToJSON(id: number): Promise<RubricJSON | AuthoredRubric | null> {

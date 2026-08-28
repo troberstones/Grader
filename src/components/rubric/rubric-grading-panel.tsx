@@ -5,7 +5,8 @@ import Link from "next/link";
 import { CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { RUBRIC_GRADING_VIEWS } from "@/components/rubric/grading-registry";
+import { RUBRIC_GRADING_VIEWS, GRADING_VIEW_LABELS, type RubricGradingViewKey } from "@/components/rubric/grading-registry";
+import { UnconvertedRubricNotice } from "@/components/rubric/unconverted-rubric-notice";
 import type { RubricGrading } from "@/hooks/use-rubric-grading";
 import { cn, formatScore } from "@/lib/utils";
 
@@ -23,45 +24,27 @@ interface Props {
   dense?: boolean;
 }
 
-/**
- * Switches on `grading.model` rather than indexing `RUBRIC_GRADING_VIEWS`
- * generically — a plain index makes the "grading" prop's type the
- * intersection of every registered view's prop type (TypeScript can't know
- * in advance which one a given key resolves to), which collapses to `never`
- * since `PointsGrading`/`ShareGrading` conflict. A switch lets each branch's
- * `grading` narrow for real.
- */
-function GradingView({ grading, sharePref }: { grading: RubricGrading; sharePref: "share-slider" | "share-matrix" }) {
-  switch (grading.model) {
-    case "points": {
-      const isV3 = grading.assignment.rubric?.settings?.gradingMode === "v3";
-      const View = isV3 ? RUBRIC_GRADING_VIEWS.v3 : RUBRIC_GRADING_VIEWS.legacy;
-      return <View grading={grading} />;
-    }
-    case "share": {
-      const View = sharePref === "share-slider" ? RUBRIC_GRADING_VIEWS["share-slider"] : RUBRIC_GRADING_VIEWS["share-matrix"];
-      return <View grading={grading} />;
-    }
-  }
+/** {displayScore, gradedCount, totalCount, complete} for the score readout. */
+function summarize(grading: RubricGrading) {
+  const r = grading.scoreResult;
+  return {
+    displayScore: r?.points ?? 0,
+    gradedCount: r?.scored ?? 0,
+    totalCount: r?.total ?? grading.criteria.length,
+    complete: r?.complete ?? false,
+  };
 }
 
-/** {displayScore, gradedCount, totalCount, complete}, read off whichever model is active. */
-function summarize(grading: RubricGrading) {
-  if (grading.model === "share") {
-    const r = grading.scoreResult;
-    return {
-      displayScore: r?.points ?? 0,
-      gradedCount: r?.scored ?? 0,
-      totalCount: r?.total ?? grading.criteria.length,
-      complete: r?.complete ?? false,
-    };
-  }
-  return {
-    displayScore: grading.totalScore,
-    gradedCount: grading.gradedCriteria,
-    totalCount: grading.criteria.length,
-    complete: grading.allGraded,
-  };
+/**
+ * The stored preference predates the rename from "share-matrix"/"share-slider"
+ * — the prefix stopped meaning anything once the points views were archived.
+ * Old values are read and rewritten rather than discarded, so nobody's chosen
+ * view silently resets.
+ */
+function readViewPref(raw: string | null): RubricGradingViewKey | null {
+  if (raw === "matrix" || raw === "share-matrix") return "matrix";
+  if (raw === "slider" || raw === "share-slider") return "slider";
+  return null;
 }
 
 /**
@@ -69,10 +52,10 @@ function summarize(grading: RubricGrading) {
  * the dock on the review route; both drive the same `useRubricGrading` state, so
  * a score entered in one place is the same save as in the other.
  *
- * Dispatches to a registered grading view (grading-registry.ts) by model —
- * legacy/v3 render exactly as they always have; a share-model rubric offers a
- * slider/matrix toggle, since comparing those two is the point of building
- * both.
+ * Renders one of the two grading views (grading-registry.ts) — grid or slider
+ * — with the choice remembered per browser. They write the same thing, so the
+ * toggle is ergonomic: the grid is faster on a tablet, the slider is the only
+ * one that reaches the nudge positions between bands.
  */
 export function RubricGradingPanel({ grading, dense = false }: Props) {
   const { assignment, criteria, feedback, setFeedback, saving, handleSave } = grading;
@@ -80,16 +63,27 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
   // Deliberately deferred to an effect rather than a lazy useState
   // initializer: this component renders during SSR, where localStorage
   // isn't available, so reading it synchronously would mismatch what the
-  // client then renders. Always paints "share-matrix" first, corrects right
+  // client then renders. Always paints the grid first, corrects right
   // after mount if a stored preference differs.
-  const [sharePref, setSharePref] = useState<"share-slider" | "share-matrix">("share-matrix");
+  const [view, setView] = useState<RubricGradingViewKey>("matrix");
   useEffect(() => {
-    const stored = window.localStorage.getItem(VIEW_PREF_KEY);
-    if (stored === "share-slider" || stored === "share-matrix") setSharePref(stored);
+    const stored = readViewPref(window.localStorage.getItem(VIEW_PREF_KEY));
+    if (stored) {
+      setView(stored);
+      window.localStorage.setItem(VIEW_PREF_KEY, stored);
+    }
   }, []);
-  function chooseSharePref(pref: "share-slider" | "share-matrix") {
-    setSharePref(pref);
-    window.localStorage.setItem(VIEW_PREF_KEY, pref);
+  function chooseView(next: RubricGradingViewKey) {
+    setView(next);
+    window.localStorage.setItem(VIEW_PREF_KEY, next);
+  }
+
+  if (grading.unconverted) {
+    return (
+      <div className={cn("flex-1 overflow-auto", dense ? "px-3 py-3" : "px-6 py-4")}>
+        <UnconvertedRubricNotice name={assignment.rubric?.name} />
+      </div>
+    );
   }
 
   if (criteria.length === 0) {
@@ -111,36 +105,28 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
 
   return (
     <div className={cn("flex-1 overflow-auto", dense ? "px-3 py-3" : "px-6 py-4")}>
-      {grading.model === "share" && (
-        <div className="mb-3 flex items-center gap-1 rounded-md border text-xs overflow-hidden self-start w-fit">
+      <div className="mb-3 flex items-center gap-1 rounded-md border text-xs overflow-hidden self-start w-fit">
+        {(Object.keys(RUBRIC_GRADING_VIEWS) as RubricGradingViewKey[]).map((key) => (
           <button
+            key={key}
             type="button"
-            onClick={() => chooseSharePref("share-matrix")}
+            onClick={() => chooseView(key)}
             className={cn(
               "px-2.5 py-1 transition-colors",
-              sharePref === "share-matrix"
+              view === key
                 ? "bg-primary text-primary-foreground font-medium"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
-            Matrix
+            {GRADING_VIEW_LABELS[key]}
           </button>
-          <button
-            type="button"
-            onClick={() => chooseSharePref("share-slider")}
-            className={cn(
-              "px-2.5 py-1 transition-colors",
-              sharePref === "share-slider"
-                ? "bg-primary text-primary-foreground font-medium"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Slider
-          </button>
-        </div>
-      )}
+        ))}
+      </div>
 
-      <GradingView grading={grading} sharePref={sharePref} />
+      {(() => {
+        const View = RUBRIC_GRADING_VIEWS[view];
+        return <View grading={grading} />;
+      })()}
 
       {/* Feedback + total */}
       <div className={cn("mt-6 grid grid-cols-1 gap-4", !dense && "md:grid-cols-[1fr_auto]")}>

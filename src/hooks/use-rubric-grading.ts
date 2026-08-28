@@ -12,13 +12,15 @@ import { toast } from "sonner";
 type Assignment = NonNullable<Awaited<ReturnType<typeof getAssignment>>>;
 type RubricCriteria = NonNullable<Assignment["rubric"]>["criteria"];
 
-/** One student's entries: criteriaId → { levelId, score }. Legacy (points) model only. */
-export type EntryMap = Record<number, { levelId: number; score: number }>;
-
-/** One student's selections: criteriaId → { level, nudge }. Share model only. */
+/** One student's selections: criteriaId → { level, nudge }. */
 export type SelectionMap = Record<number, { level: Level; nudge: Nudge }>;
 
-interface SharedGrading {
+/**
+ * Everything the grading views and the panel read. One shape now — the
+ * points-model half of this union went to the archive with the editors that
+ * wrote it (src/components/rubric/_archive/).
+ */
+export interface ShareGrading {
   assignment: Assignment;
   criteria: RubricCriteria;
   selectedStudent: ReturnType<typeof useGrading>["students"][number] | null;
@@ -32,26 +34,24 @@ interface SharedGrading {
   handleMarkMissing: () => Promise<void>;
   exportCsv: (assignmentName: string) => Promise<boolean>;
   loadStudent: (studentId: number) => void;
-}
-
-export interface PointsGrading extends SharedGrading {
-  model: "points";
-  entryMap: EntryMap;
-  totalScore: number;
-  gradedCriteria: number;
-  allGraded: boolean;
-  selectLevel: (criteriaId: number, levelId: number, score: number) => void;
-  setEntries: (entries: { criteriaId: number; levelId: number; score: number }[]) => void;
-}
-
-export interface ShareGrading extends SharedGrading {
-  model: "share";
   selections: SelectionMap;
   scoreResult: ScoreResult | null;
   setSelection: (criteriaId: number, level: Level, nudge?: Nudge) => void;
+  /**
+   * True when this assignment's rubric predates the share model and has not
+   * been converted — see scripts/convert-legacy-rubrics-to-share.mjs.
+   *
+   * It is not enough to render a warning and carry on: an unconverted rubric
+   * has no `bandEdges`, so scoring it would silently apply the *default*
+   * calibration to level points that were written against a different one,
+   * and quietly change what every student earns. So nothing is scored, no
+   * criteria are exposed, and saving is refused outright.
+   */
+  unconverted: boolean;
 }
 
-export type RubricGrading = PointsGrading | ShareGrading;
+/** The name the panel and the views use. */
+export type RubricGrading = ShareGrading;
 
 /**
  * Everything needed to score one student against a rubric: local selection
@@ -65,12 +65,14 @@ export type RubricGrading = PointsGrading | ShareGrading;
  * Mount this ONCE per page. It claims `selectHandlerRef`, so a second live
  * instance would fight the first over who flushes before a student switch.
  *
- * Branches on `isShareModel(assignment.rubric)`: the legacy (points) branch is
- * untouched from before this rubric carried two models — same entryMap, same
- * additive totalScore, since that arithmetic is correct for its absolute-
- * points data. The share branch computes everything from `src/lib/rubric/`'s
- * pure engine, client-side, via useMemo — no round trip needed for the live
- * number as the grader drags a slider or taps a level.
+ * Everything is computed from `src/lib/rubric/`'s pure engine, client-side, via
+ * useMemo — no round trip is needed for the live number as the grader drags a
+ * slider or taps a level. The server recomputes the same figures from the
+ * stored levels when the save lands, so nothing here is trusted as arithmetic
+ * of record.
+ *
+ * A rubric that predates the share model is refused rather than scored: see
+ * `unconverted` on ShareGrading.
  */
 export function useRubricGrading(assignment: Assignment): RubricGrading {
   const {
@@ -80,17 +82,21 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     setSelectedStudentId,
     selectHandlerRef,
   } = useGrading();
-  const { save, saveShare, markStudentMissing, clear, exportCsv, saving, exporting } = useGradeActions(assignment.id);
+  const { saveShare, markStudentMissing, clear, exportCsv, saving, exporting } = useGradeActions(assignment.id);
 
   const selectedStudent = students.find((s) => s.id === selectedStudentId) ?? null;
   // Own useMemo so the fallback `[]` isn't a fresh reference on every render
   // — it's a dependency of loadStudent/selectionsList below.
-  const criteria = useMemo(() => assignment.rubric?.criteria ?? [], [assignment.rubric]);
   const isShare = isShareModel({ settings: assignment.rubric?.settings ?? null });
-
-  const [entryMap, setEntryMap] = useState<EntryMap>(() =>
-    entriesOf(selectedStudent as StudentWithGrade | null),
+  const unconverted = !!assignment.rubric && !isShare;
+  // An unconverted rubric exposes no criteria at all, so every downstream
+  // consumer — the panel, the save path, the completeness check — treats it
+  // the same as an assignment with no rubric rather than scoring it wrongly.
+  const criteria = useMemo(
+    () => (unconverted ? [] : assignment.rubric?.criteria ?? []),
+    [assignment.rubric, unconverted],
   );
+
   const [selections, setSelections] = useState<SelectionMap>(() =>
     selectionsOf(selectedStudent as StudentWithGrade | null, criteria),
   );
@@ -105,7 +111,6 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     (studentId: number) => {
       const student = (students as StudentWithGrade[]).find((s) => s.id === studentId);
       if (!student) return;
-      setEntryMap(entriesOf(student));
       setSelections(selectionsOf(student, criteria));
       setFeedbackState(student.grade?.feedback ?? "");
       setDirty(false);
@@ -167,53 +172,37 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     if (dirtyRef.current) await handleSaveRef.current(false);
   }, []);
 
-  const totalScore = isShare
-    ? scoreResult?.points ?? 0
-    : Object.values(entryMap).reduce((sum, e) => sum + e.score, 0);
-  const gradedCriteria = isShare ? scoreResult?.scored ?? 0 : Object.keys(entryMap).length;
-  const allGraded = isShare
-    ? scoreResult?.complete ?? false
-    : criteria.length > 0 && gradedCriteria === criteria.length;
+  const allGraded = criteria.length > 0 && (scoreResult?.complete ?? false);
 
   async function handleSave(markComplete = false) {
     if (!selectedStudentId) return;
+    // Saving an unconverted rubric would write an empty entry set over
+    // whatever the archived editor recorded, so it never happens.
+    if (unconverted) return;
 
     if (markComplete && !allGraded) {
       toast.warning("Select a level for every criterion before marking complete");
       return;
     }
 
-    let result: { status: import("@/types/grading").GradeStatus; totalScore: number } | null;
-    let contextEntries: { criteriaId: number; levelId: number | null; score: number | null; comment: null; nudge: number | null }[];
+    const entries = criteria
+      .map((c) => {
+        const sel = selections[c.id];
+        if (!sel) return null;
+        const levelRow = c.levels.find((l) => l.level === sel.level);
+        if (!levelRow) return null;
+        return { criteriaId: c.id, levelId: levelRow.id, nudge: sel.nudge };
+      })
+      .filter((e): e is { criteriaId: number; levelId: number; nudge: Nudge } => e !== null);
 
-    if (isShare) {
-      const entries = criteria
-        .map((c) => {
-          const sel = selections[c.id];
-          if (!sel) return null;
-          const levelRow = c.levels.find((l) => l.level === sel.level);
-          if (!levelRow) return null;
-          return { criteriaId: c.id, levelId: levelRow.id, nudge: sel.nudge };
-        })
-        .filter((e): e is { criteriaId: number; levelId: number; nudge: Nudge } => e !== null);
-
-      result = await saveShare({ assignmentId: assignment.id, studentId: selectedStudentId, entries, feedback });
-      contextEntries = entries.map((e) => {
-        const outcome = normalRubric && scoreResult
-          ? scoreResult.perCriterion.find((o) => criteria[o.criterionIndex]?.id === e.criteriaId)
-          : undefined;
-        const score = normalRubric && outcome ? criterionPoints(normalRubric, outcome, assignment.pointsPossible) : null;
-        return { criteriaId: e.criteriaId, levelId: e.levelId, score, comment: null, nudge: e.nudge };
-      });
-    } else {
-      const entries = Object.entries(entryMap).map(([criteriaId, e]) => ({
-        criteriaId: Number(criteriaId),
-        levelId: e.levelId,
-        score: e.score,
-      }));
-      result = await save({ assignmentId: assignment.id, studentId: selectedStudentId, entries, feedback });
-      contextEntries = entries.map((e) => ({ ...e, comment: null, nudge: null }));
-    }
+    const result = await saveShare({ assignmentId: assignment.id, studentId: selectedStudentId, entries, feedback });
+    const contextEntries = entries.map((e) => {
+      const outcome = normalRubric && scoreResult
+        ? scoreResult.perCriterion.find((o) => criteria[o.criterionIndex]?.id === e.criteriaId)
+        : undefined;
+      const score = normalRubric && outcome ? criterionPoints(normalRubric, outcome, assignment.pointsPossible) : null;
+      return { criteriaId: e.criteriaId, levelId: e.levelId, score, comment: null, nudge: e.nudge };
+    });
 
     if (!result) return;
 
@@ -247,7 +236,6 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     if (!confirm("Clear this student's grade and start over?")) return;
     const ok = await clear(selectedStudentId);
     if (!ok) return;
-    setEntryMap({});
     setSelections({});
     setFeedbackState("");
     setDirty(false);
@@ -259,7 +247,6 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     if (!selectedStudentId) return;
     const ok = await markStudentMissing(selectedStudentId);
     if (!ok) return;
-    setEntryMap({});
     setSelections({});
     setFeedbackState("");
     setDirty(false);
@@ -292,30 +279,7 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** Toggle one level on a criterion — clicking the selected level clears it. Legacy (points) model only. */
-  function selectLevel(criteriaId: number, levelId: number, score: number) {
-    setEntryMap((prev) => {
-      if (prev[criteriaId]?.levelId === levelId) {
-        const next = { ...prev };
-        delete next[criteriaId];
-        return next;
-      }
-      return { ...prev, [criteriaId]: { levelId, score } };
-    });
-    setDirty(true);
-    scheduleAutoSave();
-  }
-
-  /** Wholesale replacement, as V3GradingView reports it. Legacy (points) model only. */
-  function setEntries(entries: { criteriaId: number; levelId: number; score: number }[]) {
-    const next: EntryMap = {};
-    for (const e of entries) next[e.criteriaId] = { levelId: e.levelId, score: e.score };
-    setEntryMap(next);
-    setDirty(true);
-    scheduleAutoSave();
-  }
-
-  /** Share model only — level + optional nudge for one criterion. */
+  /** Level + optional nudge for one criterion. */
   function setSelection(criteriaId: number, level: Level, nudge: Nudge = 0) {
     setSelections((prev) => ({ ...prev, [criteriaId]: { level, nudge } }));
     setDirty(true);
@@ -328,7 +292,7 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     scheduleAutoSave();
   }
 
-  const sharedFields = {
+  return {
     assignment,
     criteria,
     selectedStudent,
@@ -342,38 +306,11 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     handleMarkMissing,
     exportCsv,
     loadStudent,
+    selections,
+    scoreResult,
+    setSelection,
+    unconverted,
   };
-
-  if (isShare) {
-    return {
-      ...sharedFields,
-      model: "share",
-      selections,
-      scoreResult,
-      setSelection,
-    };
-  }
-
-  return {
-    ...sharedFields,
-    model: "points",
-    entryMap,
-    totalScore,
-    gradedCriteria,
-    allGraded,
-    selectLevel,
-    setEntries,
-  };
-}
-
-function entriesOf(student: StudentWithGrade | null): EntryMap {
-  const map: EntryMap = {};
-  for (const entry of student?.grade?.entries ?? []) {
-    if (entry.levelId !== null && entry.score !== null) {
-      map[entry.criteriaId] = { levelId: entry.levelId, score: entry.score };
-    }
-  }
-  return map;
 }
 
 function selectionsOf(

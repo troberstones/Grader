@@ -163,7 +163,9 @@ export const grades = sqliteTable("grades", {
   submissionId: integer("submission_id").references(() => submissions.id),
   totalScore: real("total_score"),
   feedback: text("feedback"),
-  status: text("status").notNull().default("ungraded"), // 'ungraded' | 'in_progress' | 'graded'
+  // 'missing' is not "graded zero": it records that nothing was submitted,
+  // which is what makes the rubric's non-zero bottom band defensible.
+  status: text("status").notNull().default("ungraded"), // 'ungraded' | 'in_progress' | 'graded' | 'missing'
   gradedAt: text("graded_at"),
   exportedAt: text("exported_at"),
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),

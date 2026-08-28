@@ -31,5 +31,8 @@ export type { PreviewRow } from "./score";
 export { repairMessage, validateRubric } from "./validate";
 export type { Issue, ValidationResult } from "./validate";
 
+export { convertLegacyRubric } from "./legacy";
+export type { ConversionNote, ConversionResult, LegacyCriterion, LegacyLevel, LegacyRubric } from "./legacy";
+
 export { fromSelections, isShareModel, toNormalRubric, toSelections } from "./adapter";
 export type { DbCriterionRow, DbLevelRow, DbRubricRow, DbSelectionRow } from "./adapter";

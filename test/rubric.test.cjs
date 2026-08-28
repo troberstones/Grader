@@ -478,3 +478,168 @@ test("the repair message is addressed to the assistant, listing every problem", 
   assert.match(msg, /no point values anywhere/);
   assert.strictEqual(msg.split("\n").filter((l) => l.startsWith("- ")).length, 2);
 });
+
+// ─── converting the archived point-based rubrics ────────────────────────
+
+const { convertLegacyRubric } = require("./.build/legacy");
+
+/** A legacy criterion: four levels whose points are `max` scaled by `family`. */
+function legacyCriterion(name, max, family = V1_BANDS, weight = 1) {
+  const fractions = [...family, 1];
+  return {
+    name,
+    description: null,
+    weight,
+    levels: fractions.map((f, level) => ({
+      level,
+      label: `L${level}`,
+      description: desc(`${name} at level ${level}`),
+      points: round1(max * f),
+    })),
+  };
+}
+
+function legacyRubric(criteria, extra = {}) {
+  return { name: "Legacy Shading", description: null, criteria, ...extra };
+}
+
+/** What the archived model would have awarded: points are simply summed. */
+function legacyPercent(criteria, levels) {
+  const earned = criteria.reduce((sum, c, i) => sum + c.levels[levels[i]].points, 0);
+  const max = criteria.reduce((sum, c) => sum + c.levels[3].points, 0);
+  return round1((earned / max) * 100);
+}
+
+test("conversion preserves the exact percentage of every recorded grade", () => {
+  const criteria = [
+    legacyCriterion("Light Response", 25),
+    legacyCriterion("Material Authoring", 25),
+    legacyCriterion("Texture Maps", 25),
+    legacyCriterion("Composition", 25),
+  ];
+  const result = convertLegacyRubric(legacyRubric(criteria));
+  assert.ok(result.ok, JSON.stringify(result.errors));
+  assert.strictEqual(result.exact, true);
+
+  const normal = valid(result.rubric);
+  // Every combination a grader could have clicked, not just the tidy ones.
+  for (const levels of [[0, 0, 0, 0], [3, 3, 3, 3], [2, 2, 2, 2], [0, 1, 2, 3], [3, 2, 3, 1]]) {
+    const selections = levels.map((level, criterionIndex) => ({ criterionIndex, level }));
+    assert.strictEqual(
+      computeScore(normal, selections, 100).percent,
+      legacyPercent(criteria, levels),
+      `levels ${levels.join(",")} changed value`,
+    );
+  }
+});
+
+test("unequal criterion maxima survive as unequal shares", () => {
+  const criteria = [
+    legacyCriterion("Light Response", 50),
+    legacyCriterion("Material Authoring", 25),
+    legacyCriterion("Composition", 25),
+  ];
+  const result = convertLegacyRubric(legacyRubric(criteria));
+  assert.deepStrictEqual(result.rubric.criteria.map((c) => c.share), [50, 25, 25]);
+
+  const normal = valid(result.rubric);
+  const levels = [3, 0, 0];
+  const selections = levels.map((level, criterionIndex) => ({ criterionIndex, level }));
+  assert.strictEqual(computeScore(normal, selections, 100).percent, legacyPercent(criteria, levels));
+});
+
+test("the band family is read off the points, not invented", () => {
+  const result = convertLegacyRubric(legacyRubric([legacyCriterion("A", 25), legacyCriterion("B", 25)]));
+  assert.deepStrictEqual(result.rubric.bandEdges, V1_BANDS);
+  // Emphatically NOT silently upgraded to the new calibration.
+  assert.notDeepStrictEqual(result.rubric.bandEdges, ADVANCED);
+});
+
+test("weight is not folded in twice, since the points already carry it", () => {
+  const result = convertLegacyRubric(legacyRubric([
+    legacyCriterion("Weighted", 50, V1_BANDS, 2),
+    legacyCriterion("Plain", 25),
+  ]));
+  assert.strictEqual(result.rubric.criteria[0].share, 50);
+  assert.match(result.warnings[0].message, /already reflects that weighting/);
+});
+
+test("a zero-point bottom level is refused rather than given a floor it never had", () => {
+  const result = convertLegacyRubric(legacyRubric([
+    legacyCriterion("A", 25, [0, 0.4, 0.72]),
+    legacyCriterion("B", 25),
+  ]));
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.rubric, null);
+  assert.match(result.errors[0].message, /0 points at its lowest level/);
+  assert.match(result.errors[0].message, /"missing" status/);
+});
+
+test("mixed point families pick the one carrying the most share, and report the rest", () => {
+  const criteria = [
+    legacyCriterion("Big One", 60, [0.3, 0.55, 0.8]),
+    legacyCriterion("Small One", 20, V1_BANDS),
+    legacyCriterion("Other Small", 20, [0.3, 0.55, 0.8]),
+  ];
+  const result = convertLegacyRubric(legacyRubric(criteria));
+  assert.ok(result.ok);
+  assert.strictEqual(result.exact, false);
+  assert.deepStrictEqual(result.rubric.bandEdges, [0.3, 0.55, 0.8]);
+  const drift = result.warnings.find((w) => w.where.includes("Small One"));
+  assert.match(drift.message, /different point family/);
+  assert.match(drift.message, /shift by up to 18%/);
+});
+
+test("a v3 rubric's declared bands lose to the points that actually produced its grades", () => {
+  const result = convertLegacyRubric(
+    legacyRubric([legacyCriterion("A", 25), legacyCriterion("B", 25)], { settings: { gradingMode: "v3", bandEdges: ADVANCED } }),
+  );
+  assert.deepStrictEqual(result.rubric.bandEdges, V1_BANDS);
+  assert.match(result.warnings.find((w) => w.where === "the rubric").message, /produced the grades on record/);
+});
+
+test("house labels are restored by omitting the legacy ones", () => {
+  const result = convertLegacyRubric(legacyRubric([legacyCriterion("Light Response", 25), legacyCriterion("Composition", 25)]));
+  assert.ok(result.rubric.criteria.every((c) => c.levels.every((l) => l.label === undefined)));
+  const normal = valid(result.rubric);
+  assert.strictEqual(normal.criteria[0].levels[3].label, "Professional / Mastery");
+});
+
+test("a rubric that grades fine but would fail the editor converts with a warning", () => {
+  const criteria = [legacyCriterion("Light Response", 25), legacyCriterion("Composition", 25)];
+  criteria[0].levels[1].description = criteria[0].levels[2].description;
+  const result = convertLegacyRubric(legacyRubric(criteria));
+  assert.strictEqual(result.ok, true, "grading must keep working");
+  assert.match(result.warnings.find((w) => w.message.includes("refuse to save")).message, /same thing as level 1/);
+});
+
+test("a criterion without four levels cannot be converted", () => {
+  const criteria = [legacyCriterion("Light Response", 25), legacyCriterion("Composition", 25)];
+  criteria[1].levels.pop();
+  const result = convertLegacyRubric(legacyRubric(criteria));
+  assert.strictEqual(result.ok, false);
+  assert.match(result.errors[0].message, /has 3 levels/);
+});
+
+test("a forced calibration rescues a rubric that cannot be converted faithfully", () => {
+  const criteria = [
+    legacyCriterion("Effort", 50, [0, 0.4, 0.72]),
+    legacyCriterion("Craft", 50, [0, 0.4, 0.72]),
+  ];
+  const refused = convertLegacyRubric(legacyRubric(criteria));
+  assert.strictEqual(refused.ok, false);
+
+  const forced = convertLegacyRubric(legacyRubric(criteria), { bandEdges: BAND_PRESETS.advanced });
+  assert.strictEqual(forced.ok, true);
+  assert.strictEqual(forced.exact, false, "forcing a calibration always moves grades");
+  assert.deepStrictEqual(forced.rubric.bandEdges, ADVANCED);
+  assert.deepStrictEqual(forced.rubric.criteria.map((c) => c.share), [50, 50]);
+  assert.ok(forced.warnings.some((w) => /Every grade already recorded against it changes/.test(w.message)));
+});
+
+test("a forced calibration that matches what the points already said is still exact", () => {
+  const criteria = [legacyCriterion("Light Response", 25), legacyCriterion("Composition", 25)];
+  const forced = convertLegacyRubric(legacyRubric(criteria), { bandEdges: V1_BANDS });
+  assert.strictEqual(forced.exact, true);
+  assert.deepStrictEqual(forced.warnings, []);
+});
