@@ -56,9 +56,9 @@ export default async function RootLayout({
     // `dark` class forces the editorial dark theme throughout
     <html
       lang="en"
-      className={`${manrope.variable} ${geistMono.variable} h-full antialiased dark`}
+      className={`${manrope.variable} ${geistMono.variable} h-dvh antialiased dark`}
     >
-      <body className="h-full flex">
+      <body className="h-dvh flex">
         <GlobalSyncProvider>
           <Sidebar account={account} />
           <main className="flex-1 overflow-auto">{children}</main>
