@@ -124,6 +124,24 @@ Roughly in the order they'd matter if the tool left the studio:
 
 7. **~~No rate limiting on sign-in.~~ Two layers now cover it.** See "What is
    already fenced off" below.
+8. **`/api/upload-links/[token]` is unauthenticated by design**, same
+   reasoning as `/api/submissions/upload` above but for students instead of
+   the LS Bridge extension: there is no student login yet
+   (`docs/student-accounts-plan.md`), so a student submitting through a link
+   an instructor sent (`src/actions/upload-links.ts`) has no session to
+   present. Containment is different from the LS Bridge gap, though — this
+   is same-origin, so it's scoped per link rather than left wide open:
+   `/upload/[token]` and its API route both re-resolve the assignment (and,
+   for a per-student link, the student) from the token's row in
+   `upload_links`, never from client-supplied form fields, and reject a
+   revoked or expired one with 410 before touching the filesystem. The one
+   real exposure is a "shared" link (no bound student, `studentId: null`):
+   anyone holding it can see that course's roster (names only) and upload as
+   any student on it, so it's meant to be shared with the class itself, not
+   posted anywhere public. A leaked shared link's blast radius is bounded to
+   one assignment for 14 days (`UPLOAD_LINK_TTL_MS`,
+   `src/lib/auth/tokens.ts`) or until an instructor revokes it from the
+   assignment page.
 
 ## Review sessions
 
