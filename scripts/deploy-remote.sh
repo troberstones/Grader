@@ -19,12 +19,34 @@ rsync -av --delete \
   --exclude 'packages/*/node_modules' \
   ./ "$REMOTE:$REMOTE_DIR/"
 
-echo "==> Installing, building, and restarting on remote"
+echo "==> Installing, migrating, building, and restarting on remote"
 ssh "$REMOTE" "
   set -e
   export PATH=\"$NODE_BIN:\$PATH\"
   cd $REMOTE_DIR
   npm install
+
+  # Migrate before building and restarting, so the new code never serves a
+  # request against the old schema. Deploying and migrating used to be two
+  # commands, which meant every schema change had a window where the running
+  # app queried columns that did not exist yet — and forgetting the second
+  # command left it that way indefinitely.
+  #
+  # The reverse exposure, old code against the new schema, lasts until the
+  # restart a few lines below and is harmless: these migrations only add
+  # columns and tables, which code that does not know about them ignores.
+  #
+  # Every applier here is idempotent — each checks for the column or table it
+  # would create and does nothing if it is already there — so re-running the
+  # whole set on every deploy is the point, not a cost. Filename order is the
+  # order they are applied in; it has matched dependency order so far, and any
+  # applier that needs to run after another must sort after it.
+  node scripts/backup-db.mjs
+  for migration in scripts/apply-*.mjs; do
+    echo \"--> \$migration\"
+    node \"\$migration\"
+  done
+
   npm run build
   systemctl --user restart grader.service
   mkdir -p ~/.config/systemd/user

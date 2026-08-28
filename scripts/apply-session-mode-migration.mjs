@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Applies drizzle/0011_session_mode.sql: the review/grade mode chosen at sign-in,
+ * Applies drizzle/0012_session_mode.sql: the review/grade mode chosen at sign-in,
  * stored on the session row rather than in a cookie so it cannot be edited by
  * the browser holding it.
  *

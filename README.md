@@ -81,6 +81,13 @@ way `db:init` builds the real one — it doesn't touch `storage/grader.db`.
 ## Deploying
 
 `scripts/deploy-remote.sh` rsyncs the working tree to the configured host
-over SSH, builds, and restarts it as a `systemd --user` service (also
-installing/enabling the `grader-backup.timer` for daily database backups).
+over SSH, backs up the database, applies any pending migrations, builds, and
+restarts it as a `systemd --user` service (also installing/enabling the
+`grader-backup.timer` for daily database backups).
 It's written for one specific host — read it before pointing it at another.
+
+Migrations run between `npm install` and the build, so the new code never
+serves a request against the old schema. Every `scripts/apply-*.mjs` is
+idempotent and the whole set runs on each deploy, so there is no separate
+migration step to remember — and no way to half-deploy a schema change by
+forgetting one.
