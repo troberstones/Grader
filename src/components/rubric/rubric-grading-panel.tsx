@@ -110,9 +110,9 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
   const { displayScore, gradedCount, totalCount, complete } = summarize(grading);
 
   return (
-    <div className={cn("flex-1 overflow-auto", dense ? "px-3 py-3" : "px-6 py-4")}>
+    <div className={cn("flex-1 overflow-auto", dense ? "px-3 py-3" : "px-6 py-3")}>
       {grading.model === "share" && (
-        <div className="mb-3 flex items-center gap-1 rounded-md border text-xs overflow-hidden self-start w-fit">
+        <div className="mb-2 flex items-center gap-1 rounded-md border text-xs overflow-hidden self-start w-fit">
           <button
             type="button"
             onClick={() => chooseSharePref("share-matrix")}
@@ -143,14 +143,14 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
       <GradingView grading={grading} sharePref={sharePref} />
 
       {/* Feedback + total */}
-      <div className={cn("mt-6 grid grid-cols-1 gap-4", !dense && "md:grid-cols-[1fr_auto]")}>
+      <div className={cn("mt-4 grid grid-cols-1 gap-4", !dense && "md:grid-cols-[1fr_auto]")}>
         <div className="space-y-1.5">
           <label className="text-sm font-medium">Feedback (optional)</label>
           <Textarea
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
             placeholder="Overall feedback for this student…"
-            rows={3}
+            rows={2}
           />
         </div>
 
