@@ -9,6 +9,7 @@ import { needsBootstrap } from "@/lib/auth/session";
 import { isPublicRoute } from "@/lib/auth-routes";
 import { PATHNAME_HEADER } from "@/proxy";
 import { GlobalSyncProvider } from "@/components/shared/global-sync";
+import { SessionModeProvider } from "@/components/shared/session-mode";
 import "./globals.css";
 
 // Manrope: contemporary sans-serif balancing geometric precision with human warmth
@@ -59,11 +60,13 @@ export default async function RootLayout({
       className={`${manrope.variable} ${geistMono.variable} h-full antialiased dark`}
     >
       <body className="h-full flex">
-        <GlobalSyncProvider>
-          <Sidebar account={account} />
-          <main className="flex-1 overflow-auto">{children}</main>
-          <Toaster />
-        </GlobalSyncProvider>
+        <SessionModeProvider mode={account?.mode ?? "grade"}>
+          <GlobalSyncProvider>
+            <Sidebar account={account} />
+            <main className="flex-1 overflow-auto">{children}</main>
+            <Toaster />
+          </GlobalSyncProvider>
+        </SessionModeProvider>
       </body>
     </html>
   );

@@ -6,6 +6,7 @@ import { CheckCircle2, Clock, Circle, Users } from "lucide-react";
 import { cn, formatScore } from "@/lib/utils";
 import { isReviewRoute } from "@/lib/grading-routes";
 import { useGrading } from "./grading-context";
+import { useIsReviewing } from "./session-mode";
 import type { GradeStatus } from "@/types/grading";
 
 /**
@@ -17,10 +18,18 @@ import type { GradeStatus } from "@/types/grading";
  * only, which buys back both the second line of every row and 48px of width for
  * the artwork — and keeps a column of everyone's marks off a screen that may be
  * mirrored to a projector. See docs/security.md.
+ *
+ * A review *session* goes further than the review *route*: the per-student
+ * status dots and the "n graded" bar come off too. Those say who has been
+ * marked and who has not, which is nobody else's business in a room full of
+ * students — and in a session that cannot grade, they are progress against work
+ * you are not here to do.
  */
 export function StudentSidebar() {
   const { students, selectedStudentId, selectStudent, scrollRef } = useGrading();
-  const detailed = !isReviewRoute(usePathname());
+  const reviewing = useIsReviewing();
+  const onReviewRoute = isReviewRoute(usePathname());
+  const detailed = !reviewing && !onReviewRoute;
 
   const gradedCount = students.filter((s) => s.grade?.status === "graded").length;
   const pct = students.length > 0 ? Math.round((gradedCount / students.length) * 100) : 0;
@@ -44,7 +53,8 @@ export function StudentSidebar() {
         detailed ? "w-56" : "w-44",
       )}
     >
-      {/* Progress summary */}
+      {/* Progress summary — grading progress, so only in a grading session. */}
+      {!reviewing && (
       <div className="px-4 py-3 border-b">
         <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
           <span className="flex items-center gap-1">
@@ -60,6 +70,7 @@ export function StudentSidebar() {
           />
         </div>
       </div>
+      )}
 
       {/* Student list */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
@@ -78,7 +89,7 @@ export function StudentSidebar() {
                 isSelected && "bg-primary/8 border-l-2 border-l-primary",
               )}
             >
-              <StatusIcon status={status} />
+              {!reviewing && <StatusIcon status={status} />}
               <div className="flex-1 min-w-0">
                 <div className="truncate font-medium">{student.sortName}</div>
                 {detailed && student.netId && (

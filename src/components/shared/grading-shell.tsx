@@ -4,19 +4,7 @@ import { useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { isGradingRoute } from "@/lib/grading-routes";
 import Link from "next/link";
-import {
-  Home,
-  BookOpen,
-  ClipboardList,
-  Grid3X3,
-  BarChart3,
-  Archive,
-  LogOut,
-  Menu,
-  Settings,
-  Wifi,
-  WifiOff,
-} from "lucide-react";
+import { LogOut, Menu, Settings, Wifi, WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,16 +22,10 @@ import { ViewSwitch } from "./view-switch";
 import { useSync } from "@/hooks/use-sync";
 import { useGlobalSync } from "./global-sync";
 import { signOut } from "@/actions/auth";
+import { navItemsFor } from "@/components/layout/nav-items";
+import { useSessionMode } from "./session-mode";
+import { ReviewBadge } from "./review-badge";
 import type { StudentWithGrade } from "@/actions/grades";
-
-const navItems = [
-  { href: "/", label: "Dashboard", icon: Home },
-  { href: "/courses", label: "Courses", icon: BookOpen },
-  { href: "/assignments", label: "Assignments", icon: ClipboardList },
-  { href: "/rubrics", label: "Rubrics", icon: Grid3X3 },
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/archive", label: "Archive", icon: Archive },
-];
 
 interface GradingShellProps {
   students: StudentWithGrade[];
@@ -86,6 +68,7 @@ export function GradingShell({
             <NavDrawer />
             <SyncToggle />
             <ViewSwitch />
+            <ReviewBadge className="ml-auto" />
           </div>
 
           {/* Main area: sidebar + page content */}
@@ -109,6 +92,7 @@ function SyncBridge({ assignmentId }: { assignmentId: number }) {
 function NavDrawer() {
   const pathname = usePathname();
   const router = useRouter();
+  const navItems = navItemsFor(useSessionMode());
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const accountActive = pathname.startsWith("/account");

@@ -1,4 +1,5 @@
 import { getRubrics } from "@/actions/rubrics";
+import { requireGradeSession } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 import { PageContainer } from "@/components/layout/page-container";
@@ -8,6 +9,7 @@ import { RubricLibrary } from "./rubric-library";
 import { Plus } from "lucide-react";
 
 export default async function RubricsPage() {
+  await requireGradeSession();
   const rubrics = await getRubrics();
 
   return (

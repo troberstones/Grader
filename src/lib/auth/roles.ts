@@ -23,6 +23,25 @@ export type UserStatus = (typeof USER_STATUSES)[number];
 export const COURSE_ROLES = ["owner", "instructor", "ta", "observer"] as const;
 export type CourseRole = (typeof COURSE_ROLES)[number];
 
+/**
+ * What the signed-in session is *for*, chosen at sign-in and fixed until sign-out.
+ *
+ * `review` is the critique-room session: the artwork, the annotation tools and
+ * the student list, and nothing that evaluates anybody. It exists because the
+ * screen is often projected in front of the class, where a rubric or a score is
+ * exactly the wrong thing to reveal.
+ *
+ * This is a constraint on a session, not a role — the same instructor holds the
+ * same permissions either way. Review mode subtracts from what they may do
+ * right now; it never grants anything a `grade` session lacks.
+ */
+export const SESSION_MODES = ["grade", "review"] as const;
+export type SessionMode = (typeof SESSION_MODES)[number];
+
+export function isSessionMode(v: unknown): v is SessionMode {
+  return typeof v === "string" && (SESSION_MODES as readonly string[]).includes(v);
+}
+
 export function isGlobalRole(v: unknown): v is GlobalRole {
   return typeof v === "string" && (GLOBAL_ROLES as readonly string[]).includes(v);
 }
@@ -41,6 +60,8 @@ export interface Principal {
   globalRole: GlobalRole;
   status: UserStatus;
   canViewArchive: boolean;
+  /** The mode this session was opened in. See SESSION_MODES. */
+  mode: SessionMode;
 }
 
 export type Capability =
@@ -52,6 +73,7 @@ export type Capability =
   | "roster.view" // any real per-student data — names/netIds/emails, submissions, grades, review content — never covered by department visibility
   | "grade.write"
   | "grade.publish"
+  | "annotation.write" // marking up the artwork itself — survives review mode, unlike grade.write
   | "archive.view"; // a student's cross-course submissions/grades/annotations
 
 export type Resource =
@@ -93,6 +115,29 @@ export interface AuthContext {
  */
 export const COURSE_SCOPING_PENDING = false;
 
+/**
+ * Everything a `review` session may still do. An allow-list, deliberately.
+ *
+ * A deny-list would mean every capability added later is permitted in review
+ * mode until someone remembers to exclude it, and the failure is silent — a
+ * grading control quietly appearing in the critique room. This way the default
+ * for anything new is "locked", and the failure is loud and immediate instead.
+ *
+ * `annotation.write` is the one write that survives: marking up the artwork is
+ * the entire point of the review session. It is a separate capability from
+ * `grade.write` for exactly this reason — before, annotations were gated on
+ * `grade.write`, so there was no way to keep drawing while withholding grading.
+ *
+ * `archive.view` is deliberately absent despite being a read. The archive is a
+ * student's work *and their grades* across courses, so admitting it would put
+ * scores back on the projected screen through a side door.
+ */
+const REVIEW_MODE_CAPABILITIES: ReadonlySet<Capability> = new Set([
+  "course.view",
+  "roster.view",
+  "annotation.write",
+]);
+
 export function can(
   user: Principal | null | undefined,
   capability: Capability,
@@ -102,6 +147,13 @@ export function can(
   // A disabled or not-yet-accepted account can do nothing at all. This is the
   // check that makes "disable" meaningful, so it comes before everything.
   if (!user || user.status !== "active") return false;
+
+  // Before the admin bypass, not after. An administrator who picks "review" at
+  // sign-in is asking for the restricted session, and is in fact the likeliest
+  // person to be standing in front of the class when they do; letting the
+  // bypass win here would make the whole mode decorative for the one account
+  // that most needs it.
+  if (user.mode === "review" && !REVIEW_MODE_CAPABILITIES.has(capability)) return false;
 
   if (user.globalRole === "admin") return true;
 
@@ -157,6 +209,17 @@ export function can(
       return ctx.courseMembership != null;
 
     case "grade.write":
+      if (resource.kind === "global" || resource.kind === "student") return false;
+      return (
+        ctx.courseMembership === "owner" ||
+        ctx.courseMembership === "instructor" ||
+        ctx.courseMembership === "ta"
+      );
+
+    case "annotation.write":
+      // The same people who may grade may annotate — this capability exists to
+      // survive review mode, not to widen who can mark up a submission. An
+      // observer still cannot draw on someone's work.
       if (resource.kind === "global" || resource.kind === "student") return false;
       return (
         ctx.courseMembership === "owner" ||

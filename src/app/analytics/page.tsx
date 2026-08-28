@@ -1,7 +1,9 @@
+import { requireGradeSession } from "@/lib/auth/session";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 
-export default function AnalyticsPage() {
+export default async function AnalyticsPage() {
+  await requireGradeSession();
   return (
     <PageContainer>
       <Header

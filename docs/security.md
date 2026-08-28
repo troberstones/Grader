@@ -125,6 +125,59 @@ Roughly in the order they'd matter if the tool left the studio:
 7. **~~No rate limiting on sign-in.~~ Two layers now cover it.** See "What is
    already fenced off" below.
 
+## Review sessions
+
+Sign-in asks what the session is for: **grade** (everything, as before) or
+**review** (the artwork, the annotation tools and the student list, and nothing
+that evaluates anybody). The choice is made on the sign-in form, so a session is
+never half-formed, and it is **fixed until sign-out** — there is no in-app
+switch, because the point is that nothing on screen can put a rubric back up
+while the projector is on.
+
+- **Stored on the session row, not in a cookie** (`sessions.mode`). The browser
+  holding a session must not be able to widen its own permissions, which is the
+  same reason sessions are rows rather than JWTs. An unrecognised value read
+  back from that column is treated as `review`: the safe direction for an
+  unreadable mode is fewer permissions, not more.
+
+- **Enforced in `can()`, before the admin bypass.** Review mode is a constraint
+  on a session, not a role — it only ever subtracts. It is an *allow-list*
+  (`REVIEW_MODE_CAPABILITIES`: `course.view`, `roster.view`,
+  `annotation.write`), so any capability added later is locked in review mode
+  until someone deliberately admits it. A deny-list would fail silently and in
+  the worst direction: a new grading control quietly appearing in the critique
+  room.
+
+  The bypass ordering matters. An administrator who chooses review is the
+  likeliest person to be standing in front of a class, so `globalRole ===
+  "admin"` must not outrank the mode.
+
+- **`annotation.write` exists so drawing survives.** Annotations used to be
+  gated on `grade.write`, which left no way to keep marking up artwork while
+  withholding grading. It permits exactly the people `grade.write` does — it
+  widens nothing, and an `observer` still cannot draw on someone's work.
+
+- **`archive.view` is deliberately excluded**, despite being a read. The
+  archive is a student's work *and their grades* across courses, so admitting
+  it would put scores back on a shared screen through a side door.
+
+- **Pages, not just actions.** Refusing at the action is too late for a page
+  that renders scores before any action runs, so the grade sheet, assignment
+  edit, rubric, analytics and archive pages call `requireGradeSession()`, and
+  `requireAdmin()` bounces review sessions too. `/rubrics/new` and
+  `/assignments/new` were single `"use client"` files and got a server shell so
+  they could be gated at all.
+
+- **The docked rubric is denied at `canDock`**, not by hiding its button.
+  `rubricDocked` lives in `localStorage`, so docking the rubric while grading,
+  signing out, and signing back in to review would otherwise bring it straight
+  back onto the screen with no control on it to close it.
+
+Hiding nav links and controls in review mode is presentation only — every one
+of those destinations refuses independently on the server. The proxy cannot
+help here: it deliberately does no database access, and the mode is a database
+fact.
+
 ## What is already fenced off
 
 - **Every server action and same-origin route handler checks a capability.**

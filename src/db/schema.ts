@@ -310,6 +310,10 @@ export const sessions = sqliteTable("sessions", {
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
   userAgent: text("user_agent"),
   ip: text("ip"),
+  // Chosen at sign-in and fixed for the life of the session. Here rather than
+  // in a cookie because the browser holding it must not be able to widen its
+  // own permissions — same reasoning that makes sessions rows, not JWTs.
+  mode: text("mode").$type<"grade" | "review">().notNull().default("grade"),
 }, (table) => [
   uniqueIndex("sessions_token_idx").on(table.tokenHash),
   index("sessions_user_idx").on(table.userId),

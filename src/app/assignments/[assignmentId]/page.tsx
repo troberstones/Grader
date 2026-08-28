@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { getAssignment } from "@/actions/assignments";
+import { requireGradeSession } from "@/lib/auth/session";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
@@ -14,6 +15,9 @@ export default async function AssignmentGradeSheetPage({
   params: Promise<{ assignmentId: string }>;
 }) {
   const { assignmentId } = await params;
+  // The rubric and every score live on this page, so a review session is sent
+  // to the artwork for the same assignment rather than shown a refusal.
+  await requireGradeSession(`/assignments/${assignmentId}/review`);
   const assignment = await getAssignment(Number(assignmentId));
 
   if (!assignment) notFound();
