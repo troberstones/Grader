@@ -298,7 +298,7 @@ export async function appendStrokes(
   strokes: { localId: string; frameIn: number; frameOut: number; authorId: string; b: string }[],
 ): Promise<StoredStrokeRow[]> {
   const submissionId = parseItemId(itemId);
-  await requireCapability("grade.write", submissionId !== null ? await submissionResource(submissionId) : GLOBAL);
+  await requireCapability("annotation.write", submissionId !== null ? await submissionResource(submissionId) : GLOBAL);
   if (strokes.length === 0) return [];
 
   const headRow = await db
@@ -362,7 +362,7 @@ export async function appendStrokes(
 /** Soft delete keeps `seq` monotonic, so every peer's sync cursor stays valid. */
 export async function deleteStrokes(itemId: string, ids: number[]): Promise<void> {
   const submissionId = parseItemId(itemId);
-  await requireCapability("grade.write", submissionId !== null ? await submissionResource(submissionId) : GLOBAL);
+  await requireCapability("annotation.write", submissionId !== null ? await submissionResource(submissionId) : GLOBAL);
   if (ids.length === 0) return;
   for (const id of ids) {
     await db
@@ -398,7 +398,7 @@ export async function getMarkers(itemId: string): Promise<FrameMarker[]> {
 
 export async function savePrefs(contextId: string, prefs: Record<string, unknown>): Promise<void> {
   const { assignmentId } = await parseContext(contextId);
-  await requireCapability("grade.write", await assignmentResource(assignmentId));
+  await requireCapability("annotation.write", await assignmentResource(assignmentId));
   await db
     .insert(reviewPrefs)
     .values({ contextId, data: JSON.stringify(prefs) })

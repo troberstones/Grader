@@ -9,7 +9,7 @@ import { db } from "@/db";
 import { invites, users } from "@/db/schema";
 import { hashPassword, passwordProblem, verifyPassword } from "@/lib/auth/password";
 import { expiryFromNow, generateToken, hashToken, isExpired, INVITE_TTL_MS, sqlTimestamp } from "@/lib/auth/tokens";
-import { isGlobalRole, type GlobalRole } from "@/lib/auth/roles";
+import { isGlobalRole, isSessionMode, type GlobalRole, type SessionMode } from "@/lib/auth/roles";
 import {
   isIpThrottled,
   isLockedOut,
@@ -80,6 +80,13 @@ export async function signIn(_prevState: ActionResult | null, formData: FormData
   const email = String(formData.get("email") ?? "");
   const password = String(formData.get("password") ?? "");
 
+  // Which button was pressed. Absent when something other than the sign-in form
+  // calls this, and when the browser submits implicitly on Enter it sends the
+  // first submit button in the form — which is why "Grade" is rendered first:
+  // pressing Enter lands on the unrestricted session this app has always given.
+  const rawMode = formData.get("mode");
+  const mode: SessionMode = isSessionMode(rawMode) ? rawMode : "grade";
+
   if (await needsBootstrap()) return fail("No accounts exist yet. Set up the first administrator.");
 
   const meta = await requestMeta();
@@ -112,7 +119,7 @@ export async function signIn(_prevState: ActionResult | null, formData: FormData
   }
 
   await resetFailedLogins(user.id);
-  await createSession(user.id, meta);
+  await createSession(user.id, meta, mode);
   await db.update(users).set({ lastLoginAt: sqlTimestamp(new Date()) }).where(eq(users.id, user.id));
 
   return ok;
@@ -550,7 +557,13 @@ export async function setCanViewArchive(userId: number, value: boolean): Promise
 export async function currentAccount() {
   const user = await getCurrentUser();
   if (!user) return null;
-  return { id: user.id, name: user.name, email: user.email, globalRole: user.globalRole };
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    globalRole: user.globalRole,
+    mode: user.mode,
+  };
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────

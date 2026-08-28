@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
@@ -30,6 +30,7 @@ interface EditAssignmentClientProps {
 
 export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssignmentClientProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [saving, setSaving] = useState(false);
 
   const [name, setName] = useState(assignment.name);
@@ -41,6 +42,20 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
     (assignment.submissionType as "image" | "video" | "any") ?? "any"
   );
   const [lmsAssignmentId, setLmsAssignmentId] = useState(assignment.lmsAssignmentId ?? "");
+
+  // Coming back from "Create new…" (see the Rubric field below): the rubric
+  // now exists but this page's `rubrics` prop was fetched before it did, so
+  // pick it by id from the query string, select it, then refresh so the
+  // dropdown itself has the new rubric too.
+  useEffect(() => {
+    const newRubricId = searchParams.get("newRubricId");
+    if (!newRubricId) return;
+    setRubricId(newRubricId);
+    toast.success("Rubric created and selected");
+    router.replace(`/assignments/${assignment.id}/edit`);
+    router.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   async function handleSave() {
     if (!name || !pointsPossible) {
@@ -130,7 +145,12 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
                   onValueChange={(v) => setRubricId(v ?? "none")}
                 >
                   <SelectTrigger id="rubric" className="flex-1">
-                    <SelectValue placeholder="Select a rubric…" />
+                    <SelectValue placeholder="Select a rubric…">
+                      {(v: string | null) => {
+                        if (!v || v === "none") return "No rubric";
+                        return rubrics.find((r) => String(r.id) === v)?.name ?? v;
+                      }}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">No rubric</SelectItem>
@@ -141,13 +161,17 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
                     ))}
                   </SelectContent>
                 </Select>
-                <LinkButton href="/rubrics/new" target="_blank" variant="outline" size="sm">
+                <LinkButton
+                  href={`/rubrics/new?returnTo=${encodeURIComponent(`/assignments/${assignment.id}/edit`)}`}
+                  variant="outline"
+                  size="sm"
+                >
                   Create new…
                 </LinkButton>
               </div>
               <p className="text-xs text-muted-foreground">
-                Changing the rubric will not delete existing grade entries. Opens the rubric editor in a
-                new tab — refresh this page afterward to select it here.
+                Changing the rubric will not delete existing grade entries. Takes you to the rubric
+                editor; saving it brings you back here with it selected.
               </p>
             </div>
 

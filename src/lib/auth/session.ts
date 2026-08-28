@@ -9,7 +9,15 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { sessions, users } from "@/db/schema";
 import { hashToken, isExpired, expiryFromNow, generateToken, SESSION_TTL_MS, SESSION_REFRESH_AFTER_MS } from "./tokens";
-import { isGlobalRole, isUserStatus, type GlobalRole, type Principal, type UserStatus } from "./roles";
+import {
+  isGlobalRole,
+  isSessionMode,
+  isUserStatus,
+  type GlobalRole,
+  type Principal,
+  type SessionMode,
+  type UserStatus,
+} from "./roles";
 
 export const SESSION_COOKIE = "grader_session";
 
@@ -55,6 +63,7 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
       globalRole: users.globalRole,
       status: users.status,
       canViewArchive: users.canViewArchive,
+      mode: sessions.mode,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
@@ -78,6 +87,11 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
 
   if (!isGlobalRole(row.globalRole) || !isUserStatus(row.status)) return null;
 
+  // An unrecognised mode is treated as the restricted one. A row written by a
+  // future version, or hand-edited, must not fall open into full grading
+  // access — the safe direction here is fewer permissions, not more.
+  const mode: SessionMode = isSessionMode(row.mode) ? row.mode : "review";
+
   await refreshIfStale(row.sessionId, row.expiresAt);
 
   return {
@@ -88,6 +102,7 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
     globalRole: row.globalRole,
     status: row.status,
     canViewArchive: row.canViewArchive === 1,
+    mode,
   };
 });
 
@@ -115,6 +130,7 @@ async function refreshIfStale(sessionId: number, expiresAt: string): Promise<voi
 export async function createSession(
   userId: number,
   meta: { userAgent?: string | null; ip?: string | null } = {},
+  mode: SessionMode = "grade",
 ): Promise<void> {
   const token = generateToken();
 
@@ -124,6 +140,7 @@ export async function createSession(
     expiresAt: expiryFromNow(SESSION_TTL_MS),
     userAgent: meta.userAgent?.slice(0, 400) ?? null,
     ip: meta.ip?.slice(0, 60) ?? null,
+    mode,
   });
 
   const jar = await cookies();
@@ -173,9 +190,31 @@ export async function requireUser(): Promise<SessionUser> {
   return user;
 }
 
+/**
+ * Keep a review session out of a page that exists to evaluate somebody.
+ *
+ * The capability checks in `can()` are what actually stop the writes, and they
+ * would stop them here too — but an action throwing "You do not have permission
+ * to do that" is the wrong answer for a whole page that should simply not be
+ * part of this session. Worse, the grade sheet renders scores before any action
+ * is called, so refusing at the action is too late to keep them off the screen.
+ *
+ * `redirectTo` should be somewhere the review session can actually go, or this
+ * just bounces the user into another redirect.
+ */
+export async function requireGradeSession(redirectTo = "/assignments"): Promise<SessionUser> {
+  const user = await requireUser();
+  if (user.mode === "review") redirect(redirectTo);
+  return user;
+}
+
 export async function requireAdmin(): Promise<SessionUser> {
   const user = await requireUser();
   if (user.globalRole !== "admin") redirect("/");
+  // Administration is `user.manage`, which `can()` refuses to every review
+  // session — so the console would render controls that all fail. Bounced here
+  // instead, for the same reason as requireGradeSession().
+  if (user.mode === "review") redirect("/");
   return user;
 }
 
@@ -205,4 +244,4 @@ export async function countActiveAdmins(): Promise<number> {
   return row?.n ?? 0;
 }
 
-export type { GlobalRole, UserStatus };
+export type { GlobalRole, SessionMode, UserStatus };

@@ -312,9 +312,33 @@ export const sessions = sqliteTable("sessions", {
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
   userAgent: text("user_agent"),
   ip: text("ip"),
+  // Chosen at sign-in and fixed for the life of the session. Here rather than
+  // in a cookie because the browser holding it must not be able to widen its
+  // own permissions — same reasoning that makes sessions rows, not JWTs.
+  mode: text("mode").$type<"grade" | "review">().notNull().default("grade"),
 }, (table) => [
   uniqueIndex("sessions_token_idx").on(table.tokenHash),
   index("sessions_user_idx").on(table.userId),
+]);
+
+// Lets a student add a submission without signing in — there is no student
+// login yet (see docs/student-accounts-plan.md). `studentId` null means a
+// "shared" link: the assignment's whole roster gets one URL and the
+// uploader picks their own name on the upload page, versus a per-student
+// link that already knows who it's for. Multi-use until expiry/revocation,
+// unlike `invites`, since a student may need to upload more than once.
+export const uploadLinks = sqliteTable("upload_links", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  assignmentId: integer("assignment_id").notNull().references(() => assignments.id, { onDelete: "cascade" }),
+  studentId: integer("student_id").references(() => students.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(),
+  createdBy: integer("created_by").references(() => users.id),
+  expiresAt: text("expires_at").notNull(),
+  revokedAt: text("revoked_at"),
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  uniqueIndex("upload_links_token_idx").on(table.tokenHash),
+  index("upload_links_assignment_idx").on(table.assignmentId, table.studentId),
 ]);
 
 // Single-use invitation tokens. Account creation is invite-only: no self

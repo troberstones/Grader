@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { ClipboardList, Image as ImageIcon, PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useGrading } from "./grading-context";
+import { useIsReviewing } from "./session-mode";
 import { useViewLayout } from "./view-layout";
 import { isReviewRoute } from "@/lib/grading-routes";
 import { cn } from "@/lib/utils";
@@ -27,6 +28,7 @@ export function ViewSwitch() {
   const router = useRouter();
   const { selectedStudentId } = useGrading();
   const { canDock, rubricDocked, setRubricDocked } = useViewLayout();
+  const reviewing = useIsReviewing();
 
   const assignmentId = pathname.match(/^\/assignments\/(\d+)(\/|$)/)?.[1];
   const onArtwork = isReviewRoute(pathname);
@@ -42,7 +44,7 @@ export function ViewSwitch() {
   // pushed one way, which meant the key did nothing once you were on the
   // artwork — the same half-wiring as the button.
   useEffect(() => {
-    if (!assignmentId) return;
+    if (!assignmentId || reviewing) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "t" || e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement;
@@ -53,9 +55,15 @@ export function ViewSwitch() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assignmentId, onArtwork, selectedStudentId, router]);
+  }, [assignmentId, onArtwork, selectedStudentId, reviewing, router]);
 
   if (!assignmentId) return null;
+
+  // A review session has one destination, so a switch with one reachable side
+  // would be a control that does nothing. The rubric is not merely disabled
+  // here — there is no affordance for it at all, which is the point when the
+  // screen is facing a room.
+  if (reviewing) return null;
 
   return (
     <div className="flex items-center gap-1.5">

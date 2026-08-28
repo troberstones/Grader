@@ -46,6 +46,7 @@ export function isExpired(expiresAt: string, now: Date = new Date()): boolean {
 
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+export const UPLOAD_LINK_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 
 /**
  * A session older than this gets its expiry pushed out on use, so an active

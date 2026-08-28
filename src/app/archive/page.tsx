@@ -1,8 +1,10 @@
+import { requireGradeSession } from "@/lib/auth/session";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { ArchiveSearch } from "./archive-search";
 
-export default function ArchivePage() {
+export default async function ArchivePage() {
+  await requireGradeSession();
   return (
     <PageContainer>
       <Header

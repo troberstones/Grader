@@ -4,31 +4,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import {
-  BookOpen,
-  ClipboardList,
-  Grid3X3,
-  BarChart3,
-  Archive,
-  Home,
-  LogOut,
-  ScrollText,
-  Settings,
-  Users,
-} from "lucide-react";
+import { LogOut, ScrollText, Settings, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isGradingRoute } from "@/lib/grading-routes";
 import { isPublicRoute } from "@/lib/auth-routes";
 import { signOut } from "@/actions/auth";
-
-const navItems = [
-  { href: "/", label: "Dashboard", icon: Home },
-  { href: "/courses", label: "Courses", icon: BookOpen },
-  { href: "/assignments", label: "Assignments", icon: ClipboardList },
-  { href: "/rubrics", label: "Rubrics", icon: Grid3X3 },
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/archive", label: "Archive", icon: Archive },
-];
+import { navItemsFor } from "./nav-items";
+import { useSessionMode } from "@/components/shared/session-mode";
+import { ReviewBadge } from "@/components/shared/review-badge";
 
 export interface SidebarAccount {
   id: number;
@@ -39,6 +22,11 @@ export interface SidebarAccount {
 
 export function Sidebar({ account }: { account: SidebarAccount | null }) {
   const pathname = usePathname();
+  const mode = useSessionMode();
+  const navItems = navItemsFor(mode);
+  // Account management is `user.manage`, which no review session holds — so the
+  // console would refuse every action it offered.
+  const showAdmin = account?.globalRole === "admin" && mode !== "review";
 
   // Hide the permanent sidebar on grading/review pages — those use the
   // GradingShell layout with a hamburger drawer instead.
@@ -56,6 +44,7 @@ export function Sidebar({ account }: { account: SidebarAccount | null }) {
         <span className="text-base font-bold tracking-widest uppercase text-primary">
           Art Grader
         </span>
+        <ReviewBadge className="mt-3 w-fit" />
       </div>
 
       <nav className="flex-1 px-3 pb-4 space-y-0.5">
@@ -85,7 +74,7 @@ export function Sidebar({ account }: { account: SidebarAccount | null }) {
           );
         })}
 
-        {account?.globalRole === "admin" && (
+        {showAdmin && (
           <Link
             href="/admin/users"
             className={cn(
@@ -100,7 +89,7 @@ export function Sidebar({ account }: { account: SidebarAccount | null }) {
           </Link>
         )}
 
-        {account?.globalRole === "admin" && (
+        {showAdmin && (
           <Link
             href="/admin/audit"
             className={cn(

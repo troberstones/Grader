@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getStudentArchive } from "@/actions/archive";
+import { requireGradeSession } from "@/lib/auth/session";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +19,7 @@ export default async function StudentArchivePage({
 }: {
   params: Promise<{ studentId: string }>;
 }) {
+  await requireGradeSession();
   const { studentId } = await params;
   const archive = await getStudentArchive(Number(studentId));
   if (!archive) notFound();

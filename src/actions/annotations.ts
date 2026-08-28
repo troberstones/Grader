@@ -24,7 +24,7 @@ export async function saveAnnotations(
   submissionId: number,
   frames: AnnotationFrame[]
 ) {
-  await requireCapability("grade.write", await submissionResource(submissionId));
+  await requireCapability("annotation.write", await submissionResource(submissionId));
   // Replace all annotations for this submission
   await db.delete(annotations).where(eq(annotations.submissionId, submissionId));
 
@@ -40,7 +40,7 @@ export async function saveAnnotations(
 }
 
 export async function clearAnnotations(submissionId: number) {
-  await requireCapability("grade.write", await submissionResource(submissionId));
+  await requireCapability("annotation.write", await submissionResource(submissionId));
   await db.delete(annotations).where(eq(annotations.submissionId, submissionId));
   return { success: true };
 }

@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from "react";
 
+import { useIsReviewing } from "./session-mode";
+
 /**
  * Below this the rubric cannot dock beside the artwork — there simply isn't the
  * width for a viewer and a criterion table at once. iPad portrait (768pt) sits
@@ -46,8 +48,19 @@ export function useViewLayout() {
  * server snapshot (`false` for both) is what keeps hydration honest.
  */
 export function ViewLayoutProvider({ children }: { children: ReactNode }) {
-  const canDock = useSyncExternalStore(subscribeMedia, mediaSnapshot, serverFalse);
+  const wideEnough = useSyncExternalStore(subscribeMedia, mediaSnapshot, serverFalse);
   const rubricDocked = useSyncExternalStore(subscribeDock, dockSnapshot, serverFalse);
+  const reviewing = useIsReviewing();
+
+  // A review session can never dock, however wide the window.
+  //
+  // This has to be denied here rather than by hiding the dock button, because
+  // `rubricDocked` is localStorage: dock the rubric while grading, sign out,
+  // sign back in to review, and the flag is still set — the rubric would come
+  // straight back onto a screen the room can see, with no control on it to
+  // close it. Withholding `canDock` closes that off for every consumer of this
+  // context at once, including any added later.
+  const canDock = wideEnough && !reviewing;
 
   const setRubricDocked = useCallback((open: boolean) => {
     window.localStorage.setItem(STORAGE_KEY, open ? "1" : "0");

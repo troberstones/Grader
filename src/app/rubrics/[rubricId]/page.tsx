@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { getRubric } from "@/actions/rubrics";
+import { requireGradeSession } from "@/lib/auth/session";
 import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
@@ -14,6 +15,7 @@ export default async function EditRubricPage({
 }: {
   params: Promise<{ rubricId: string }>;
 }) {
+  await requireGradeSession();
   const { rubricId } = await params;
   const rubric = await getRubric(Number(rubricId));
   if (!rubric) notFound();
