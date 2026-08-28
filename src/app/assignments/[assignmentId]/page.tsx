@@ -4,6 +4,7 @@ import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
 import { GradeSheetClient } from "./grade-sheet-client";
+import { SendUploadLinkDialog } from "./send-upload-link-dialog";
 import { Calendar, BookOpen, Pencil } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -44,6 +45,7 @@ export default async function AssignmentGradeSheetPage({
         }
         actions={
           <div className="flex gap-2">
+            <SendUploadLinkDialog assignmentId={assignment.id} courseId={assignment.courseId} />
             <LinkButton href={`/assignments/${assignment.id}/edit`} variant="outline">
               <Pencil className="mr-2 h-4 w-4" />
               Edit
