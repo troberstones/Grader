@@ -13,7 +13,10 @@ export type AuditAction =
   | "user.invite"
   | "user.password_reset_issued"
   | "course.delete"
-  | "rubric.delete";
+  | "rubric.delete"
+  | "upload_link.create"
+  | "upload_link.revoke"
+  | "upload_link.use";
 
 /**
  * Record who did what. Append-only, best-effort: a write failure here must

@@ -6,7 +6,7 @@
  * themselves. Divergence between them shows up as either a redirect loop or an
  * unprotected page, so there is one list.
  */
-export const PUBLIC_ROUTES = ["/login", "/setup", "/invite"] as const;
+export const PUBLIC_ROUTES = ["/login", "/setup", "/invite", "/upload"] as const;
 
 export function isPublicRoute(pathname: string): boolean {
   return PUBLIC_ROUTES.some((route) => pathname === route || pathname.startsWith(`${route}/`));

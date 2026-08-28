@@ -67,3 +67,27 @@ export async function sendInviteEmail(
     : `Hi ${name},\n\nYou've been invited to Grader. Use this link to set your password and sign in:\n${url}\n\nThis link works once and expires in 7 days.\n`;
   return sendMailBestEffort(to, subject, text);
 }
+
+/**
+ * Same shape as sendInviteEmail(), for an upload-link URL instead of an
+ * invite/reset one. `expiresAt` is shown as a plain date, not relative time,
+ * since the email itself may be read long after it was sent.
+ */
+export async function sendUploadLinkEmail(
+  to: string,
+  studentName: string,
+  assignmentName: string,
+  relativeUrl: string,
+  expiresAt: string,
+): Promise<boolean> {
+  if (!APP_BASE_URL) return false;
+  const url = new URL(relativeUrl, APP_BASE_URL).toString();
+  const expiry = new Date(expiresAt.replace(" ", "T") + "Z").toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  const subject = `Upload link for ${assignmentName}`;
+  const text = `Hi ${studentName},\n\nUse this link to upload your submission for "${assignmentName}":\n${url}\n\nThis link expires on ${expiry}.\n`;
+  return sendMailBestEffort(to, subject, text);
+}
