@@ -288,13 +288,47 @@ what it should be: recognition that submitted work has value. F still exists.
 
 ## Build order
 
-1. The schema and this prompt. Done.
+1. The schema and this prompt. **Done** — the prompt is now kept as its own
+   document, [rubric-prompt.md](rubric-prompt.md), stated against the shipped
+   validator rather than the sketch below.
 2. A pure `validateRubric(json)` module returning `{errors, warnings, normalised}`
-   — no UI, fully unit-testable, unaffected by the in-flux grading UI.
-3. `computePoints(rubric, totalPoints)` and its inverse for export.
-4. The paste-and-validate page, with the repair message.
-5. The generate-prompt page with the example dropdown.
-6. Migrate `exportRubricToJSON` to v1 and deprecate `weight`.
+   — no UI, fully unit-testable, unaffected by the in-flux grading UI. **Done**
+   (`src/lib/rubric/validate.ts`).
+3. `computePoints(rubric, totalPoints)` and its inverse for export. **Done**
+   (`src/lib/rubric/score.ts`).
+4. The paste-and-validate page, with the repair message. **Done**
+   (`share-editor/paste-import-panel.tsx`).
+5. The generate-prompt page with the example dropdown. **Not built** — the
+   prompt lives in a repo document a professor has to be pointed at, which is
+   one step short of the flow described above.
+6. Migrate `exportRubricToJSON` to v1 and deprecate `weight`. **Done for
+   export**; `weight` is still the column that physically holds `share`.
 
-Steps 2 and 3 are pure functions and can land now. Steps 4 and 5 touch rubric UI
-that is still moving, so they should wait for it to settle.
+## The old models are archived, and everything was converted
+
+The v1/v2/v3 editors and their grading views were moved to
+`src/components/rubric/_archive/` (see the README there). The app now has one
+editor and two grading views — a grid and a slider — and both write the same
+thing, a level per criterion.
+
+That was only safe because every existing rubric could come with it.
+`convertLegacyRubric` (`src/lib/rubric/legacy.ts`) runs the old arithmetic
+backwards: a criterion's point maximum becomes its `share`, and its level points
+become the rubric's `bandEdges`. The conversion is therefore **exactly
+score-preserving** — a test asserts it across every level combination — and
+`scripts/convert-legacy-rubrics-to-share.mjs` applies it, reporting per-student
+what each recorded grade would recompute to before anything is written.
+
+Two things it will not do quietly:
+
+- **It does not recalibrate.** A rubric that gave "Good with Minor Flaws" a C−
+  keeps giving a C− until someone picks a preset in the editor, where the
+  outcome table shows the consequence first. Fixing the calibration silently
+  would move grades students have already seen.
+- **It refuses a rubric with a 0-point bottom level**, since `bandEdges` must be
+  inside (0, 1) — the floor is what distinguishes poor work from no work.
+  `--floor=advanced|foundation` converts such a rubric onto a chosen
+  calibration instead, listing every grade that changes as a result.
+
+The original `points` values are left in the database, so a conversion is
+undone by clearing `settings.model`.

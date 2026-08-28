@@ -7,10 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/link-button";
 import { Grid3X3, Trash2, Copy, Download, Upload } from "lucide-react";
-import { deleteRubric, duplicateRubric, importRubricFromJSON, createShareRubric } from "@/actions/rubrics";
+import { deleteRubric, duplicateRubric, createShareRubric } from "@/actions/rubrics";
 import { toast } from "sonner";
-import type { RubricJSON } from "@/types/rubric";
-import type { AuthoredRubric } from "@/lib/rubric";
+import { convertLegacyRubric } from "@/lib/rubric";
+import type { AuthoredRubric, LegacyRubric } from "@/lib/rubric";
 
 interface RubricItem {
   id: number;
@@ -31,12 +31,23 @@ export function RubricLibrary({ rubrics }: { rubrics: RubricItem[] }) {
       const text = await file.text();
       const parsed = JSON.parse(text);
       // The share-model shape (src/lib/rubric/) has no `weight` on a
-      // criterion — legacy RubricJSON always does, it's a required field.
+      // criterion — a file exported by the archived editors always does,
+      // it was a required field. Those are converted on the way in rather
+      // than refused: the arithmetic is exact (see convertLegacyRubric), so
+      // an old export is still a perfectly good rubric.
       const isAuthored = parsed?.version === 1 && !("weight" in (parsed.criteria?.[0] ?? {}));
       if (isAuthored) {
         await createShareRubric(parsed as AuthoredRubric);
       } else {
-        await importRubricFromJSON(parsed as RubricJSON);
+        const converted = convertLegacyRubric(parsed as LegacyRubric);
+        if (!converted.ok || !converted.rubric) {
+          toast.error(converted.errors[0] ? `${converted.errors[0].where}: ${converted.errors[0].message}` : "That rubric could not be converted.");
+          return;
+        }
+        await createShareRubric(converted.rubric);
+        if (converted.warnings.length) {
+          toast.warning(`Converted with ${converted.warnings.length} note${converted.warnings.length === 1 ? "" : "s"} — check the rubric's calibration.`);
+        }
       }
       toast.success(`Imported rubric: ${parsed.name}`);
     } catch {

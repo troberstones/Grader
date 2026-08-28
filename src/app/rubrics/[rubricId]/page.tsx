@@ -5,8 +5,8 @@ import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
 import { EditRubricClient } from "./edit-rubric-client";
+import { UnconvertedRubricNotice } from "@/components/rubric/unconverted-rubric-notice";
 import { isShareModel, toNormalRubric } from "@/lib/rubric";
-import type { RubricEditorKey } from "@/components/rubric/registry";
 
 export const dynamic = "force-dynamic";
 
@@ -21,44 +21,6 @@ export default async function EditRubricPage({
   if (!rubric) notFound();
 
   const settings = rubric.settings ?? null;
-  const share = isShareModel({ settings });
-  // Opens on whichever editor this rubric already declares itself as, so a
-  // v3-authored rubric doesn't land on an editor that would silently
-  // discard its calibration. The toggle still lets you switch deliberately
-  // — same as today, switching mid-edit already discards in-progress state.
-  const initialKey: RubricEditorKey = share ? "share" : settings?.gradingMode === "v3" ? "v3" : "v1";
-
-  const legacyInitialData = {
-    name: rubric.name,
-    description: rubric.description ?? undefined,
-    criteria: rubric.criteria.map((c) => ({
-      name: c.name,
-      description: c.description ?? undefined,
-      weight: c.weight,
-      levels: c.levels.map((l) => ({
-        level: l.level,
-        label: l.label,
-        description: l.description,
-        // Legacy/v3 rubrics always have a real number here.
-        points: l.points ?? 0,
-      })),
-    })),
-  };
-
-  const shareInitialData = share
-    ? toNormalRubric({
-        name: rubric.name,
-        description: rubric.description ?? null,
-        settings,
-        criteria: rubric.criteria.map((c) => ({
-          id: c.id,
-          name: c.name,
-          description: c.description,
-          share: c.weight,
-          levels: c.levels,
-        })),
-      })
-    : null;
 
   return (
     <PageContainer>
@@ -71,12 +33,30 @@ export default async function EditRubricPage({
           </LinkButton>
         }
       />
-      <EditRubricClient
-        rubricId={Number(rubricId)}
-        initialKey={initialKey}
-        legacyInitialData={legacyInitialData}
-        shareInitialData={shareInitialData}
-      />
+      {isShareModel({ settings }) ? (
+        <EditRubricClient
+          rubricId={Number(rubricId)}
+          initialData={toNormalRubric({
+            name: rubric.name,
+            description: rubric.description ?? null,
+            settings,
+            criteria: rubric.criteria.map((c) => ({
+              id: c.id,
+              name: c.name,
+              description: c.description,
+              share: c.weight,
+              levels: c.levels,
+            })),
+          })}
+        />
+      ) : (
+        // Deliberately not opened in the editor anyway. `toNormalRubric` would
+        // hand it the DEFAULT band edges, which are not the ones its stored
+        // points were written against — so the editor would show a calibration
+        // this rubric has never used, and saving would apply it to everyone
+        // already graded.
+        <UnconvertedRubricNotice name={rubric.name} />
+      )}
     </PageContainer>
   );
 }
