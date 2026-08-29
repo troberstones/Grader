@@ -112,6 +112,26 @@ export class LayeredSource extends BitmapCacheSource implements LayeredFrameSour
     return out;
   }
 
+  /**
+   * Whether the current visibility state would show anything at all, ignoring
+   * whether the layer's raster has actually finished loading yet. Distinct
+   * from `layerStack(...).length > 0`, which also goes empty mid-load — the
+   * two need to be told apart so an in-flight fetch doesn't look the same as
+   * a reviewer who switched every layer off.
+   */
+  anyLayerVisible(visible: Record<string, boolean>, solo: string | null): boolean {
+    const m = this.manifestData;
+    if (!m) return false;
+    for (const layer of m.layers) {
+      if (layer.isGroup) continue;
+      const shown = solo
+        ? layer.id === solo
+        : (visible[layer.id] ?? layer.visible) && this.groupVisible(layer.parentId, visible, solo);
+      if (shown) return true;
+    }
+    return false;
+  }
+
   /** A layer inside a hidden group is hidden, however its own flag reads. */
   private groupVisible(
     parentId: string | null,
