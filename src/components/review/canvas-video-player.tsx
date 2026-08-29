@@ -14,13 +14,19 @@
  * There are NO CSS transforms anywhere in this component.  Pan and zoom are
  * applied exclusively via canvas/Fabric viewport transforms.
  *
- * Interaction model (Mac trackpad + iPad)
- * ───────────────────────────────────────
- *   Trackpad two-finger scroll (wheel, !ctrlKey)  → pan
- *   Trackpad pinch             (wheel, ctrlKey)   → zoom around cursor
+ * Interaction model (Mac trackpad + Windows mouse + iPad)
+ * ────────────────────────────────────────────────────────
+ *   Any wheel scroll, no ctrlKey (mouse notch or trackpad
+ *     two-finger scroll)                          → zoom around cursor
+ *   Trackpad pinch / Ctrl+wheel (wheel, ctrlKey)   → zoom around cursor
  *   iPad two-finger drag/pinch (touch events)     → combined pan + zoom, 1-to-1
  *   Space + mouse drag                            → pan (Figma-style)
  *   Alt/Option + mouse drag                       → frame scrub
+ *
+ * A plain Windows mouse wheel never sets ctrlKey, so wheel-to-zoom cannot
+ * depend on that flag — every wheel event zooms around the cursor. Panning
+ * without the wheel is still available via Space + drag, and on iPad via
+ * two-finger touch.
  *
  * Handle interface
  * ────────────────
@@ -739,30 +745,24 @@ export const CanvasVideoPlayer = forwardRef<
       const cx = e.clientX - rect.left - rect.width / 2;
       const cy = e.clientY - rect.top - rect.height / 2;
 
-      if (e.ctrlKey) {
-        // Trackpad pinch / Ctrl+scroll → zoom around cursor
-        const prevZoom = zoomRef.current;
-        const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prevZoom * Math.exp(-e.deltaY / 300)));
-        const ratio = newZoom / prevZoom;
-        const p = panRef.current;
-        // Keep the content point under the cursor stationary after zoom
-        const newPan = {
-          x: cx * (1 - ratio) + p.x * ratio,
-          y: cy * (1 - ratio) + p.y * ratio,
-        };
-        pendingInternalZoomRef.current = newZoom;
-        panRef.current = newPan;
-        setPan(newPan);
-        onZoomChange?.(newZoom);
-      } else {
-        // Two-finger scroll → pan
-        const newPan = {
-          x: panRef.current.x - e.deltaX,
-          y: panRef.current.y - e.deltaY,
-        };
-        panRef.current = newPan;
-        setPan(newPan);
-      }
+      // Every wheel event zooms around the cursor. A plain Windows mouse
+      // wheel never sets ctrlKey, so zoom must not gate on it — trackpad
+      // pinch (ctrlKey) just uses a different sensitivity than a bare wheel
+      // notch or trackpad two-finger scroll (no ctrlKey).
+      const prevZoom = zoomRef.current;
+      const sensitivity = e.ctrlKey ? 300 : 150;
+      const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prevZoom * Math.exp(-e.deltaY / sensitivity)));
+      const ratio = newZoom / prevZoom;
+      const p = panRef.current;
+      // Keep the content point under the cursor stationary after zoom
+      const newPan = {
+        x: cx * (1 - ratio) + p.x * ratio,
+        y: cy * (1 - ratio) + p.y * ratio,
+      };
+      pendingInternalZoomRef.current = newZoom;
+      panRef.current = newPan;
+      setPan(newPan);
+      onZoomChange?.(newZoom);
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
