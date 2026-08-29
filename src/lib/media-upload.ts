@@ -1,7 +1,21 @@
 "use client";
 
 import { SEQUENCE_FRAME_EXTENSIONS } from "./constants";
-import { uploadSubmission, uploadSubmissionSequence } from "@/actions/submissions";
+
+/**
+ * Posted to a Route Handler rather than called as a Server Action — Next's
+ * Server Actions body parser only honors the configured size limit for
+ * individual FormData field values, not the request as a whole, so a
+ * multi-frame sequence (or any file over ~10MB) fails outright. See the
+ * comment on the route itself.
+ */
+async function postFormData(fd: FormData): Promise<void> {
+  const res = await fetch("/api/submissions/direct-upload", { method: "POST", body: fd });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error ?? `Upload failed (${res.status}).`);
+  }
+}
 
 function extOf(name: string): string {
   const i = name.lastIndexOf(".");
@@ -26,10 +40,9 @@ function isOneSequence(files: File[]): boolean {
 }
 
 /**
- * Classifies a dropped/picked batch and writes it via the right server
- * action(s) — one shared sequence-vs-separate-pieces decision for every
- * upload surface (the empty-state drop zone, the "+ Add" control on an
- * existing playlist).
+ * Classifies a dropped/picked batch and posts it to the right shape — one
+ * shared sequence-vs-separate-pieces decision for every upload surface (the
+ * empty-state drop zone, the "+ Add" control on an existing playlist).
  */
 export async function uploadFiles(
   assignmentId: number,
@@ -45,7 +58,7 @@ export async function uploadFiles(
     fd.append("assignmentId", String(assignmentId));
     fd.append("studentId", String(studentId));
     for (const f of files) fd.append("files", f);
-    await uploadSubmissionSequence(fd);
+    await postFormData(fd);
     return;
   }
 
@@ -55,6 +68,6 @@ export async function uploadFiles(
     fd.append("assignmentId", String(assignmentId));
     fd.append("studentId", String(studentId));
     fd.append("file", files[i]);
-    await uploadSubmission(fd);
+    await postFormData(fd);
   }
 }
