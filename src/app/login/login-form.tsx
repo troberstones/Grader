@@ -54,6 +54,7 @@ export function LoginForm({ next }: { next: string }) {
           required
           autoFocus
           disabled={pending}
+          className="pr-8"
         />
       </div>
 
@@ -66,6 +67,7 @@ export function LoginForm({ next }: { next: string }) {
           autoComplete="current-password"
           required
           disabled={pending}
+          className="pr-8"
         />
       </div>
 
