@@ -48,6 +48,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Lock,
   Pause,
   Play,
   Repeat,
@@ -212,6 +213,19 @@ export const CanvasVideoPlayer = forwardRef<
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [panDragging, setPanDragging] = useState(false);
 
+  // ── Hold mode ────────────────────────────────────────────────────────────
+  // When on, drawing an annotation freezes the visible frame (playback keeps
+  // decoding/advancing underneath) until playback time reaches another frame
+  // that also has an annotation, at which point display jumps to it.
+  const [holdMode, setHoldMode] = useState(false);
+  const [holding, setHolding] = useState(false);
+  const holdModeRef = useRef(holdMode);
+  const holdingRef = useRef(false);
+  const heldFrameRef = useRef<number | null>(null);
+  /** Offscreen snapshot of the video image at the moment hold started. */
+  const heldCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => { holdModeRef.current = holdMode; }, [holdMode]);
+
   // ── Layout / transform state ────────────────────────────────────────────────
   const [videoSize, setVideoSize] = useState({ width: 0, height: 0 });
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -285,8 +299,46 @@ export const CanvasVideoPlayer = forwardRef<
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
     ctx.setTransform(t.scale, 0, 0, t.scale, t.tx, t.ty);
-    ctx.drawImage(video, 0, 0, videoSizeRef.current.width, videoSizeRef.current.height);
+    // While holding, keep painting the frozen snapshot instead of the (still
+    // advancing) live video frame — the underlying video keeps decoding.
+    const source = holdingRef.current && heldCanvasRef.current ? heldCanvasRef.current : video;
+    ctx.drawImage(source, 0, 0, videoSizeRef.current.width, videoSizeRef.current.height);
     ctx.restore();
+  }
+
+  // ── Hold mode helpers ─────────────────────────────────────────────────────
+  /** Snapshot the currently-displayed video image into an offscreen canvas. */
+  function captureHeldSnapshot() {
+    const video = hiddenVideoRef.current;
+    const vs = videoSizeRef.current;
+    if (!video || !vs.width || !vs.height) return;
+    let snap = heldCanvasRef.current;
+    if (!snap) {
+      snap = document.createElement("canvas");
+      heldCanvasRef.current = snap;
+    }
+    if (snap.width !== vs.width) snap.width = vs.width;
+    if (snap.height !== vs.height) snap.height = vs.height;
+    const ctx = snap.getContext("2d");
+    ctx?.drawImage(video, 0, 0, vs.width, vs.height);
+  }
+
+  /** Begin holding display at the frame currently on screen. */
+  function startHold() {
+    if (!holdModeRef.current || holdingRef.current) return;
+    heldFrameRef.current = lastFrameRef.current;
+    captureHeldSnapshot();
+    holdingRef.current = true;
+    setHolding(true);
+  }
+
+  /** Release hold — display resumes tracking the live video frame. */
+  function releaseHold() {
+    if (!holdingRef.current) return;
+    holdingRef.current = false;
+    heldFrameRef.current = null;
+    heldCanvasRef.current = null;
+    setHolding(false);
   }
 
   function stopRaf() {
@@ -327,6 +379,7 @@ export const CanvasVideoPlayer = forwardRef<
     seekToFrame: (frame: number) => {
       const v = hiddenVideoRef.current;
       if (!v) return;
+      releaseHold();
       v.currentTime = frame / fps;
     },
 
@@ -433,6 +486,7 @@ export const CanvasVideoPlayer = forwardRef<
     setPan({ x: 0, y: 0 });
     panRef.current = { x: 0, y: 0 };
     lastFrameRef.current = -1;
+    releaseHold();
     stopRaf();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src]);
@@ -544,8 +598,8 @@ export const CanvasVideoPlayer = forwardRef<
         path.setCoords?.();
         fc.renderAll();
       });
-      fc.on("object:added", () => { if (!suppressHistoryRef.current) onDirty(); });
-      fc.on("object:modified", () => { if (!suppressHistoryRef.current) onDirty(); });
+      fc.on("object:added", () => { if (!suppressHistoryRef.current) { onDirty(); startHold(); } });
+      fc.on("object:modified", () => { if (!suppressHistoryRef.current) { onDirty(); startHold(); } });
       fc.on("object:removed", () => { if (!suppressHistoryRef.current) onDirty(); });
 
       // If a loadFrame() call arrived before Fabric was ready, honour it now
@@ -954,8 +1008,22 @@ export const CanvasVideoPlayer = forwardRef<
     if (!v || scrubbing) return;
     const t = v.currentTime;
     setCurrentTime(t);
-    if (!playingRef.current) drawFrame();
     const frame = Math.round(t * fps);
+
+    if (holdingRef.current) {
+      // Display stays frozen; underlying playback keeps advancing. Only
+      // release once time reaches a *different* frame that itself has an
+      // annotation — that's the frame we jump display to.
+      if (frame !== heldFrameRef.current && annotatedFrames?.has(frame)) {
+        releaseHold();
+        lastFrameRef.current = frame;
+        onFrameChange?.(frame);
+        drawFrame();
+      }
+      return;
+    }
+
+    if (!playingRef.current) drawFrame();
     if (frame !== lastFrameRef.current) {
       lastFrameRef.current = frame;
       onFrameChange?.(frame);
@@ -986,6 +1054,7 @@ export const CanvasVideoPlayer = forwardRef<
   function stepFrame(delta: 1 | -1) {
     const v = hiddenVideoRef.current;
     if (!v) return;
+    releaseHold();
     v.pause(); setPlaying(false);
     const newTime = Math.max(0, Math.min(v.duration, v.currentTime + delta / fps));
     v.currentTime = newTime;
@@ -998,6 +1067,7 @@ export const CanvasVideoPlayer = forwardRef<
   function seekToStart() {
     const v = hiddenVideoRef.current;
     if (!v) return;
+    releaseHold();
     v.pause(); setPlaying(false);
     v.currentTime = 0; setCurrentTime(0);
     lastFrameRef.current = 0;
@@ -1007,6 +1077,7 @@ export const CanvasVideoPlayer = forwardRef<
   function seekToEnd() {
     const v = hiddenVideoRef.current;
     if (!v) return;
+    releaseHold();
     v.pause(); setPlaying(false);
     v.currentTime = v.duration;
   }
@@ -1015,6 +1086,7 @@ export const CanvasVideoPlayer = forwardRef<
     const v = hiddenVideoRef.current;
     if (!v) return;
     e.preventDefault();
+    releaseHold();
     v.pause(); setPlaying(false);
     altScrubStartRef.current = { x: e.clientX, time: v.currentTime };
     setAltScrubbing(true);
@@ -1037,6 +1109,7 @@ export const CanvasVideoPlayer = forwardRef<
       const el = timelineRef.current;
       const v = hiddenVideoRef.current;
       if (!el || !v || !isFinite(v.duration) || v.duration === 0) return;
+      releaseHold();
       const rect = el.getBoundingClientRect();
       const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
       const newTime = ratio * v.duration;
@@ -1287,6 +1360,28 @@ export const CanvasVideoPlayer = forwardRef<
           )}
 
           <button
+            onClick={() => {
+              const next = !holdMode;
+              setHoldMode(next);
+              if (!next) releaseHold();
+            }}
+            title={
+              holding
+                ? "Hold mode: frame held until playback reaches the next annotated frame"
+                : holdMode
+                ? "Hold mode on — drawing will freeze the frame"
+                : "Hold mode off — drawing doesn't freeze the frame"
+            }
+            className={cn(
+              "p-1 rounded transition-colors",
+              holdMode ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground",
+              holding && "animate-pulse",
+            )}
+          >
+            <Lock className="h-3.5 w-3.5" />
+          </button>
+
+          <button
             onClick={toggleLoop}
             title={loop ? "Loop on" : "Loop off"}
             className={cn(
@@ -1333,7 +1428,14 @@ export const CanvasVideoPlayer = forwardRef<
 
         {/* Timecode */}
         <div className="flex items-center justify-between text-xs text-muted-foreground tabular-nums">
-          <span>{formatTime(currentTime)}</span>
+          <span className="flex items-center gap-1.5">
+            {formatTime(currentTime)}
+            {holding && (
+              <span className="flex items-center gap-1 text-primary font-semibold">
+                <Lock className="h-3 w-3" /> held @ {heldFrameRef.current}
+              </span>
+            )}
+          </span>
           <span className="bg-muted px-2 py-0.5 rounded font-mono">
             frame {currentFrame} / {totalFrames}
           </span>
