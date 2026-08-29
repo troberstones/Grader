@@ -46,6 +46,10 @@ function rdpSimplify(
   return [pts[0], pts[pts.length - 1]];
 }
 
+// Opacity applied to highlighter strokes so they tint the artwork rather than
+// obscuring it, matching how a real highlighter marker behaves.
+const HIGHLIGHTER_OPACITY = 0.4;
+
 export interface AnnotationCanvasHandle {
   loadFrame: (json: string | null) => Promise<boolean>;
   getCurrentJSON: () => string | null;
@@ -173,14 +177,19 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCan
         canvas.freeDrawingBrush = brush;
 
         // Apply current tool immediately so drawing works without needing to toggle
-        canvas.isDrawingMode = toolRef.current === "pen";
+        canvas.isDrawingMode = toolRef.current === "pen" || toolRef.current === "highlighter";
         canvas.selection = toolRef.current === "select";
 
         // History events
         canvas.on("path:created", (e: any) => {
           onDirty();
-          // Simplify the path using Ramer–Douglas–Peucker (2.5px tolerance)
           const path = e.path;
+          // Highlighter strokes render with partial opacity so the artwork
+          // underneath stays visible, like a real highlighter marker.
+          if (toolRef.current === "highlighter" && path) {
+            path.set({ opacity: HIGHLIGHTER_OPACITY });
+          }
+          // Simplify the path using Ramer–Douglas–Peucker (2.5px tolerance)
           if (!path?.path || path.path.length < 4) return;
           // Extract the endpoint of every SVG command as the point set
           const pts: { x: number; y: number }[] = (path.path as any[][]).map((cmd) => ({
@@ -232,11 +241,11 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCan
       isDrawingShapeRef.current = false;
       activeShapeRef.current = null;
 
-      canvas.isDrawingMode = tool === "pen";
+      canvas.isDrawingMode = tool === "pen" || tool === "highlighter";
       canvas.selection = tool === "select";
       canvas.getObjects?.().forEach((obj: any) => { obj.selectable = tool === "select"; });
 
-      if (tool === "pen") {
+      if (tool === "pen" || tool === "highlighter") {
         if (canvas.freeDrawingBrush) {
           canvas.freeDrawingBrush.color = color;
           canvas.freeDrawingBrush.width = strokeWidth;

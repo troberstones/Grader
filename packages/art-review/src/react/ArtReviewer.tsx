@@ -48,6 +48,13 @@ export interface ArtReviewerProps {
   onPositionChange?: (itemIndex: number, frame: number) => void;
   /** Called after addItems/removeItem succeeds, so the host can re-fetch listItems. */
   onItemsChanged?: () => void;
+  /**
+   * Fires whenever the composition guide changes, including from a peer's
+   * broadcast. The module has no storage of its own — a host that wants the
+   * choice to outlive this session (e.g. localStorage) persists it here and
+   * feeds it back in via `initial`.
+   */
+  onGuidesChange?: (guides: GuideKind) => void;
 }
 
 const LASER_LIFETIME_MS = 1200;
@@ -72,6 +79,7 @@ export function ArtReviewer({
   headerSlot,
   onPositionChange,
   onItemsChanged,
+  onGuidesChange,
 }: ArtReviewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -393,6 +401,7 @@ export function ArtReviewer({
     () => onPositionChange?.(state.itemIndex, state.frame),
     [state.itemIndex, state.frame, onPositionChange],
   );
+  useEffect(() => onGuidesChange?.(state.guides), [state.guides, onGuidesChange]);
 
   const canControl = session.role !== "follower";
   const frameCount = item?.frameCount ?? 1;
@@ -1076,6 +1085,14 @@ export function ArtReviewer({
   ]);
 
   const manifest = source instanceof LayeredSource ? source.manifest() : null;
+  // Every layer switched off is not "nothing to draw" — it's a deliberate
+  // empty canvas, and it needs to look like one rather than like the layer
+  // toggles silently reverting to the flattened image.
+  const allLayersHidden =
+    !!manifest &&
+    !state.composite &&
+    source instanceof LayeredSource &&
+    !source.anyLayerVisible(state.layers, state.soloLayer);
   const hasPrev = prevMarker(annotations.annotatedFrames, state.frame) !== null;
   const hasNext = nextMarker(annotations.annotatedFrames, state.frame) !== null;
 
@@ -1209,6 +1226,7 @@ export function ArtReviewer({
             ref={glCanvasRef}
             style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
           />
+          {allLayersHidden && <Checkerboard />}
           {adapter.addItems && stageDragOver && (
             <div
               style={{
@@ -1470,6 +1488,30 @@ function MemoryReadout({ autoBytes, item }: { autoBytes: number; item: ReviewIte
         ))}
       </select>
     </span>
+  );
+}
+
+/**
+ * Photoshop's own "nothing here" tell: a mid-grey checkerboard, standing in
+ * for the transparency that hiding every layer actually leaves behind.
+ */
+function Checkerboard() {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        pointerEvents: "none",
+        backgroundImage:
+          "linear-gradient(45deg, #3a3a3a 25%, transparent 25%), " +
+          "linear-gradient(-45deg, #3a3a3a 25%, transparent 25%), " +
+          "linear-gradient(45deg, transparent 75%, #3a3a3a 75%), " +
+          "linear-gradient(-45deg, transparent 75%, #3a3a3a 75%)",
+        backgroundSize: "16px 16px",
+        backgroundPosition: "0 0, 0 8px, 8px -8px, -8px 0px",
+        backgroundColor: "#5a5a5a",
+      }}
+    />
   );
 }
 

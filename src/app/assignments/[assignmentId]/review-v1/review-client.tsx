@@ -20,6 +20,7 @@ import { AnnotationToolbar, type AnnotationTool } from "@/components/review/anno
 import { AnnotationCanvas, type AnnotationCanvasHandle } from "@/components/review/annotation-canvas";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/review/video-player";
 import { CanvasVideoPlayer, type CanvasVideoPlayerHandle } from "@/components/review/canvas-video-player";
+import { ToneAdjustPopover, toneCssFilter, DEFAULT_TONE, type ToneAdjust } from "@/components/review/tone-adjust";
 import { updateSubmissionMeta, type SubmissionRow } from "@/actions/submissions";
 import type { getAssignment } from "@/actions/assignments";
 
@@ -51,6 +52,9 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
   // shared flag before seekToFrame → onFrameChange had a chance to check it.
   const remoteSeekRef = useRef(false);   // guards onFrameChange re-broadcast
   const remotePlayRef = useRef(false);   // guards onPlayStateChange re-broadcast
+  // Tracks the active player's play/pause state so the global Space hotkey
+  // (which must work regardless of hover/focus) knows which way to toggle.
+  const isPlayingRef = useRef(false);
 
   // Master flag: only the master device broadcasts playback events.
   // Prevents race conditions when both devices try to sync simultaneously.
@@ -62,6 +66,7 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
   const [fileIndex, setFileIndex] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [tone, setTone] = useState<ToneAdjust>(DEFAULT_TONE);
   const [mediaSize, setMediaSize] = useState({ width: 0, height: 0 });
   /** A/B flag: false = original HTML player, true = canvas-transform player */
   const [useCanvasPlayer, setUseCanvasPlayer] = useState(false);
@@ -191,6 +196,7 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
   }
 
   function handlePlayStateChangeWithSync(playing: boolean) {
+    isPlayingRef.current = playing;
     if (remotePlayRef.current) {
       remotePlayRef.current = false;
       return;
@@ -335,7 +341,42 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
     await loadForSubmission(sub.id, frame);
   }
 
+  // Advances one media item in the flattened review queue: steps through the
+  // current student's files first, then rolls over into the next/previous
+  // student (landing on their last file when going backwards).
+  async function goToNextMedia() {
+    if (fileIndex < studentFiles.length - 1) {
+      await goToFile(fileIndex + 1);
+      return;
+    }
+    if (nextStudent) await handleStudentSelect(nextStudent.id);
+  }
+  async function goToPrevMedia() {
+    if (fileIndex > 0) {
+      await goToFile(fileIndex - 1);
+      return;
+    }
+    if (!prevStudent) return;
+    await flushCurrentFrame(submission?.id ?? null);
+    setSelectedStudentId(prevStudent.id);
+    const files = submissions[prevStudent.id] ?? [];
+    const lastIdx = Math.max(0, files.length - 1);
+    setFileIndex(lastIdx);
+    const sub = files[lastIdx] ?? null;
+    const frame = sub?.mediaType === "video" ? 0 : null;
+    setMediaSize({ width: 0, height: 0 });
+    await loadForSubmission(sub?.id ?? null, frame);
+  }
+
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
+  // Media viewer hover/focus — arrow-key scrubbing only applies while the
+  // viewer is hovered or contains focus, so arrows don't hijack scrubbing
+  // when the user is interacting with something else on the page. Space is
+  // deliberately exempt: it's the global play/pause key and always applies.
+  const mediaHoveredRef = useRef(false);
+  function isViewerActive() {
+    return mediaHoveredRef.current || (mediaAreaRef.current?.contains(document.activeElement) ?? false);
+  }
   const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
   useEffect(() => {
     keyHandlerRef.current = (e: KeyboardEvent) => {
@@ -354,16 +395,23 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
           if (nextStudent) handleStudentSelect(nextStudent.id);
           break;
         case "ArrowLeft":
-          if (!isVideo) break;
+          if (!isVideo || !isViewerActive()) break;
           e.preventDefault();
           if (e.shiftKey) goPrevAnnotation();
           else getVideoHandle()?.seekToFrame(Math.max(0, (currentFrame ?? 0) - 1));
           break;
         case "ArrowRight":
-          if (!isVideo) break;
+          if (!isVideo || !isViewerActive()) break;
           e.preventDefault();
           if (e.shiftKey) goNextAnnotation();
           else getVideoHandle()?.seekToFrame((currentFrame ?? 0) + 1);
+          break;
+        case " ":
+          // Global play/pause — always active, regardless of hover/focus.
+          if (!isVideo) break;
+          e.preventDefault();
+          if (isPlayingRef.current) getVideoHandle()?.pause();
+          else getVideoHandle()?.play();
           break;
         case ",":
           e.preventDefault();
@@ -372,6 +420,17 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
         case ".":
           e.preventDefault();
           void goToFile(fileIndex + 1);
+          break;
+        // "p"/"n" step through the flattened review queue (all files across
+        // all students), rolling over student boundaries. "[" and "]" were
+        // considered but are already bound to stroke-width adjustment below.
+        case "p":
+          e.preventDefault();
+          void goToPrevMedia();
+          break;
+        case "n":
+          e.preventDefault();
+          void goToNextMedia();
           break;
         case "[":
           setStrokeWidth((w) => Math.max(1, w - 1));
@@ -400,7 +459,12 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
   return (
     <div className="flex h-full">
       {/* ── Center: media viewer ───────────────────────────────────── */}
-      <div ref={mediaAreaRef} className="flex-1 min-w-0 flex flex-col overflow-hidden bg-muted/20">
+      <div
+        ref={mediaAreaRef}
+        className="flex-1 min-w-0 flex flex-col overflow-hidden bg-muted/20"
+        onMouseEnter={() => { mediaHoveredRef.current = true; }}
+        onMouseLeave={() => { mediaHoveredRef.current = false; }}
+      >
         {selectedStudent && (
           <>
             <StudentNavBar
@@ -470,6 +534,9 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
                     >
                       {useCanvasPlayer ? "Canvas" : "HTML5"}
                     </button>
+                    <div className="pl-1.5 border-l">
+                      <ToneAdjustPopover value={tone} onChange={setTone} />
+                    </div>
                   </div>
                 ) : undefined
               }
@@ -494,6 +561,7 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
                 strokeWidth={strokeWidth}
                 onDirty={markDirty}
                 onCanvasReady={handleCanvasReady}
+                tone={tone}
               />
             ) : useCanvasPlayer ? (
               <div className="flex-1 min-h-0">
@@ -518,6 +586,7 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
                   onFrameChange={handleFrameChangeWithSync}
                   onPlayStateChange={handlePlayStateChangeWithSync}
                   onReady={handleVideoReady}
+                  tone={tone}
                 />
               </div>
             ) : (
@@ -536,6 +605,7 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
                   onFrameChange={handleFrameChangeWithSync}
                   onPlayStateChange={handlePlayStateChangeWithSync}
                   onReady={handleVideoReady}
+                  tone={tone}
                   annotationOverlay={
                     mediaSize.width > 0 ? (
                       <AnnotationCanvas
@@ -595,6 +665,7 @@ function ImageViewer({
   strokeWidth,
   onDirty,
   onCanvasReady,
+  tone,
 }: {
   src: string;
   zoom: number;
@@ -605,6 +676,7 @@ function ImageViewer({
   strokeWidth: number;
   onDirty: () => void;
   onCanvasReady: () => void;
+  tone: ToneAdjust;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -720,7 +792,13 @@ function ImageViewer({
               <img
                 src={src}
                 alt="Student submission"
-                style={{ width: lw, height: lh, display: "block", userSelect: "none" }}
+                style={{
+                  width: lw,
+                  height: lh,
+                  display: "block",
+                  userSelect: "none",
+                  filter: toneCssFilter(tone),
+                }}
                 draggable={false}
                 onLoad={handleLoad}
               />

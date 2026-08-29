@@ -528,8 +528,12 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
 
       if (src instanceof LayeredSource && !st.composite && src.manifest()) {
         const stack = src.layerStack(st.layers, st.soloLayer);
-        if (stack.length) renderer.drawLayers(stack, 0);
-        else {
+        if (stack.length) {
+          renderer.drawLayers(stack, 0);
+        } else if (src.anyLayerVisible(st.layers, st.soloLayer)) {
+          // Something should be showing but its raster has not arrived yet
+          // (or, in composite-only mode, never will) — the flattened image is
+          // the right stand-in while that's true.
           const ref = src.peek(0);
           if (ref) {
             renderer.draw(`frame:${it.id}:0`, ref.tex, ref.version, {
@@ -537,6 +541,10 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
             });
           }
         }
+        // else: every layer is explicitly hidden. Leave the canvas as the
+        // frame's cleared background — the checkerboard placeholder the host
+        // component draws over it is what should read here, not the
+        // flattened composite pretending the toggles did nothing.
       } else {
         // Onion skin first, so the live frame sits on top.
         if (st.onionSkin > 0 && it.frameCount > 1) {

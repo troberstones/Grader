@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import {
   MousePointer2,
   Pencil,
+  Highlighter,
   Square,
   Circle,
   Type,
@@ -14,15 +15,16 @@ import {
   Save,
 } from "lucide-react";
 
-export type AnnotationTool = "select" | "pen" | "rect" | "circle" | "arrow" | "text";
+export type AnnotationTool = "select" | "pen" | "highlighter" | "rect" | "circle" | "arrow" | "text";
 
 const TOOLS: { id: AnnotationTool; icon: React.ReactNode; label: string }[] = [
-  { id: "select",  icon: <MousePointer2 className="h-4 w-4" />, label: "Select / Move" },
-  { id: "pen",     icon: <Pencil className="h-4 w-4" />,         label: "Freehand Pen" },
-  { id: "arrow",   icon: <MoveRight className="h-4 w-4" />,      label: "Arrow" },
-  { id: "rect",    icon: <Square className="h-4 w-4" />,         label: "Rectangle" },
-  { id: "circle",  icon: <Circle className="h-4 w-4" />,         label: "Circle" },
-  { id: "text",    icon: <Type className="h-4 w-4" />,           label: "Text" },
+  { id: "select",      icon: <MousePointer2 className="h-4 w-4" />, label: "Select / Move" },
+  { id: "pen",         icon: <Pencil className="h-4 w-4" />,         label: "Freehand Pen" },
+  { id: "highlighter", icon: <Highlighter className="h-4 w-4" />,   label: "Highlighter" },
+  { id: "arrow",       icon: <MoveRight className="h-4 w-4" />,      label: "Arrow" },
+  { id: "rect",        icon: <Square className="h-4 w-4" />,         label: "Rectangle" },
+  { id: "circle",      icon: <Circle className="h-4 w-4" />,         label: "Circle" },
+  { id: "text",        icon: <Type className="h-4 w-4" />,           label: "Text" },
 ];
 
 const COLORS = [

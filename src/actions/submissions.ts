@@ -2,6 +2,7 @@
 
 import path from "path";
 import fs from "fs/promises";
+import { after } from "next/server";
 import { db } from "@/db";
 import { submissions, reviewMedia } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
@@ -9,6 +10,7 @@ import { requireCapability } from "@/lib/auth/require";
 import { assignmentResource, submissionResource } from "@/lib/auth/resource-lookup";
 import { getSubmissionDir, getMediaType, getMimeType, ensureDir } from "@/lib/file-storage";
 import { MAX_FILE_SIZE, SEQUENCE_FRAME_EXTENSIONS } from "@/lib/constants";
+import { ensureIngested } from "@/actions/review";
 
 /** A single row from the submissions table, as returned by Drizzle. */
 export type SubmissionRow = typeof submissions.$inferSelect;
@@ -91,6 +93,7 @@ export async function uploadSubmission(formData: FormData) {
       )
     );
 
+  let submissionId: number;
   if (existing.length > 0) {
     if (existing[0].filePath !== relPath) {
       await fs.unlink(path.join(process.cwd(), existing[0].filePath)).catch(() => {});
@@ -107,17 +110,26 @@ export async function uploadSubmission(formData: FormData) {
       .where(eq(submissions.id, existing[0].id));
     // The old file's derivatives no longer match what's on disk.
     await db.delete(reviewMedia).where(eq(reviewMedia.submissionId, existing[0].id));
+    submissionId = existing[0].id;
   } else {
-    await db.insert(submissions).values({
-      assignmentId,
-      studentId,
-      filePath: relPath,
-      fileName: file.name,
-      fileType: getMimeType(file.name) ?? file.type,
-      fileSize: file.size,
-      mediaType,
-    });
+    const [inserted] = await db
+      .insert(submissions)
+      .values({
+        assignmentId,
+        studentId,
+        filePath: relPath,
+        fileName: file.name,
+        fileType: getMimeType(file.name) ?? file.type,
+        fileSize: file.size,
+        mediaType,
+      })
+      .returning({ id: submissions.id });
+    submissionId = inserted.id;
   }
+
+  // Ingest now, in the background, so review never pays for it later —
+  // ensureIngested() is a no-op if a review page already triggered it.
+  after(() => ensureIngested(submissionId).catch(() => {}));
 }
 
 /**
@@ -158,14 +170,21 @@ export async function uploadSubmissionSequence(formData: FormData) {
   }
 
   const relDir = path.join("storage", "submissions", String(assignmentId), String(studentId), name);
-  await db.insert(submissions).values({
-    assignmentId,
-    studentId,
-    filePath: relDir,
-    fileName: name,
-    fileType: "image/x-sequence",
-    fileSize: bytes,
-    mediaType: "image",
-    frameCount: files.length,
-  });
+  const [inserted] = await db
+    .insert(submissions)
+    .values({
+      assignmentId,
+      studentId,
+      filePath: relDir,
+      fileName: name,
+      fileType: "image/x-sequence",
+      fileSize: bytes,
+      mediaType: "image",
+      frameCount: files.length,
+    })
+    .returning({ id: submissions.id });
+
+  // Ingest now, in the background, so review never pays for it later —
+  // ensureIngested() is a no-op if a review page already triggered it.
+  after(() => ensureIngested(inserted.id).catch(() => {}));
 }
