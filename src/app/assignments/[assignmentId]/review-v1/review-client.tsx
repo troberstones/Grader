@@ -20,6 +20,7 @@ import { AnnotationToolbar, type AnnotationTool } from "@/components/review/anno
 import { AnnotationCanvas, type AnnotationCanvasHandle } from "@/components/review/annotation-canvas";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/review/video-player";
 import { CanvasVideoPlayer, type CanvasVideoPlayerHandle } from "@/components/review/canvas-video-player";
+import { ToneAdjustPopover, toneCssFilter, DEFAULT_TONE, type ToneAdjust } from "@/components/review/tone-adjust";
 import { updateSubmissionMeta, type SubmissionRow } from "@/actions/submissions";
 import type { getAssignment } from "@/actions/assignments";
 
@@ -62,6 +63,7 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
   const [fileIndex, setFileIndex] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [tone, setTone] = useState<ToneAdjust>(DEFAULT_TONE);
   const [mediaSize, setMediaSize] = useState({ width: 0, height: 0 });
   /** A/B flag: false = original HTML player, true = canvas-transform player */
   const [useCanvasPlayer, setUseCanvasPlayer] = useState(false);
@@ -470,6 +472,9 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
                     >
                       {useCanvasPlayer ? "Canvas" : "HTML5"}
                     </button>
+                    <div className="pl-1.5 border-l">
+                      <ToneAdjustPopover value={tone} onChange={setTone} />
+                    </div>
                   </div>
                 ) : undefined
               }
@@ -494,6 +499,7 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
                 strokeWidth={strokeWidth}
                 onDirty={markDirty}
                 onCanvasReady={handleCanvasReady}
+                tone={tone}
               />
             ) : useCanvasPlayer ? (
               <div className="flex-1 min-h-0">
@@ -518,6 +524,7 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
                   onFrameChange={handleFrameChangeWithSync}
                   onPlayStateChange={handlePlayStateChangeWithSync}
                   onReady={handleVideoReady}
+                  tone={tone}
                 />
               </div>
             ) : (
@@ -536,6 +543,7 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
                   onFrameChange={handleFrameChangeWithSync}
                   onPlayStateChange={handlePlayStateChangeWithSync}
                   onReady={handleVideoReady}
+                  tone={tone}
                   annotationOverlay={
                     mediaSize.width > 0 ? (
                       <AnnotationCanvas
@@ -595,6 +603,7 @@ function ImageViewer({
   strokeWidth,
   onDirty,
   onCanvasReady,
+  tone,
 }: {
   src: string;
   zoom: number;
@@ -605,6 +614,7 @@ function ImageViewer({
   strokeWidth: number;
   onDirty: () => void;
   onCanvasReady: () => void;
+  tone: ToneAdjust;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -720,7 +730,13 @@ function ImageViewer({
               <img
                 src={src}
                 alt="Student submission"
-                style={{ width: lw, height: lh, display: "block", userSelect: "none" }}
+                style={{
+                  width: lw,
+                  height: lh,
+                  display: "block",
+                  userSelect: "none",
+                  filter: toneCssFilter(tone),
+                }}
                 draggable={false}
                 onLoad={handleLoad}
               />

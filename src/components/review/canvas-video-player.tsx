@@ -50,6 +50,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AnnotationTool } from "./annotation-toolbar";
+import { DEFAULT_TONE, toneCssFilter, type ToneAdjust } from "./tone-adjust";
 
 // ── Fabric loader (module-level cache) ────────────────────────────────────────
 let fabricCache: typeof import("fabric") | null = null;
@@ -132,6 +133,8 @@ interface CanvasVideoPlayerProps {
   onFrameChange?: (frame: number) => void;
   onPlayStateChange?: (playing: boolean) => void;
   onReady?: (width: number, height: number, duration: number, fps: number) => void;
+  /** Live brightness/contrast/gamma adjustment applied as a CSS filter. */
+  tone?: ToneAdjust;
 }
 
 const SPEEDS = [0.25, 0.5, 1, 1.5, 2];
@@ -161,6 +164,7 @@ export const CanvasVideoPlayer = forwardRef<
     onFrameChange,
     onPlayStateChange,
     onReady,
+    tone = DEFAULT_TONE,
   },
   ref,
 ) {
@@ -1148,7 +1152,7 @@ export const CanvasVideoPlayer = forwardRef<
           ref={displayCanvasRef}
           width={containerSize.width}
           height={containerSize.height}
-          style={{ position: "absolute", inset: 0, display: "block" }}
+          style={{ position: "absolute", inset: 0, display: "block", filter: toneCssFilter(tone) }}
         />
 
         {/*

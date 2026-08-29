@@ -22,6 +22,7 @@ import {
   ChevronsRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DEFAULT_TONE, toneCssFilter, type ToneAdjust } from "./tone-adjust";
 
 export interface VideoPlayerHandle {
   pause: () => void;
@@ -44,6 +45,8 @@ interface VideoPlayerProps {
   onFrameChange?: (frame: number) => void;
   onPlayStateChange?: (playing: boolean) => void;
   onReady?: (width: number, height: number, duration: number, fps: number) => void;
+  /** Live brightness/contrast/gamma adjustment applied as a CSS filter. */
+  tone?: ToneAdjust;
 }
 
 const SPEEDS = [0.25, 0.5, 1, 1.5, 2];
@@ -54,7 +57,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     src, fps: fpsProp = 30, zoom = 1, annotationOverlay,
     annotatedFrames, hasPrevAnnotation, hasNextAnnotation,
     onZoomChange, onPrevAnnotation, onNextAnnotation,
-    onFrameChange, onPlayStateChange, onReady,
+    onFrameChange, onPlayStateChange, onReady, tone = DEFAULT_TONE,
   }, ref) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const timelineRef = useRef<HTMLDivElement>(null);
@@ -447,6 +450,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
               height: scaledVH,
               display: "block",
               userSelect: "none",
+              filter: toneCssFilter(tone),
             } : { display: "none" }}
           />
 
