@@ -343,8 +343,7 @@ export function drawGuides(
   const m = mediaTransform(p);
   ctx.save();
   ctx.setTransform(m.a!, m.b!, m.c!, m.d!, m.e!, m.f!);
-  ctx.strokeStyle = "rgba(255,255,255,0.34)";
-  ctx.lineWidth = p.mediaWidth / 900 / Math.max(0.4, p.zoom);
+  const baseWidth = p.mediaWidth / 900 / Math.max(0.4, p.zoom);
   const W = p.mediaWidth;
   const H = p.mediaHeight;
 
@@ -368,22 +367,33 @@ export function drawGuides(
     }
   }
 
-  ctx.beginPath();
+  const path = new Path2D();
   for (const x of vlines) {
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, H);
+    path.moveTo(x, 0);
+    path.lineTo(x, H);
   }
   for (const y of hlines) {
-    ctx.moveTo(0, y);
-    ctx.lineTo(W, y);
+    path.moveTo(0, y);
+    path.lineTo(W, y);
   }
   if (kind === "diagonals") {
-    ctx.moveTo(0, 0);
-    ctx.lineTo(W, H);
-    ctx.moveTo(W, 0);
-    ctx.lineTo(0, H);
+    path.moveTo(0, 0);
+    path.lineTo(W, H);
+    path.moveTo(W, 0);
+    path.lineTo(0, H);
   }
-  ctx.stroke();
+
+  // A single fixed-colour line can blend into an image region of similar
+  // value (a white line vanishing over bright sky, say). Instead, cast the
+  // line as a dark casing stroke with a lighter stroke on top — like the
+  // brush cursor below, this reads against both light and dark artwork
+  // without needing to know which it's over.
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
+  ctx.lineWidth = baseWidth * 3;
+  ctx.stroke(path);
+  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+  ctx.lineWidth = baseWidth;
+  ctx.stroke(path);
   ctx.restore();
 }
 
