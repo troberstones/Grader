@@ -48,6 +48,13 @@ export interface ArtReviewerProps {
   onPositionChange?: (itemIndex: number, frame: number) => void;
   /** Called after addItems/removeItem succeeds, so the host can re-fetch listItems. */
   onItemsChanged?: () => void;
+  /**
+   * Fires whenever the composition guide changes, including from a peer's
+   * broadcast. The module has no storage of its own — a host that wants the
+   * choice to outlive this session (e.g. localStorage) persists it here and
+   * feeds it back in via `initial`.
+   */
+  onGuidesChange?: (guides: GuideKind) => void;
 }
 
 const LASER_LIFETIME_MS = 1200;
@@ -72,6 +79,7 @@ export function ArtReviewer({
   headerSlot,
   onPositionChange,
   onItemsChanged,
+  onGuidesChange,
 }: ArtReviewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -393,6 +401,7 @@ export function ArtReviewer({
     () => onPositionChange?.(state.itemIndex, state.frame),
     [state.itemIndex, state.frame, onPositionChange],
   );
+  useEffect(() => onGuidesChange?.(state.guides), [state.guides, onGuidesChange]);
 
   const canControl = session.role !== "follower";
   const frameCount = item?.frameCount ?? 1;
