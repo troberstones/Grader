@@ -51,6 +51,9 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
   // shared flag before seekToFrame → onFrameChange had a chance to check it.
   const remoteSeekRef = useRef(false);   // guards onFrameChange re-broadcast
   const remotePlayRef = useRef(false);   // guards onPlayStateChange re-broadcast
+  // Tracks the active player's play/pause state so the global Space hotkey
+  // (which must work regardless of hover/focus) knows which way to toggle.
+  const isPlayingRef = useRef(false);
 
   // Master flag: only the master device broadcasts playback events.
   // Prevents race conditions when both devices try to sync simultaneously.
@@ -191,6 +194,7 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
   }
 
   function handlePlayStateChangeWithSync(playing: boolean) {
+    isPlayingRef.current = playing;
     if (remotePlayRef.current) {
       remotePlayRef.current = false;
       return;
@@ -335,7 +339,42 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
     await loadForSubmission(sub.id, frame);
   }
 
+  // Advances one media item in the flattened review queue: steps through the
+  // current student's files first, then rolls over into the next/previous
+  // student (landing on their last file when going backwards).
+  async function goToNextMedia() {
+    if (fileIndex < studentFiles.length - 1) {
+      await goToFile(fileIndex + 1);
+      return;
+    }
+    if (nextStudent) await handleStudentSelect(nextStudent.id);
+  }
+  async function goToPrevMedia() {
+    if (fileIndex > 0) {
+      await goToFile(fileIndex - 1);
+      return;
+    }
+    if (!prevStudent) return;
+    await flushCurrentFrame(submission?.id ?? null);
+    setSelectedStudentId(prevStudent.id);
+    const files = submissions[prevStudent.id] ?? [];
+    const lastIdx = Math.max(0, files.length - 1);
+    setFileIndex(lastIdx);
+    const sub = files[lastIdx] ?? null;
+    const frame = sub?.mediaType === "video" ? 0 : null;
+    setMediaSize({ width: 0, height: 0 });
+    await loadForSubmission(sub?.id ?? null, frame);
+  }
+
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
+  // Media viewer hover/focus — arrow-key scrubbing only applies while the
+  // viewer is hovered or contains focus, so arrows don't hijack scrubbing
+  // when the user is interacting with something else on the page. Space is
+  // deliberately exempt: it's the global play/pause key and always applies.
+  const mediaHoveredRef = useRef(false);
+  function isViewerActive() {
+    return mediaHoveredRef.current || (mediaAreaRef.current?.contains(document.activeElement) ?? false);
+  }
   const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
   useEffect(() => {
     keyHandlerRef.current = (e: KeyboardEvent) => {
@@ -354,16 +393,23 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
           if (nextStudent) handleStudentSelect(nextStudent.id);
           break;
         case "ArrowLeft":
-          if (!isVideo) break;
+          if (!isVideo || !isViewerActive()) break;
           e.preventDefault();
           if (e.shiftKey) goPrevAnnotation();
           else getVideoHandle()?.seekToFrame(Math.max(0, (currentFrame ?? 0) - 1));
           break;
         case "ArrowRight":
-          if (!isVideo) break;
+          if (!isVideo || !isViewerActive()) break;
           e.preventDefault();
           if (e.shiftKey) goNextAnnotation();
           else getVideoHandle()?.seekToFrame((currentFrame ?? 0) + 1);
+          break;
+        case " ":
+          // Global play/pause — always active, regardless of hover/focus.
+          if (!isVideo) break;
+          e.preventDefault();
+          if (isPlayingRef.current) getVideoHandle()?.pause();
+          else getVideoHandle()?.play();
           break;
         case ",":
           e.preventDefault();
@@ -372,6 +418,17 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
         case ".":
           e.preventDefault();
           void goToFile(fileIndex + 1);
+          break;
+        // "p"/"n" step through the flattened review queue (all files across
+        // all students), rolling over student boundaries. "[" and "]" were
+        // considered but are already bound to stroke-width adjustment below.
+        case "p":
+          e.preventDefault();
+          void goToPrevMedia();
+          break;
+        case "n":
+          e.preventDefault();
+          void goToNextMedia();
           break;
         case "[":
           setStrokeWidth((w) => Math.max(1, w - 1));
@@ -400,7 +457,12 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
   return (
     <div className="flex h-full">
       {/* ── Center: media viewer ───────────────────────────────────── */}
-      <div ref={mediaAreaRef} className="flex-1 min-w-0 flex flex-col overflow-hidden bg-muted/20">
+      <div
+        ref={mediaAreaRef}
+        className="flex-1 min-w-0 flex flex-col overflow-hidden bg-muted/20"
+        onMouseEnter={() => { mediaHoveredRef.current = true; }}
+        onMouseLeave={() => { mediaHoveredRef.current = false; }}
+      >
         {selectedStudent && (
           <>
             <StudentNavBar
