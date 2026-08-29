@@ -109,8 +109,52 @@ function parseRange(header: string, size: number): { start: number; end: number 
   return { start, end: Math.min(end, size - 1) };
 }
 
+/**
+ * Node's `Readable.toWeb()` races when the client cancels mid-stream — very
+ * routine for video, which issues overlapping range requests as it seeks and
+ * cancels the previous one. If the underlying fs stream ends right as the
+ * consumer cancels, it can call `controller.close()`/`enqueue()` after the
+ * controller is already closed, throwing "Invalid state: Controller is
+ * already closed" as an uncaughtException (nothing listens for the stream's
+ * own "error" event in that path). Bridge by hand instead, guarding every
+ * controller call so a race never becomes an unhandled throw.
+ */
 function toWeb(stream: Readable): ReadableStream<Uint8Array> {
-  return Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>;
+  let closed = false;
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      stream.on("data", (chunk: Buffer) => {
+        if (closed) return;
+        try {
+          controller.enqueue(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+        } catch {
+          closed = true;
+        }
+      });
+      stream.on("end", () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // Already closed by a concurrent cancel — nothing left to do.
+        }
+      });
+      stream.on("error", (err) => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.error(err);
+        } catch {
+          // Already closed by a concurrent cancel — nothing left to do.
+        }
+      });
+    },
+    cancel() {
+      closed = true;
+      stream.destroy();
+    },
+  });
 }
 
 function sanitise(name: string): string {
