@@ -9,8 +9,13 @@ interface Props {
   studentId: number;
   studentName: string;
   submissionType: "image" | "video" | "any";
-  /** Called once every dropped/picked file has been written and its row inserted. */
-  onUploaded: () => void;
+  /**
+   * Called once every dropped/picked file has been written and its row
+   * inserted, with the id of each — ingest (the slow part for video) is
+   * still running in the background at this point. See listReviewItems(),
+   * which blocks on it and is what this triggers a refetch into.
+   */
+  onUploaded: (submissionIds: number[]) => void;
 }
 
 /** Flattens a drop, including whole folders, into a plain file list. */
@@ -59,8 +64,8 @@ export function MediaDropZone({ assignmentId, studentId, studentName, submission
     setError(null);
     setStatus("uploading");
     try {
-      await uploadFiles(assignmentId, studentId, files, setProgress);
-      onUploaded();
+      const submissionIds = await uploadFiles(assignmentId, studentId, files, setProgress);
+      onUploaded(submissionIds);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed.");
       setStatus("idle");

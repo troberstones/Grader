@@ -14,6 +14,7 @@ import { RubricDock } from "@/components/rubric/rubric-dock";
 import { MediaDropZone } from "@/components/review/media-drop-zone";
 import { useReviewChannel } from "@/lib/review-channel";
 import { uploadFiles } from "@/lib/media-upload";
+import { useIngestProgress } from "@/lib/use-ingest-progress";
 import type { getAssignment } from "@/actions/assignments";
 import { deleteSubmission } from "@/actions/submissions";
 import {
@@ -84,6 +85,11 @@ export function ReviewClient({ assignment, author }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  // Populated by MediaDropZone right after upload, so "Preparing media…"
+  // below can show what's actually happening instead of sitting mute for
+  // however long the video transcode takes.
+  const [ingestingIds, setIngestingIds] = useState<number[]>([]);
+  const ingestProgress = useIngestProgress(loading ? ingestingIds : []);
   // Read once: the module owns the live value for the rest of the session,
   // and only tells us when it changes (see handleGuidesChange below). A
   // remount per student (ArtReviewer's `key={contextId}`) should keep
@@ -172,7 +178,7 @@ export function ReviewClient({ assignment, author }: Props) {
   const viewer = !selectedStudentId ? (
     <Centered>Select a student to begin the review.</Centered>
   ) : loading ? (
-    <Centered>Preparing media for {student?.name ?? "student"}…</Centered>
+    <Centered>{ingestProgress ?? `Preparing media for ${student?.name ?? "student"}…`}</Centered>
   ) : error ? (
     <Centered tone="error">{error}</Centered>
   ) : items.length === 0 && selectedStudentId ? (
@@ -181,7 +187,10 @@ export function ReviewClient({ assignment, author }: Props) {
       studentId={selectedStudentId}
       studentName={student?.name ?? "this student"}
       submissionType={assignment.submissionType as "image" | "video" | "any"}
-      onUploaded={() => setRefreshKey((k) => k + 1)}
+      onUploaded={(submissionIds) => {
+        setIngestingIds(submissionIds);
+        setRefreshKey((k) => k + 1);
+      }}
     />
   ) : !channel ? null : (
     <ArtReviewer

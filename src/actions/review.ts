@@ -9,6 +9,7 @@ import type { FrameMarker, ReviewItem } from "@grader/art-review";
 import { requireCapability } from "@/lib/auth/require";
 import { GLOBAL } from "@/lib/auth/roles";
 import { assignmentResource, submissionResource } from "@/lib/auth/resource-lookup";
+import { publishIngestProgress } from "@/lib/ingest-progress";
 
 /**
  * Server side of ReviewDataAdapter.
@@ -84,6 +85,7 @@ export async function ensureIngested(submissionId: number): Promise<void> {
         baseName,
         maxWidth: 1920,
         allIntra: true,
+        onProgress: (stage, pct) => publishIngestProgress(submissionId, stage, pct),
       });
 
       const relative = (p: string) => path.relative(process.cwd(), p);

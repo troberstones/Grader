@@ -35,15 +35,16 @@ export async function POST(request: NextRequest) {
     const files = formData.getAll("files").filter((f): f is File => f instanceof File);
     const singleFile = formData.get("file");
 
+    let submissionId: number;
     if (files.length > 0) {
-      await uploadSequence(assignmentId, studentId, files);
+      submissionId = await uploadSequence(assignmentId, studentId, files);
     } else if (singleFile instanceof File) {
-      await uploadSingle(assignmentId, studentId, singleFile);
+      submissionId = await uploadSingle(assignmentId, studentId, singleFile);
     } else {
       return NextResponse.json({ error: "Missing required fields." }, { status: 400 });
     }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, submissionId });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Upload failed.";
     const status =
@@ -56,7 +57,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function uploadSingle(assignmentId: number, studentId: number, file: File) {
+async function uploadSingle(assignmentId: number, studentId: number, file: File): Promise<number> {
   if (!assignmentId || !studentId) throw new Error("Missing required fields.");
 
   await requireCapability("course.edit", await assignmentResource(assignmentId));
@@ -121,9 +122,10 @@ async function uploadSingle(assignmentId: number, studentId: number, file: File)
   // Ingest now, in the background, so review never pays for it later —
   // ensureIngested() is a no-op if a review page already triggered it.
   after(() => ensureIngested(submissionId).catch(() => {}));
+  return submissionId;
 }
 
-async function uploadSequence(assignmentId: number, studentId: number, files: File[]) {
+async function uploadSequence(assignmentId: number, studentId: number, files: File[]): Promise<number> {
   if (!assignmentId || !studentId || files.length < 2) {
     throw new Error("A sequence needs at least two numbered frames.");
   }
@@ -167,4 +169,5 @@ async function uploadSequence(assignmentId: number, studentId: number, files: Fi
   // Ingest now, in the background, so review never pays for it later —
   // ensureIngested() is a no-op if a review page already triggered it.
   after(() => ensureIngested(inserted.id).catch(() => {}));
+  return inserted.id;
 }

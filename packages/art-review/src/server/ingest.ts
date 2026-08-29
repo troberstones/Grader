@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -6,6 +6,56 @@ import { floatsToRgbe, RGBE_TRANSFER } from "../core/rgbe";
 import type { DecodedExr } from "./exr";
 
 const run = promisify(execFile);
+
+/**
+ * Runs ffmpeg with `-progress pipe:1`, reporting 0-100 against `totalSeconds`
+ * as `out_time_ms` lines arrive. Falls back to a bare run (no progress calls)
+ * when `onProgress` isn't given, since parsing progress lines is pointless
+ * overhead for e.g. the smoke test and any future caller that doesn't need it.
+ */
+function runFfmpeg(
+  ffmpeg: string,
+  args: string[],
+  totalSeconds: number,
+  onProgress?: (stage: string, pct?: number) => void,
+  stage = "Generating preview",
+): Promise<void> {
+  if (!onProgress) {
+    return run(ffmpeg, ["-y", ...args], { maxBuffer: 16 * 1024 * 1024 }).then(() => undefined);
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffmpeg, ["-y", "-progress", "pipe:1", "-nostats", ...args]);
+    let stderr = "";
+    let buffered = "";
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      buffered += chunk.toString("utf8");
+      const lines = buffered.split("\n");
+      buffered = lines.pop() ?? "";
+      for (const line of lines) {
+        const eq = line.indexOf("=");
+        if (eq === -1) continue;
+        const key = line.slice(0, eq);
+        const value = line.slice(eq + 1);
+        if (key === "out_time_ms" && totalSeconds > 0) {
+          const pct = Math.min(99, Math.max(0, Math.round((Number(value) / 1_000_000 / totalSeconds) * 100)));
+          onProgress(stage, pct);
+        } else if (key === "progress" && value === "end") {
+          onProgress(stage, 100);
+        }
+      }
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${ffmpeg} exited ${code}: ${stderr.slice(-2000)}`));
+    });
+  });
+}
 
 /**
  * Ingest: never ask the browser to decode an arbitrary file.
@@ -64,6 +114,8 @@ export interface IngestOptions {
   ffprobePath?: string;
   /** Skip work when the derivative already exists. */
   force?: boolean;
+  /** Reports a short human-readable stage label, and 0-100 where progress is measurable (video transcode only). */
+  onProgress?: (stage: string, pct?: number) => void;
 }
 
 const VIDEO_EXT = new Set([".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpg", ".mpeg"]);
@@ -175,7 +227,6 @@ export async function makeVideoProxy(
   }
 
   const args = [
-    "-y",
     "-i", input,
     "-map", "0:v:0",
     "-c:v", "libx264",
@@ -193,7 +244,8 @@ export async function makeVideoProxy(
   else args.push("-an");
   args.push(out);
 
-  await run(ffmpeg, args, { maxBuffer: 16 * 1024 * 1024 });
+  opts.onProgress?.("Generating preview", 0);
+  await runFfmpeg(ffmpeg, args, info.duration, opts.onProgress, "Generating preview");
   return proxyDerivative(out, info, maxWidth);
 }
 
@@ -226,6 +278,7 @@ export async function makePoster(
   if (!opts.force && (await exists(out))) {
     return { variant: "poster", idx: 0, path: out, mime: "image/jpeg" };
   }
+  opts.onProgress?.("Generating thumbnail");
   try {
     await run(ffmpeg, [
       "-y", "-i", input,
@@ -525,6 +578,7 @@ export async function ingestFile(
   const kind = classify(fileName);
 
   if (kind === "video") {
+    opts.onProgress?.("Reading video");
     const info = await probe(input, opts.ffprobePath);
     const proxy = await makeVideoProxy(input, { ...opts, probe: info });
     const poster = await makePoster(input, opts);

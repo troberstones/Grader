@@ -9,12 +9,11 @@ import { SEQUENCE_FRAME_EXTENSIONS } from "./constants";
  * multi-frame sequence (or any file over ~10MB) fails outright. See the
  * comment on the route itself.
  */
-async function postFormData(fd: FormData): Promise<void> {
+async function postFormData(fd: FormData): Promise<number> {
   const res = await fetch("/api/submissions/direct-upload", { method: "POST", body: fd });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new Error(body?.error ?? `Upload failed (${res.status}).`);
-  }
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(body?.error ?? `Upload failed (${res.status}).`);
+  return body.submissionId as number;
 }
 
 function extOf(name: string): string {
@@ -43,14 +42,19 @@ function isOneSequence(files: File[]): boolean {
  * Classifies a dropped/picked batch and posts it to the right shape — one
  * shared sequence-vs-separate-pieces decision for every upload surface (the
  * empty-state drop zone, the "+ Add" control on an existing playlist).
+ *
+ * Returns the id of every submission row created, in upload order, so a
+ * caller can subscribe to /api/review/ingest-progress/{id} and keep showing
+ * something after the upload itself finishes — the transcode that follows
+ * is the slow part for video and otherwise looks identical to a stall.
  */
 export async function uploadFiles(
   assignmentId: number,
   studentId: number,
   files: File[],
   onProgress?: (label: string) => void,
-): Promise<void> {
-  if (files.length === 0) return;
+): Promise<number[]> {
+  if (files.length === 0) return [];
 
   if (isOneSequence(files)) {
     onProgress?.(`Uploading ${files.length} frames…`);
@@ -58,16 +62,17 @@ export async function uploadFiles(
     fd.append("assignmentId", String(assignmentId));
     fd.append("studentId", String(studentId));
     for (const f of files) fd.append("files", f);
-    await postFormData(fd);
-    return;
+    return [await postFormData(fd)];
   }
 
+  const submissionIds: number[] = [];
   for (let i = 0; i < files.length; i++) {
     onProgress?.(files.length > 1 ? `Uploading ${i + 1} of ${files.length}…` : "Uploading…");
     const fd = new FormData();
     fd.append("assignmentId", String(assignmentId));
     fd.append("studentId", String(studentId));
     fd.append("file", files[i]);
-    await postFormData(fd);
+    submissionIds.push(await postFormData(fd));
   }
+  return submissionIds;
 }
