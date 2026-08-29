@@ -81,15 +81,7 @@ broken. Nothing reads it — every script and `src/db/index.ts` resolve
 
 ---
 
-## Time-sensitive, verify before believing
-
-At the time of writing the main checkout had **uncommitted work from another
-session** — student hotkeys and a sync-pause fix in
-`src/components/shared/grading-shell.tsx`, plus an untracked
-`src/app/api/submissions/direct-upload/`. That file is contended: it also
-carries review mode's nav and badge changes. If it is still dirty when you
-arrive, read it from disk before editing, and do not reconstruct it from
-memory of either change.
+## Note
 
 `scripts/mint-reset-link.mjs` exists for one situation: the only administrator
 is locked out and so cannot use `/admin/users` to issue their own reset link.
