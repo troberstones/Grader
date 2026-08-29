@@ -14,23 +14,33 @@ import { useEffect, useRef } from "react";
  * and ignores messages that arrive with its own id. A `remoteChangeRef` flag
  * also suppresses the re-broadcast that would otherwise happen when a remote
  * change triggers a local state update.
+ *
+ * `paused` is the same flag the WifiOff toggle in GradingShell puts on the
+ * global nav/playback bus (see GlobalSyncProvider) — passed in here too so
+ * that toggle actually stops *all* cross-device sync, not just navigation.
+ * Mirrors GlobalSyncProvider's own paused handling: drop incoming events and
+ * skip outgoing POSTs, don't queue anything to replay on resume.
  */
 export function useSync(
   assignmentId: number,
   selectedStudentId: number | null,
   selectStudent: (id: number) => void,
+  paused: boolean,
 ) {
   const clientId = useRef(Math.random().toString(36).slice(2));
   const prevStudentId = useRef(selectedStudentId);
   // Set to true when selectStudent is called due to a remote event, so the
   // subsequent state-change effect does not echo it back.
   const remoteChangeRef = useRef(false);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
 
   // ── Subscribe to the SSE stream ─────────────────────────────────────────
   useEffect(() => {
     const es = new EventSource(`/api/sync/${assignmentId}`);
 
     es.onmessage = (event) => {
+      if (pausedRef.current) return;
       try {
         const { studentId, sender } = JSON.parse(event.data) as {
           studentId: number;
@@ -63,6 +73,8 @@ export function useSync(
       remoteChangeRef.current = false;
       return;
     }
+
+    if (pausedRef.current) return;
 
     fetch(`/api/sync/${assignmentId}`, {
       method: "POST",

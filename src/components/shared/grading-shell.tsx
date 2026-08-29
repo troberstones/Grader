@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { isGradingRoute } from "@/lib/grading-routes";
 import Link from "next/link";
@@ -61,6 +61,7 @@ export function GradingShell({
       initialStudentId={initialStudentId}
     >
       <SyncBridge assignmentId={assignmentId} />
+      <StudentHotkeys />
       <ViewLayoutProvider>
         <div className="flex flex-col h-full">
           {/* Hamburger row */}
@@ -85,7 +86,38 @@ export function GradingShell({
 /** Rendered inside GradingProvider so it can access context. */
 function SyncBridge({ assignmentId }: { assignmentId: number }) {
   const { selectedStudentId, selectStudent } = useGrading();
-  useSync(assignmentId, selectedStudentId, selectStudent);
+  const { paused } = useGlobalSync();
+  useSync(assignmentId, selectedStudentId, selectStudent, paused);
+  return null;
+}
+
+/**
+ * ↑/↓ move to the previous/next student — StudentNavBar's arrow buttons have
+ * advertised this in their tooltips all along, but nothing ever registered the
+ * listener (the only place it existed was the retired review-v1 page). Lives
+ * here, next to SyncBridge, so it works from both the grade sheet and the
+ * review page without either needing to know about the other.
+ */
+function StudentHotkeys() {
+  const { students, selectedStudentId, selectStudent } = useGrading();
+
+  useEffect(() => {
+    function handler(e: KeyboardEvent) {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      const el = e.target as HTMLElement;
+      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
+
+      const idx = students.findIndex((s) => s.id === selectedStudentId);
+      if (idx < 0) return;
+      const target = e.key === "ArrowUp" ? students[idx - 1] : students[idx + 1];
+      if (!target) return;
+      e.preventDefault();
+      selectStudent(target.id);
+    }
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [students, selectedStudentId, selectStudent]);
+
   return null;
 }
 
