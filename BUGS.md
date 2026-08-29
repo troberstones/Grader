@@ -5,6 +5,57 @@ deleting it once fixed and verified.
 
 ---
 
+## Video proxies fail to open in Chrome — root cause found, fix in place, needs live verification
+
+Some uploaded videos never play back in the reviewer — Chrome reports
+`FFmpegDemuxer: open context failed` (`video error 4` /
+`MEDIA_ERR_SRC_NOT_SUPPORTED`), even though `ffprobe` reads the same
+file as a perfectly normal H.264/MP4. Two false leads got ruled out
+along the way (worth keeping in mind if this ever looks similar
+again): it isn't file corruption (regenerating the proxy from scratch
+produces a byte-identical file that fails the same way), and it isn't
+a Chrome version regression (the proxy plays fine when *fully
+downloaded first* — local `file://`, or fetched to a Blob then handed
+to a `<video>` — in the very same Chrome that fails on a live
+streaming load from the server).
+
+**Actual root cause: the all-intra proxy encode (`-g 1`, every frame a
+keyframe) bloats file size 3-6x, and Chrome's native `<video>` element
+loads the whole thing as one open-ended Range request. On a real
+(non-LAN) connection a large proxy — 328MB for a 3.4-minute clip in
+one repro — stalls or times out mid-transfer, which Chrome reports as
+a generic demuxer error rather than a network failure.** Confirmed via
+server-side request logging during a live reproduction: the small
+(8.9MB) proxy usually got through in one shot, the large (328MB) one
+took a long time and then failed, with a retry resuming partway
+through rather than restarting — classic stalled-transfer behavior.
+Also confirmed serving the *original* file directly (already H.264,
+no proxy) loaded with no error, cementing that the container itself
+was never the problem.
+
+**Fix applied:**
+- `makeVideoProxy()` now uses a ~1-second keyframe interval instead of
+  every-frame, cutting proxy size dramatically while keeping scrub
+  latency imperceptible (`packages/art-review/src/server/ingest.ts`)
+- Ingest now runs eagerly right after upload (`after()` in
+  `uploadSubmission()`/`uploadSubmissionSequence()`,
+  `src/actions/submissions.ts`) instead of lazily on first review-page
+  open, so review sessions never wait on a transcode
+- One genuinely unrelated bug found and fixed along the way: an
+  uncaught-exception race in the Range-serving stream (`toWeb()` in
+  `range.ts`) that could corrupt/abort in-flight video responses under
+  normal scrubbing — confirmed gone from server logs after the fix
+
+**Not yet done:** regenerate both test proxies with the new GOP
+setting and confirm live playback on `cs-1017245.cs.byu.edu` (Kate
+Brown / Trevor Ely, assignment 2) before closing this out.
+
+Likely files:
+- [packages/art-review/src/server/ingest.ts](packages/art-review/src/server/ingest.ts) — `makeVideoProxy()`, keyframe interval
+- [packages/art-review/src/server/range.ts](packages/art-review/src/server/range.ts) — `toWeb()`, the stream-race fix
+- [src/actions/submissions.ts](src/actions/submissions.ts) — eager `ensureIngested()` on upload
+- [src/actions/review.ts](src/actions/review.ts) — `ensureIngested()`
+
 ## Professor separation: seeing other professors' courses
 
 **Priority: security/data leak — investigate first.** Logging in as one

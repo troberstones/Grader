@@ -73,8 +73,6 @@ export async function serveFile(
   }
 
   const { start, end } = parsed;
-  // TEMP DEBUG — remove once the Chrome streaming-demux failure is root-caused.
-  console.log(`[range-debug] ${request.method} ${absolutePath} range=${rangeHeader} -> ${start}-${end}/${size} (${end - start + 1} bytes)`);
   return new Response(toWeb(createReadStream(absolutePath, { start, end })), {
     status: 206,
     headers: {

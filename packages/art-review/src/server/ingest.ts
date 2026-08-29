@@ -49,7 +49,16 @@ export interface IngestOptions {
   baseName: string;
   /** Cap proxy resolution. */
   maxWidth?: number;
-  /** Encode every frame as a keyframe. Costs ~4× bitrate, buys free seeking. */
+  /**
+   * Keyframe roughly every second instead of ffmpeg's multi-second default,
+   * so scrubbing never has to decode far to land on an exact frame. A true
+   * all-intra encode (every frame a keyframe) was tried first and rejected:
+   * it multiplied bitrate 3-6x, and large proxies then failed to load in the
+   * browser under real network conditions (slow/stalled transfers reported
+   * as a generic demuxer error, not a size problem) — see BUGS.md. A ~1s
+   * keyframe interval keeps worst-case seek latency imperceptible (decode a
+   * few dozen frames, not a whole GOP) while keeping file size sane.
+   */
   allIntra?: boolean;
   ffmpegPath?: string;
   ffprobePath?: string;
@@ -138,12 +147,17 @@ async function exists(p: string): Promise<boolean> {
 }
 
 /**
- * Transcode to an all-intra H.264 proxy.
+ * Transcode to a scrub-friendly H.264 proxy.
  *
- * `-g 1` makes every frame a keyframe: decoding frame 87 no longer walks a GOP
- * from frame 60, reverse decode stops being a special case, and the <video>
- * fallback can seek exactly. Bitrate roughly quadruples, which is nothing on a
- * studio LAN and is why the original is always kept alongside.
+ * A short, fixed keyframe interval (~1s) means decoding frame 87 walks back
+ * at most a few dozen frames, not a whole multi-second GOP — reverse decode
+ * and the <video> fallback's exact-frame seeking both stay cheap. A true
+ * all-intra encode (every frame a keyframe, `-g 1`) was tried first: it
+ * quadrupled bitrate, and the resulting large proxies then failed to load in
+ * the browser over a real (non-LAN) network — a stalled/slow transfer of a
+ * multi-hundred-MB file surfaces as a generic demuxer error, not a timeout,
+ * which is exactly what made this look like file corruption at first. See
+ * BUGS.md for the investigation.
  */
 export async function makeVideoProxy(
   input: string,
@@ -171,7 +185,10 @@ export async function makeVideoProxy(
     "-vf", `scale='min(${maxWidth},iw)':-2:flags=lanczos`,
     "-movflags", "+faststart",
   ];
-  if (opts.allIntra !== false) args.push("-g", "1", "-bf", "0");
+  if (opts.allIntra !== false) {
+    const keyframeInterval = Math.max(1, Math.round(info.fps || 24));
+    args.push("-g", String(keyframeInterval), "-bf", "0");
+  }
   if (info.hasAudio) args.push("-map", "0:a:0?", "-c:a", "aac", "-b:a", "160k");
   else args.push("-an");
   args.push(out);
