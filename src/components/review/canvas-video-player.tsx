@@ -103,6 +103,10 @@ function rdpSimplify(
   return [pts[0], pts[pts.length - 1]];
 }
 
+// Opacity applied to highlighter strokes so they tint the video frame rather
+// than obscuring it, matching how a real highlighter marker behaves.
+const HIGHLIGHTER_OPACITY = 0.4;
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 export interface CanvasVideoPlayerHandle {
@@ -509,14 +513,19 @@ export const CanvasVideoPlayer = forwardRef<
       brush.color = colorRef.current;
       brush.width = strokeWidthRef.current;
       fc.freeDrawingBrush = brush;
-      fc.isDrawingMode = toolRef.current === "pen";
+      fc.isDrawingMode = toolRef.current === "pen" || toolRef.current === "highlighter";
       fc.selection = toolRef.current === "select";
 
       // History / dirty events
       fc.on("path:created", (e: any) => {
         onDirty();
-        // RDP simplification
         const path = e.path;
+        // Highlighter strokes render with partial opacity so the artwork
+        // underneath stays visible, like a real highlighter marker.
+        if (toolRef.current === "highlighter" && path) {
+          path.set({ opacity: HIGHLIGHTER_OPACITY });
+        }
+        // RDP simplification
         if (!path?.path || path.path.length < 4) return;
         const pts: { x: number; y: number }[] = (path.path as any[][]).map((cmd) => ({
           x: cmd[cmd.length - 2] as number,
@@ -579,11 +588,11 @@ export const CanvasVideoPlayer = forwardRef<
     isDrawingShapeRef.current = false;
     activeShapeRef.current = null;
 
-    fc.isDrawingMode = tool === "pen";
+    fc.isDrawingMode = tool === "pen" || tool === "highlighter";
     fc.selection = tool === "select";
     fc.getObjects?.().forEach((obj: any) => { obj.selectable = tool === "select"; });
 
-    if (tool === "pen") {
+    if (tool === "pen" || tool === "highlighter") {
       if (fc.freeDrawingBrush) {
         fc.freeDrawingBrush.color = color;
         fc.freeDrawingBrush.width = strokeWidth;
