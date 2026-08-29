@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArtReviewer,
+  type GuideKind,
   type ReviewDataAdapter,
   type ReviewItem,
 } from "@grader/art-review";
@@ -26,6 +27,14 @@ import {
 } from "@/actions/review";
 
 type Assignment = NonNullable<Awaited<ReturnType<typeof getAssignment>>>;
+
+const GUIDES_STORAGE_KEY = "grader.guides";
+
+function loadStoredGuides(): GuideKind | undefined {
+  if (typeof window === "undefined") return undefined;
+  const stored = window.localStorage.getItem(GUIDES_STORAGE_KEY);
+  return stored ? (stored as GuideKind) : undefined;
+}
 
 interface Props {
   assignment: Assignment;
@@ -75,6 +84,14 @@ export function ReviewClient({ assignment, author }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  // Read once: the module owns the live value for the rest of the session,
+  // and only tells us when it changes (see handleGuidesChange below). A
+  // remount per student (ArtReviewer's `key={contextId}`) should keep
+  // whatever the student before left it on, not snap back to this.
+  const [initialGuides] = useState<GuideKind | undefined>(loadStoredGuides);
+  const handleGuidesChange = useCallback((guides: GuideKind) => {
+    window.localStorage.setItem(GUIDES_STORAGE_KEY, guides);
+  }, []);
 
   const contextId = useMemo(
     () => (selectedStudentId ? `assignment:${assignmentId}:student:${selectedStudentId}` : null),
@@ -177,6 +194,8 @@ export function ReviewClient({ assignment, author }: Props) {
       author={author}
       contextId={contextId!}
       onItemsChanged={() => setRefreshKey((k) => k + 1)}
+      initial={initialGuides ? { guides: initialGuides } : undefined}
+      onGuidesChange={handleGuidesChange}
       pdfWorkerUrl="/pdf.worker.min.mjs"
       headerSlot={
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
