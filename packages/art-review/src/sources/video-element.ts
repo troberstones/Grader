@@ -39,7 +39,18 @@ export class VideoElementSource implements FrameSource {
 
     const v = document.createElement("video");
     v.src = item.url;
-    v.preload = "auto";
+    /*
+     * `metadata`, not `auto`.
+     *
+     * `auto` invites the browser to fetch the whole clip before anyone has
+     * asked to play it. On a lecture-length proxy that is ~150 MB pulled over
+     * the studio link to show one frame, and it competes with the very range
+     * requests that seeking needs — the difference between a frame in a second
+     * and a black rectangle for a minute. Review seeks far more than it plays,
+     * so take the metadata now and let playback and seeking pull what they
+     * actually need.
+     */
+    v.preload = "metadata";
     v.playsInline = true;
     v.crossOrigin = "anonymous";
     // Only one host in the room should make noise; the viewer un-mutes the
@@ -90,7 +101,15 @@ export class VideoElementSource implements FrameSource {
         };
         this.video.addEventListener("loadeddata", ok);
         this.video.addEventListener("error", bad);
-        this.video.load();
+        /*
+         * Setting `src` in the constructor already started this load. Calling
+         * load() again does not nudge it along — it resets the element,
+         * abandons whatever has been fetched and issues the request a second
+         * time, so the opening of the clip is downloaded twice before the
+         * first frame can appear. Only (re)start when there is nothing in
+         * flight, which is the case after dispose() clears the src.
+         */
+        if (!this.video.currentSrc && !this.video.getAttribute("src")) this.video.load();
       });
     }
     return this.loadedPromise;
