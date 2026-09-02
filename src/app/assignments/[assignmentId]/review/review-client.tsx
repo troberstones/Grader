@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArtReviewer,
   type GuideKind,
@@ -109,19 +109,45 @@ export function ReviewClient({ assignment, author }: Props) {
   // events for one student never drive another's review.
   const channel = useReviewChannel(contextId);
 
+  /**
+   * Playlists already fetched this session, by contextId.
+   *
+   * Coming back to a student must not put a "Preparing media…" card over
+   * artwork that has been ready on disk for days. The cached playlist paints
+   * immediately and the refetch below revalidates underneath it, so the only
+   * time the viewer is ever blocked is when there is genuinely nothing to
+   * show yet — a student opened for the first time, or one whose upload is
+   * still being transcoded (which invalidate() forces back into that state).
+   */
+  const playlists = useRef(new Map<string, ReviewItem[]>());
+  /** Refetch, still showing what is on screen while it runs. */
+  const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+  /** Refetch from nothing, so the wait shows ingest progress. */
+  const invalidate = useCallback(
+    (id: string | null) => {
+      if (id) playlists.current.delete(id);
+      refresh();
+    },
+    [refresh],
+  );
+
   useEffect(() => {
     if (!contextId) {
       setItems([]);
       return;
     }
     let cancelled = false;
-    setLoading(true);
+    const cached = playlists.current.get(contextId);
+    setItems(cached ?? []);
+    setLoading(!cached);
     setError(null);
-    // First open of a submission transcodes an all-intra proxy, so this can
-    // take a few seconds; afterwards the derivatives are on disk.
+    // First open of a submission transcodes a proxy, so this can take a few
+    // seconds; afterwards the derivatives are on disk and this is a read.
     listReviewItems(contextId)
       .then((next) => {
-        if (!cancelled) setItems(next);
+        if (cancelled) return;
+        playlists.current.set(contextId, next);
+        setItems(next);
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : "failed to load media");
@@ -175,6 +201,44 @@ export function ReviewClient({ assignment, author }: Props) {
 
   const student = students.find((s) => s.id === selectedStudentId);
 
+  /**
+   * Which piece of a student's playlist was open, by contextId.
+   *
+   * Seeded from `?item=` so a reload lands on the same artwork rather than
+   * snapping back to the first, and kept up to date afterwards so stepping
+   * away to another student and back does the same. ArtReviewer reads it only
+   * at mount (it remounts per student via `key`), which is exactly when this
+   * needs to be right.
+   */
+  const [openItem] = useState(() => {
+    const seed = new Map<string, number>();
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const studentId = Number(params.get("studentId"));
+      const itemIndex = Number(params.get("item"));
+      if (Number.isInteger(studentId) && studentId > 0 && Number.isInteger(itemIndex) && itemIndex > 0) {
+        seed.set(`assignment:${assignmentId}:student:${studentId}`, itemIndex);
+      }
+    }
+    return seed;
+  });
+
+  const handlePositionChange = useCallback(
+    (itemIndex: number) => {
+      if (!contextId) return;
+      if (openItem.get(contextId) === itemIndex) return; // also fires per frame while playing
+      openItem.set(contextId, itemIndex);
+      const url = new URL(window.location.href);
+      if (itemIndex > 0) url.searchParams.set("item", String(itemIndex));
+      else url.searchParams.delete("item");
+      // replaceState, not router.replace: this is a bookmark of where you are,
+      // and a Next navigation here would refetch the route on every step
+      // through a playlist.
+      window.history.replaceState(window.history.state, "", url);
+    },
+    [contextId, openItem],
+  );
+
   const viewer = !selectedStudentId ? (
     <Centered>Select a student to begin the review.</Centered>
   ) : loading ? (
@@ -189,7 +253,9 @@ export function ReviewClient({ assignment, author }: Props) {
       submissionType={assignment.submissionType as "image" | "video" | "any"}
       onUploaded={(submissionIds) => {
         setIngestingIds(submissionIds);
-        setRefreshKey((k) => k + 1);
+        // Drop the cached (empty) playlist so the refetch blocks and shows
+        // real ingest progress rather than sitting on the drop zone.
+        invalidate(contextId);
       }}
     />
   ) : !channel ? null : (
@@ -202,8 +268,14 @@ export function ReviewClient({ assignment, author }: Props) {
       channel={channel}
       author={author}
       contextId={contextId!}
-      onItemsChanged={() => setRefreshKey((k) => k + 1)}
-      initial={initialGuides ? { guides: initialGuides } : undefined}
+      // Adding or removing a piece changes a playlist that is already on
+      // screen — refresh it in place rather than blanking the viewer.
+      onItemsChanged={refresh}
+      initial={{
+        ...(initialGuides ? { guides: initialGuides } : {}),
+        itemIndex: openItem.get(contextId!) ?? 0,
+      }}
+      onPositionChange={handlePositionChange}
       onGuidesChange={handleGuidesChange}
       pdfWorkerUrl="/pdf.worker.min.mjs"
       headerSlot={

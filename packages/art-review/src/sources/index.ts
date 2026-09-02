@@ -1,4 +1,4 @@
-import type { Budget } from "../core/budget";
+import { suitsFrameCache, type Budget } from "../core/budget";
 import type { ReviewItem } from "../core/types";
 import { DecodedVideoSource } from "./decoded-video";
 import { LayeredSource } from "./layered";
@@ -17,9 +17,10 @@ export { DecodedVideoSource } from "./decoded-video";
 /**
  * Pick an implementation for an item.
  *
- * The video branch is the interesting one: WebCodecs when available (Chrome,
- * Safari 16.4+, Firefox 130+), `<video>` otherwise. Both satisfy the same
- * interface, so nothing above this call knows which it got.
+ * The video branch is the interesting one. WebCodecs gets a clip short enough
+ * to be worth decoding whole (see suitsFrameCache); everything else — a long
+ * clip, or a browser without WebCodecs — streams through `<video>`. Both
+ * satisfy the same interface, so nothing above this call knows which it got.
  */
 export function createSource(
   item: ReviewItem,
@@ -38,7 +39,12 @@ export function createSource(
     case "sequence":
       return new SequenceSource(item, ctx);
     case "video":
-      if (!opts.forceElementVideo && DecodedVideoSource.supported && item.frameCount > 1) {
+      if (
+        !opts.forceElementVideo &&
+        DecodedVideoSource.supported &&
+        item.frameCount > 1 &&
+        suitsFrameCache(item)
+      ) {
         return new DecodedVideoSource(item, ctx, budget);
       }
       return new VideoElementSource(item);

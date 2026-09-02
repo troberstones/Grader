@@ -20,7 +20,7 @@ const {
 const { reduceViewer, initialStateFor } = require(path.join(OUT, "reducer.js"));
 const { DEFAULT_VIEWER_STATE } = require(path.join(OUT, "types.js"));
 const { ClockSync, projectFrame, needsResync } = require(path.join(OUT, "clock.js"));
-const { chooseCacheSize, BUDGETS, framesThatFit } = require(path.join(OUT, "budget.js"));
+const { chooseCacheSize, BUDGETS, framesThatFit, suitsFrameCache, MAX_CACHE_FRAMES, MAX_CACHE_SECONDS } = require(path.join(OUT, "budget.js"));
 const { isBroadcast, shouldApply } = require(path.join(OUT, "actions.js"));
 
 // ── fold: loop and bounce ─────────────────────────────────────────────────────
@@ -672,4 +672,39 @@ test("toSrgbMatrix: an ACES red lands outside the sRGB gamut", () => {
 test("toGl: row-major becomes the column-major order GL wants", () => {
   const gl = toGl([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   assert.deepEqual([...gl], [1, 4, 7, 2, 5, 8, 3, 6, 9]);
+});
+
+// ── source selection ──────────────────────────────────────────────────────────
+
+test("suitsFrameCache: a student's few-second render is worth decoding whole", () => {
+  // The common case, and the one the frame cache exists for: 5s at 24fps.
+  assert.equal(suitsFrameCache({ frameCount: 120, duration: 5 }), true);
+});
+
+test("suitsFrameCache: a lecture-length clip streams instead", () => {
+  // Measured from a real submission — a 3m24s interview whose proxy is 148.7 MB
+  // and 4,897 frames. Decoding that whole clip to keep ~1% of it near the
+  // playhead is what made video look broken: nothing on screen until the entire
+  // file had downloaded and every sample had been through the decoder.
+  assert.equal(suitsFrameCache({ frameCount: 4897, duration: 204.25 }), false);
+});
+
+test("suitsFrameCache: either limit alone is enough to send a clip to <video>", () => {
+  // Frames bound the decode pass, seconds bound the download. A high-fps short
+  // clip blows the first; a long slideshow-rate clip blows the second.
+  assert.equal(suitsFrameCache({ frameCount: MAX_CACHE_FRAMES + 1, duration: 10 }), false);
+  assert.equal(suitsFrameCache({ frameCount: 100, duration: MAX_CACHE_SECONDS + 1 }), false);
+  assert.equal(
+    suitsFrameCache({ frameCount: MAX_CACHE_FRAMES, duration: MAX_CACHE_SECONDS }),
+    true,
+    "the limits themselves are still allowed",
+  );
+});
+
+test("suitsFrameCache: missing metadata is treated as small, not as huge", () => {
+  // A still or a clip whose probe found no duration must not be pushed onto the
+  // <video> path by absent numbers — createSource's own frameCount > 1 guard is
+  // what keeps stills out, and nulls here mean "unknown", not "enormous".
+  assert.equal(suitsFrameCache({ frameCount: null, duration: null }), true);
+  assert.equal(suitsFrameCache({}), true);
 });

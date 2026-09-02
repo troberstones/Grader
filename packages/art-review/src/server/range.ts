@@ -129,7 +129,21 @@ function toWeb(stream: Readable): ReadableStream<Uint8Array> {
           controller.enqueue(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
         } catch {
           closed = true;
+          stream.destroy();
+          return;
         }
+        /*
+         * Read no further ahead than the client is taking.
+         *
+         * Attaching a `data` handler puts the stream in flowing mode, and
+         * enqueue() never blocks — so without this pause the whole range is
+         * pulled off disk into the queue as fast as the disk can serve it,
+         * regardless of how slowly the browser reads. A `<video>` opening a
+         * long clip asks for `bytes=0-`, so that is the entire file resident
+         * in memory, per request, per viewer: three iPads on a 150 MB proxy
+         * is most of a gigabyte held to deliver a few seconds of playback.
+         */
+        if ((controller.desiredSize ?? 1) <= 0) stream.pause();
       });
       stream.on("end", () => {
         if (closed) return;
@@ -149,6 +163,10 @@ function toWeb(stream: Readable): ReadableStream<Uint8Array> {
           // Already closed by a concurrent cancel — nothing left to do.
         }
       });
+    },
+    pull() {
+      // The consumer has room again — resume if the enqueue above paused us.
+      if (!closed) stream.resume();
     },
     cancel() {
       closed = true;

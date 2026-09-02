@@ -166,3 +166,38 @@ export function chooseCacheSize(
   const h = Math.max(180, Math.round(height * scale));
   return { width: w, height: h, fitsWholeClip: false, scale };
 }
+
+/**
+ * The up-front cost of the decoded frame cache, expressed as what it makes the
+ * viewer wait for before the first frame appears.
+ *
+ * DecodedVideoSource buys frame-exact scrubbing and reverse play, and pays for
+ * it twice before showing anything: it fetches the *entire* file into an
+ * ArrayBuffer (mp4box demuxes from one buffer, not a stream), then runs the
+ * decoder over every sample in the clip, keeping only the frames near the
+ * playhead. Both costs scale with the length of the clip, and neither is
+ * incremental — a long clip shows nothing at all until both finish.
+ *
+ * For a student's few-second render that is a fraction of a second and worth
+ * it. For a lecture-length clip it is neither: a 3m24s interview proxy is
+ * ~150 MB to download and ~4,900 frames to decode, to cache about 1% of itself
+ * and then re-decode on every seek. `<video>` streams that in Range requests
+ * and paints in about a second, which is why VideoElementSource exists as more
+ * than a no-WebCodecs fallback.
+ *
+ * So the two limits below are wait times, not memory: frames bound the decode
+ * pass, seconds bound the download. A clip over either goes to `<video>`.
+ */
+export const MAX_CACHE_FRAMES = 900;
+export const MAX_CACHE_SECONDS = 45;
+
+export function suitsFrameCache(clip: {
+  frameCount?: number | null;
+  duration?: number | null;
+}): boolean {
+  const frames = clip.frameCount ?? 0;
+  const seconds = clip.duration ?? 0;
+  if (frames > MAX_CACHE_FRAMES) return false;
+  if (seconds > MAX_CACHE_SECONDS) return false;
+  return true;
+}

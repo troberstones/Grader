@@ -62,6 +62,7 @@ export function GradingShell({
     >
       <SyncBridge assignmentId={assignmentId} />
       <StudentHotkeys />
+      <StudentUrlSync />
       <ViewLayoutProvider>
         <div className="flex flex-col h-full">
           {/* Hamburger row */}
@@ -117,6 +118,36 @@ function StudentHotkeys() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [students, selectedStudentId, selectStudent]);
+
+  return null;
+}
+
+/**
+ * Keeps `?studentId=` pointing at whoever is actually selected.
+ *
+ * GradingProvider has always *read* that param for its opening selection, but
+ * nothing ever wrote it, so a reload — the reflex when a video misbehaves —
+ * silently dropped you back on the first student in the roster. Writing it on
+ * every change makes reload and back/forward land where you were, and makes
+ * the address bar a shareable pointer to one student's work.
+ *
+ * replaceState rather than router.replace: this records where you are, and a
+ * Next navigation on every arrow-key step through a roster would refetch the
+ * route each time. Next's own history state is passed through untouched.
+ */
+function StudentUrlSync() {
+  const { selectedStudentId } = useGrading();
+
+  useEffect(() => {
+    if (selectedStudentId == null) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("studentId") === String(selectedStudentId)) return;
+    url.searchParams.set("studentId", String(selectedStudentId));
+    // A different student means a different playlist, so the item index that
+    // belongs to the old one must not survive into the new URL.
+    url.searchParams.delete("item");
+    window.history.replaceState(window.history.state, "", url);
+  }, [selectedStudentId]);
 
   return null;
 }
