@@ -118,21 +118,24 @@ Roughly in the order they'd matter if the tool left the studio:
    department visibility. See "What is already fenced off" below.
 
 6. **Sessions can still travel over plain HTTP.** The app now listens on both
-   (`server.mjs`): HTTPS on 3443 when `certs/` holds a key and certificate,
-   HTTP on 3000 always. HTTPS exists mainly because WebCodecs is withheld from
-   insecure contexts, so the review module's frame cache could never run —
-   confidentiality is a second benefit, not the reason it was built.
+   (`server.mjs`), on the same port: the department firewall in front of
+   cs-1017245 permits only 3000 — 3001, 3002, 3443, 8000, 8080, 8443 and 9000
+   were each bound on the host and each refused from off-box — so the listener
+   dispatches on the first byte of every connection, 0x16 meaning TLS. HTTPS
+   exists mainly because WebCodecs is withheld from insecure contexts, so the
+   review module's frame cache could never run; confidentiality is a second
+   benefit, not the reason it was built.
 
    Cookies stay `httpOnly` and `sameSite=lax` but **not** `secure`, and this is
    now a deliberate trade rather than an unavoidable one. A `secure` cookie is
    not sent over HTTP, so setting `SECURE_COOKIES=1` while the HTTP listener is
    up would sign out every device using it — which is exactly the device that
    could not accept the certificate in the first place. Cookies ignore port, so
-   one sign-in covers both origins, and a session minted over TLS is replayable
+   one sign-in covers both schemes, and a session minted over TLS is replayable
    over HTTP by anyone on the path.
 
-   Set `SECURE_COOKIES=1` **at the same time** as retiring the HTTP listener,
-   not before. Until then the honest statement is that TLS is available and
+   Set `SECURE_COOKIES=1` **at the same time** as refusing plaintext on the
+   port, not before. Until then the honest statement is that TLS is available and
    unenforced. Note also that `server.mjs` deliberately sends no HSTS: it would
    make the HTTP fallback unreachable, which is the one thing the fallback
    cannot be.
