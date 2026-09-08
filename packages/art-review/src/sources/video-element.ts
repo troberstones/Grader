@@ -32,7 +32,17 @@ export class VideoElementSource implements FrameSource {
   /** Signals to the viewer that this source owns the playhead while playing. */
   readonly drivesPlayhead = true;
 
-  constructor(readonly item: ReviewItem) {
+  /**
+   * @param why  Why the frame-cache path was not taken, for the timeline's
+   *   status tooltip. "streaming" on its own has been ambiguous in practice:
+   *   a long clip streams by design, whereas a whole site streaming every clip
+   *   means WebCodecs is missing — which on a self-hosted install is almost
+   *   always the origin being plain HTTP rather than HTTPS, and is fixable.
+   */
+  constructor(
+    readonly item: ReviewItem,
+    private readonly why?: string,
+  ) {
     this.width = item.width;
     this.height = item.height;
     this.frameCount = Math.max(1, item.frameCount);
@@ -231,6 +241,7 @@ export class VideoElementSource implements FrameSource {
       ranges: buffered,
       decoding: this.seekPending,
       error: this.error,
+      note: this.why,
     };
   }
 

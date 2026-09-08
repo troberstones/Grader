@@ -41,6 +41,14 @@ export interface CacheStats {
   ranges: [number, number][];
   decoding: boolean;
   error?: string;
+  /**
+   * Why this source is streaming rather than caching frames, when that is not
+   * self-evident. Surfaced as a tooltip on the timeline's status text: the
+   * indicator says "streaming" either because the clip is too long to cache or
+   * because the browser has no WebCodecs, and those call for opposite
+   * responses from whoever is running the review.
+   */
+  note?: string;
 }
 
 export interface FrameSource {

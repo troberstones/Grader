@@ -270,7 +270,17 @@ export function Timeline({
             <span style={{ color: C.faint }}> · {timecode(frame, fps)}</span>
           )}
         </span>
-        <span style={{ color: C.faint }}>
+        <span
+          style={{
+            color: C.faint,
+            // The status word alone cannot say why a clip is streaming, and
+            // the answer is sometimes actionable (serve over HTTPS) and
+            // sometimes just how it is (the clip is long). Keep the reason
+            // one hover away rather than spending timeline width on it.
+            cursor: stats?.note ? "help" : undefined,
+          }}
+          title={stats?.note}
+        >
           {stats && stats.total > 1 && stats.mode !== "n/a" && (
             <>
               {stats.mode === "full" && stats.cached >= stats.total

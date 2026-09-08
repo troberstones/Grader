@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "NODE_ENV=production node server.mjs",
     "lint": "eslint",
     "db:init": "node scripts/init-db.mjs",
     "db:backup": "node scripts/backup-db.mjs",

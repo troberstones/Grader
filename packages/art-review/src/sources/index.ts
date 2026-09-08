@@ -47,11 +47,34 @@ export function createSource(
       ) {
         return new DecodedVideoSource(item, ctx, budget);
       }
-      return new VideoElementSource(item);
+      return new VideoElementSource(item, streamingReason(item, opts));
     case "still":
     default:
       return new StillSource(item, ctx);
   }
+}
+
+/**
+ * Why a video is streaming through `<video>` instead of being decoded into the
+ * frame cache — shown as a tooltip on the timeline, because the two reasons
+ * want different things from the person running the review. A long clip is
+ * working as designed; a browser without WebCodecs means every clip in the
+ * course is streaming, and on a self-hosted install that is nearly always the
+ * page being served over HTTP, where the API is withheld from insecure
+ * contexts. Serving the same app over HTTPS turns it on with no other change.
+ */
+function streamingReason(
+  item: ReviewItem,
+  opts: { forceElementVideo?: boolean },
+): string | undefined {
+  if (item.frameCount <= 1) return undefined; // a one-frame "video" is a still
+  if (opts.forceElementVideo) return "frame cache turned off for this session";
+  if (!DecodedVideoSource.supported) {
+    return typeof isSecureContext !== "undefined" && !isSecureContext
+      ? "no frame cache: WebCodecs needs a secure context — open this over HTTPS"
+      : "no frame cache: this browser has no WebCodecs";
+  }
+  return "clip too long to cache; streaming it instead";
 }
 
 /**
@@ -72,6 +95,6 @@ export async function createSourceWithFallback(
   } catch (e) {
     primary.dispose();
     onFallback?.(e instanceof Error ? e.message : String(e));
-    return new VideoElementSource(item);
+    return new VideoElementSource(item, "decoding this clip failed; streaming it instead");
   }
 }

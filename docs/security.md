@@ -117,10 +117,25 @@ Roughly in the order they'd matter if the tool left the studio:
    (`src/lib/auth/roles.ts`), which — unlike `course.view` — never honors
    department visibility. See "What is already fenced off" below.
 
-6. **Sessions travel over plain HTTP.** Cookies are `httpOnly` and
-   `sameSite=lax` but not `secure`, because the studio LAN has no TLS and a
-   secure cookie would simply never be sent. Set `SECURE_COOKIES=1` when this
-   moves behind HTTPS — the flag is configuration, not a code change.
+6. **Sessions can still travel over plain HTTP.** The app now listens on both
+   (`server.mjs`): HTTPS on 3443 when `certs/` holds a key and certificate,
+   HTTP on 3000 always. HTTPS exists mainly because WebCodecs is withheld from
+   insecure contexts, so the review module's frame cache could never run —
+   confidentiality is a second benefit, not the reason it was built.
+
+   Cookies stay `httpOnly` and `sameSite=lax` but **not** `secure`, and this is
+   now a deliberate trade rather than an unavoidable one. A `secure` cookie is
+   not sent over HTTP, so setting `SECURE_COOKIES=1` while the HTTP listener is
+   up would sign out every device using it — which is exactly the device that
+   could not accept the certificate in the first place. Cookies ignore port, so
+   one sign-in covers both origins, and a session minted over TLS is replayable
+   over HTTP by anyone on the path.
+
+   Set `SECURE_COOKIES=1` **at the same time** as retiring the HTTP listener,
+   not before. Until then the honest statement is that TLS is available and
+   unenforced. Note also that `server.mjs` deliberately sends no HSTS: it would
+   make the HTTP fallback unreachable, which is the one thing the fallback
+   cannot be.
 
 7. **~~No rate limiting on sign-in.~~ Two layers now cover it.** See "What is
    already fenced off" below.

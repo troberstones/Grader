@@ -63,3 +63,7 @@ testData/**/*.webm
 
 # scratch SQLite DB built fresh by test/global-setup.ts (npm run test:auth)
 /test/.db/
+
+# TLS key/cert for server.mjs — generated per-host by scripts/make-cert.sh,
+# never shared between machines and never committed.
+/certs/
