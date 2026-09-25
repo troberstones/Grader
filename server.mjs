@@ -185,6 +185,21 @@ const http = createHttpServer(handle);
 const https = tlsServer();
 
 /*
+ * Node's default requestTimeout (5 minutes) kills any connection that
+ * hasn't finished a full request/response by then — including a large
+ * submission or EXR-sequence upload over the studio's slow upstream, which
+ * routinely runs past that. Uploads are bounded by disk space and patience,
+ * not a clock, so disable it. headersTimeout (just receiving the request
+ * line + headers) is left at a normal, finite value so a connection that
+ * opens and never finishes sending headers can't hold a slot indefinitely.
+ */
+for (const server of [http, https]) {
+  if (!server) continue;
+  server.requestTimeout = 0;
+  server.headersTimeout = 60_000;
+}
+
+/*
  * With no certificate there is nothing to disambiguate, so the HTTP server
  * takes the port directly. The multiplexer is not a permanent fixture the
  * fallback has to route through — it is only present when it has a job.

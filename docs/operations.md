@@ -328,3 +328,174 @@ Delete the `.pre-restore-*` files by hand once the restore is confirmed good.
 - **First run against a brand-new `BACKUP_DEST`** does a full copy of
   whatever's already in `storage/` — expect that one to take much longer
   than every night after it.
+
+## Deploy
+
+`./scripts/deploy-remote.sh` builds a new release in a staging copy on the
+server and only swaps it into the live app if the build and a post-restart
+health check both succeed. The live app keeps serving classes the entire
+time the build runs; a bad build never reaches it at all.
+
+```
+./scripts/deploy-remote.sh
+```
+
+Three directories on the server, all under `/work/cnh5`:
+
+- `grader` — the live app (`REMOTE_DIR`). `storage/`, `certs/`, and `.env*`
+  live only here and are never duplicated, overwritten, or deleted by any
+  step of the deploy.
+- `grader-staging` (`STAGING_DIR`) — the working tree is rsynced here, then
+  `npm ci` and `next build` run here, while `grader` keeps running unchanged.
+- `grader-previous` (`PREVIOUS_DIR`) — a full copy (code, `node_modules`,
+  `.next`) of whatever was live immediately before the last swap, kept for
+  rollback. Overwritten on every successful deploy, so it only ever holds one
+  generation back.
+
+What one run does, in order:
+
+1. Rsync the working tree to `grader-staging` (same excludes as before:
+   `.gitignore`, `.git`, `.claude`, `packages/*/node_modules`).
+2. `npm ci` and `npm run build` in `grader-staging`. **If either fails, the
+   script exits here and the live app is untouched** — nothing below this
+   point has happened yet.
+3. Snapshot the current live release into `grader-previous` (skipped on a
+   fresh install with nothing live yet).
+4. Stop `grader.service`.
+5. Back up the database (`node scripts/backup-db.mjs`, same as before).
+6. Migrate the *live* database using the *staging* copy's `scripts/migrate.mjs`
+   (so a new release's new migrations run), via
+   `DB_PATH=.../grader/storage/grader.db`.
+7. Swap `grader-staging`'s code, `node_modules`, and `.next` into `grader`
+   (rsync with `--delete`, excluding `storage/`, `certs/`, `.env*`).
+8. Reinstall `scripts/systemd/grader.service`, `daemon-reload`, and restart.
+9. Poll `GET /api/health` (see "Health & monitoring" below) for up to ~30s.
+   - Healthy: done. `grader-backup.service`/`.timer` are reinstalled and
+     (re-)enabled, same as the previous version of this script did.
+   - Not healthy: **automatically rolls back** — rsyncs `grader-previous` back
+     over `grader` and restarts. If that comes up healthy, the new release
+     never went live; if it doesn't either, the script says so and stops —
+     that's a "someone needs to look at this machine" situation, not one to
+     retry automatically.
+
+**The one thing a failed health check does *not* undo is the database
+migration** (step 6) — see "Rollback" below.
+
+`NODE_BIN` at the top of the script is the one source of truth for which
+Node install runs the app; `scripts/systemd/grader.service`'s `ExecStart`
+must be kept pointed at the same path by hand, since a systemd unit can't
+read a shell variable.
+
+### First deploy to a new host
+
+`scripts/deploy-remote.sh` assumes `grader.service` may not exist yet (it
+installs/enables it) but does assume `/work/cnh5` exists and `rsync`/`ssh`
+access is set up. It does not run `scripts/make-cert.sh` or create `.env.local`
+— do both by hand first (see "Certificates" below and `.env.example`), and run
+`loginctl enable-linger cnh5` once so `grader.service` and `grader-backup.timer`
+keep running without an active SSH session — see "Health & monitoring" and
+`scripts/systemd/grader.service`'s own comment for why.
+
+## Rollback
+
+Two ways a release stops being live again:
+
+- **Automatic**, inside `deploy-remote.sh` itself, when the post-restart
+  health check fails — see step 9 above. Nothing to run by hand.
+- **Manual**, any time later, for a release that passed its health check but
+  is still wrong in some way the health check can't see (a UI regression, a
+  feature that misbehaves only for a real class):
+
+  ```
+  ./scripts/rollback-remote.sh
+  ```
+
+  Restores `grader-previous` over `grader` (same excludes as the deploy
+  script: `storage/`, `certs/`, `.env*` untouched) and restarts, then waits
+  for `/api/health`. Since `grader-previous` is overwritten on every deploy,
+  this only ever goes back one release — there is no deeper history to roll
+  back through.
+
+**Neither rollback path undoes a database migration.** Every migration this
+app ships only adds tables/columns (see "Adding a migration" above), so old
+code ignores what a rolled-back-from release added and rollback is normally
+safe on its own. If a migration itself is the problem — bad data, a slow
+migration that locked the table, whatever — the fix is restoring the
+`storage/backups/` snapshot `scripts/backup-db.mjs` took immediately before
+that deploy's migration ran (see "Backup & restore"), not the rollback
+scripts here.
+
+## Health & monitoring
+
+`GET /api/health` — no authentication, returns nothing beyond ok/not-ok (no
+paths, versions, or counts, since nothing guards it):
+
+```
+200 {"ok": true}    — database reachable, storage disk has >= 2 GB free
+503 {"ok": false}   — either check failed
+```
+
+Checks a `SELECT 1` against the database and `fs.statfs` on the directory
+`storage/grader.db` (or `$DB_PATH`) lives in. Details of *why* it failed go
+to the server log (`journalctl --user -u grader`), not the response.
+
+Used by `deploy-remote.sh` and `rollback-remote.sh` after every restart
+(`curl -fsk https://localhost:$PORT/api/health`, falling back to `http://` if
+no certificate is installed); safe to also point an external uptime monitor
+at it, or to check by hand:
+
+```
+curl -sk https://cs-1017245.cs.byu.edu:3000/api/health
+```
+
+### Startup warnings
+
+Every time the server starts (`src/instrumentation.ts` → `src/lib/preflight.ts`,
+via Next's `register()` hook — runs under `server.mjs`'s custom server the
+same as it would under `next start`), it logs a warning to stdout/stderr for
+each of the following that's true, without refusing to start:
+
+- `APP_BASE_URL` unset — invite/reset/upload-link/feedback-link emails are
+  skipped.
+- No `SMTP_HOST` and no working local `sendmail` — no mail can be sent at
+  all.
+- `ffmpeg` (or `ffprobe`) not found on `PATH`/`FFMPEG_PATH` — feedback emails
+  lose annotated video frames, video ingest may fail.
+- `ALLOWED_EXTENSION_ORIGINS` unset — the LS Bridge extension can't upload.
+- No TLS certificate at `certs/server.key`/`certs/server.crt` (or the paths
+  `TLS_KEY`/`TLS_CERT` point at), or one that's expired or expires within 30
+  days.
+
+Check for these after every deploy and after any host change:
+
+```
+journalctl --user -u grader --since "5 minutes ago" | grep preflight
+```
+
+### Large uploads
+
+`server.mjs` sets `requestTimeout = 0` (no limit) and `headersTimeout = 60s`
+on both the HTTP and HTTPS servers it runs. Node's default `requestTimeout`
+(5 minutes) was killing large submission/EXR-sequence uploads over the
+studio's slow upstream partway through; `headersTimeout` stays finite so a
+connection that opens and never finishes sending headers can't hold a slot
+forever.
+
+## Certificates
+
+`scripts/make-cert.sh` generates the self-signed certificate `server.mjs`
+serves HTTPS with (see that script's own comment for the Apple-platform
+requirements it satisfies, and its file header for why HTTPS exists at all).
+`certs/` is gitignored and excluded from every rsync in `deploy-remote.sh` and
+`rollback-remote.sh`, so a certificate survives every deploy untouched.
+
+- Generate/replace: `./scripts/make-cert.sh [hostname] [--force]`, then
+  `systemctl --user restart grader.service`.
+- A missing or unreadable certificate is not fatal: `server.mjs` logs why and
+  falls back to HTTP-only rather than refusing to start (see its file
+  comment — this is deliberate, since HTTP must keep working for any device
+  that hasn't installed/trusted the certificate).
+- The preflight check above warns 30 days before expiry (and after) on every
+  server start, and `/api/health` still passes even with an expired
+  certificate, since the app itself is otherwise fine — it's read by whoever
+  reads the startup log, not enforced by health checks.
