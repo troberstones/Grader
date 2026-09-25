@@ -535,6 +535,24 @@ describe("updateShareRubric criteria identity", () => {
     expect(unchangedBalanceB.name).toBe("Balance");
   });
 
+  it("rejects the same id used twice in one payload", async () => {
+    await seedSignedInAdmin();
+    const { rubric, criteria } = await seedGradableShareRubric("Composition", ["Balance", "Craft"]);
+
+    await expect(
+      updateShareRubric(
+        rubric.id,
+        sharePayload("Composition", [
+          { id: criteria.Balance.id, name: "Balance" },
+          { id: criteria.Balance.id, name: "Craft" },
+        ]),
+      ),
+    ).rejects.toThrow(/repeats an id/);
+
+    const [craftRow] = await db.select().from(rubricCriteria).where(eq(rubricCriteria.id, criteria.Craft.id));
+    expect(craftRow.archived).toBe(0);
+  });
+
   it("still matches an id-less criterion to an existing row by name (back-compat with old clients/imports)", async () => {
     await seedSignedInAdmin();
     const { rubric, criteria } = await seedGradableShareRubric("Composition", ["Balance", "Craft"]);

@@ -212,12 +212,18 @@ export async function updateShareRubric(id: number, data: AuthoredRubric): Promi
     // identifies a row on *this* rubric. (The transaction would roll back
     // any partial writes anyway on a throw, but checking first means we
     // never attempt them.)
+    const seenIds = new Set<number>();
     for (const criterion of normal.criteria) {
-      if (criterion.id !== undefined && !existingById.has(criterion.id)) {
+      if (criterion.id === undefined) continue;
+      if (!existingById.has(criterion.id)) {
         throw new Error(
           `criterion "${criterion.name}" has an id (${criterion.id}) that does not belong to this rubric.`,
         );
       }
+      if (seenIds.has(criterion.id)) {
+        throw new Error(`criterion "${criterion.name}" repeats an id (${criterion.id}) already used in this rubric.`);
+      }
+      seenIds.add(criterion.id);
     }
 
     // Pre-claim every id match so the name fallback below only ever lands on
