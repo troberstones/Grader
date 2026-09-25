@@ -55,6 +55,11 @@ export PATH="$NODE_BIN:$PATH"
 
 cd "$STAGING_DIR"
 npm ci
+# `next build` opens the database at module-load time (src/db/index.ts), so
+# staging needs one of its own — same as CI. It's a throwaway: the swap
+# below excludes /storage, so it never reaches the live app.
+mkdir -p storage
+npm run db:init
 npm run build
 REMOTE_BUILD
 
