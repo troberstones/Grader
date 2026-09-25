@@ -354,17 +354,26 @@ fact.
 
 ## Backups
 
-`scripts/backup-db.mjs` runs daily via `grader-backup.timer` (installed by
-`scripts/deploy-remote.sh`), taking a `VACUUM INTO` snapshot into
-`storage/backups/` — same technique as the manual pre-migration snapshots
-already in `storage/` — and pruning anything older than 30 days.
+**Updated 2026-09-25.** `scripts/backup.mjs` now backs up the whole app, not
+just the database: a `VACUUM INTO` snapshot plus the upload tree
+(submissions/review/thumbnails) and config (`.env`, `.env.local`, `certs/`) —
+everything not reconstructible from the repo (`fd6ac84`). Deleted or
+overwritten media is kept in a nightly attic rather than lost outright, and a
+restore sets the live database aside instead of overwriting it blind
+(`42e8a5e`). See `docs/operations.md` § *Backup & restore* for the full
+design and how to run a restore drill.
 
-This protects against corruption, a bad migration, or an accidental delete.
-It does **not** protect against the host itself failing: `storage/backups/`
-is still local disk on the same machine as `storage/grader.db`, same caveat
-as the existing manual snapshots ("exists on one disk"). A real off-host
-backup is still worth doing before this holds anything nobody can afford to
-lose.
+**The off-host caveat is now conditional on configuration, not structural.**
+`BACKUP_DEST` accepts a local/mounted path or an `rsync`-over-`ssh` target
+(`user@host:/path`, `scripts/lib/backup-set.mjs`), so a real off-host backup
+is now something this can *do* — it still has to actually be pointed at one.
+Leaving `BACKUP_DEST` unset keeps the old same-disk-only behavior (with a
+loud warning), which is still exactly the exposure the previous version of
+this note described: `storage/backups/` on the same disk as
+`storage/grader.db` protects against corruption, a bad migration, or an
+accidental delete, but not against the host itself failing. Check
+`BACKUP_DEST` in whatever's actually configured on cs-1017245 before treating
+this as closed.
 
 ## Before this is exposed to anything but the studio LAN
 
