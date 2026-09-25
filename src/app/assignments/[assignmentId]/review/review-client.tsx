@@ -131,6 +131,23 @@ export function ReviewClient({ assignment, author }: Props) {
     [refresh],
   );
 
+  // Ingest progress is scoped to whichever upload triggered it. Left alone,
+  // switching students kept showing the previous student's "Preparing
+  // media…" log — or worse, applied it to the next student's genuinely empty
+  // playlist — because ingestingIds only ever grew, on upload, and nothing
+  // ever cleared it.
+  //
+  // Adjusted during render rather than in an effect — an extra render before
+  // paint is cheaper than the effect flash, and it means a Retry or
+  // invalidate() within the same student's session (which only changes
+  // refreshKey, not contextId) can't stomp on the ingest ids upload just set.
+  // See https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes.
+  const [ingestingIdsFor, setIngestingIdsFor] = useState(contextId);
+  if (ingestingIdsFor !== contextId) {
+    setIngestingIdsFor(contextId);
+    setIngestingIds([]);
+  }
+
   useEffect(() => {
     if (!contextId) {
       setItems([]);
@@ -244,7 +261,27 @@ export function ReviewClient({ assignment, author }: Props) {
   ) : loading ? (
     <Centered>{ingestProgress ?? `Preparing media for ${student?.name ?? "student"}…`}</Centered>
   ) : error ? (
-    <Centered tone="error">{error}</Centered>
+    <Centered tone="error">
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+        <span role="alert">{error}</span>
+        <button
+          type="button"
+          onClick={refresh}
+          style={{
+            font: "inherit",
+            fontSize: 12,
+            color: "#0e0e0e",
+            background: "#fca5a5",
+            border: "none",
+            borderRadius: 6,
+            padding: "6px 14px",
+            cursor: "pointer",
+          }}
+        >
+          Retry
+        </button>
+      </div>
+    </Centered>
   ) : items.length === 0 && selectedStudentId ? (
     <MediaDropZone
       assignmentId={assignmentId}

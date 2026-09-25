@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { floatsToRgbe, RGBE_TRANSFER } from "../core/rgbe";
 import type { DecodedExr } from "./exr";
+import { assertWithinImageLimits } from "./image-limits";
 
 const run = promisify(execFile);
 
@@ -354,12 +355,19 @@ export async function makeHdrPng(
 ): Promise<Derivative> {
   const sharp = (await import("sharp")).default;
   const { readFile } = await import("node:fs/promises");
-  const { decodeExr } = await import("./exr");
+  const { decodeExr, peekExrDimensions } = await import("./exr");
   await mkdir(opts.outDir, { recursive: true });
   const out = path.join(opts.outDir, `${opts.baseName}.rgbe.png`);
 
   const file = await readFile(input);
-  const exr = decodeExr(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength));
+  const raw = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
+  // Same reasoning as the PSD header check: the vendored decoder allocates the
+  // full-resolution float buffer as part of parse(), so a crafted or corrupt
+  // header claiming an enormous canvas has to be caught here, before parse()
+  // ever runs, not after.
+  const headerDims = peekExrDimensions(raw);
+  assertWithinImageLimits(headerDims.width, headerDims.height, "exr");
+  const exr = decodeExr(raw);
   const { width, height } = exr;
 
   if (!opts.force && (await exists(out))) {

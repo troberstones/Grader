@@ -1641,6 +1641,10 @@ function Centered({ children }: { children: React.ReactNode }) {
 function Notice({ children, tone }: { children: React.ReactNode; tone: "warn" | "error" }) {
   return (
     <div
+      // Assistive tech announces an error notice as soon as it appears —
+      // these render silently over the canvas otherwise, with nothing to
+      // point a screen reader at them.
+      role={tone === "error" ? "alert" : undefined}
       style={{
         position: "absolute",
         left: 12,

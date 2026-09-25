@@ -45,7 +45,15 @@ export const KEYMAP: KeyBinding[] = [
   { keys: "?", label: "This help", group: "Session" },
 ];
 
-/** True when focus is in a field, so shortcuts must not fire. */
+/**
+ * True when focus is on a field or a control, so shortcuts must not fire.
+ *
+ * Buttons matter here as much as text fields: Space is the browser's native
+ * "activate" key for a focused button, and the global Space handler below
+ * also toggles playback. Without this, tabbing to a toolbar button and
+ * pressing Space to press it would *also* start or stop playback underneath
+ * it — the keyup handler races the browser's own click-on-Space behavior.
+ */
 export function isTypingTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el) return false;
@@ -54,6 +62,8 @@ export function isTypingTarget(target: EventTarget | null): boolean {
     tag === "INPUT" ||
     tag === "TEXTAREA" ||
     tag === "SELECT" ||
+    tag === "BUTTON" ||
+    el.getAttribute("role") === "button" ||
     el.isContentEditable === true
   );
 }
