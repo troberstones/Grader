@@ -119,30 +119,46 @@ async function uploadSequence(assignmentId: number, studentId: number, files: Fi
   const dir = path.join(getSubmissionDir(assignmentId, studentId), name);
   await ensureDir(dir);
 
-  let bytes = 0;
-  for (const file of files) {
-    const safeName = path.basename(file.name).replace(/[^a-zA-Z0-9_.-]/g, "_");
-    await fs.writeFile(path.join(dir, safeName), Buffer.from(await file.arrayBuffer()));
-    bytes += file.size;
+  // `name` is time-stamped per request, so this directory is always new —
+  // if anything below fails, only the exact frame paths this request wrote
+  // need cleaning up, and the directory is then safely empty to remove.
+  const written: string[] = [];
+  try {
+    let bytes = 0;
+    for (const file of files) {
+      const safeName = path.basename(file.name).replace(/[^a-zA-Z0-9_.-]/g, "_");
+      const dest = path.join(dir, safeName);
+      await fs.writeFile(dest, Buffer.from(await file.arrayBuffer()));
+      written.push(dest);
+      bytes += file.size;
+    }
+
+    const relDir = path.join("storage", "submissions", String(assignmentId), String(studentId), name);
+    const [inserted] = await db
+      .insert(submissions)
+      .values({
+        assignmentId,
+        studentId,
+        filePath: relDir,
+        fileName: name,
+        fileType: "image/x-sequence",
+        fileSize: bytes,
+        mediaType: "image",
+        frameCount: files.length,
+      })
+      .returning({ id: submissions.id });
+
+    // Ingest now, in the background, so review never pays for it later —
+    // ensureIngested() is a no-op if a review page already triggered it.
+    after(() => ensureIngested(inserted.id).catch(() => {}));
+    return inserted.id;
+  } catch (err) {
+    // A write or the DB insert failed after some frames already landed on
+    // disk, with no submission row to ever point a later cleanup at them —
+    // remove exactly what this request wrote rather than leaving an orphan
+    // sequence directory behind.
+    await Promise.all(written.map((p) => fs.unlink(p).catch(() => {})));
+    await fs.rmdir(dir).catch(() => {});
+    throw err;
   }
-
-  const relDir = path.join("storage", "submissions", String(assignmentId), String(studentId), name);
-  const [inserted] = await db
-    .insert(submissions)
-    .values({
-      assignmentId,
-      studentId,
-      filePath: relDir,
-      fileName: name,
-      fileType: "image/x-sequence",
-      fileSize: bytes,
-      mediaType: "image",
-      frameCount: files.length,
-    })
-    .returning({ id: submissions.id });
-
-  // Ingest now, in the background, so review never pays for it later —
-  // ensureIngested() is a no-op if a review page already triggered it.
-  after(() => ensureIngested(inserted.id).catch(() => {}));
-  return inserted.id;
 }

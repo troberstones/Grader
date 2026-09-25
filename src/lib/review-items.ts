@@ -28,7 +28,12 @@ export async function buildReviewItems(
       .where(eq(reviewMedia.submissionId, sub.id))
       .orderBy(asc(reviewMedia.idx));
 
-    const failed = media.find((m) => m.status === "failed");
+    // A successful retry leaves this submission with ready rows; prefer
+    // those over any failed row that's still sitting around (ensureIngested
+    // clears failed rows when a retry starts, but this stays a defense for
+    // any data written before that guard existed, or a race between the two).
+    const hasReady = media.some((m) => m.status === "ready");
+    const failed = hasReady ? undefined : media.find((m) => m.status === "failed");
     if (failed) {
       // Do not hand a file we already know is broken to the viewer as if it
       // were an image — it just fails again as "could not be decoded", which
