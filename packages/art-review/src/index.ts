@@ -31,7 +31,7 @@ export {
   type WireStroke,
 } from "./core/actions";
 export { ClockSync, projectFrame, needsResync } from "./core/clock";
-export { BUDGETS, detectBudget, chooseCacheSize, frameBytes, framesThatFit, type Budget } from "./core/budget";
+export { BUDGETS, detectBudget, chooseCacheSize, frameBytes, framesThatFit, QUALITY_STEPS, type Budget, type VideoQuality } from "./core/budget";
 
 export { GLRenderer, parseCubeLut, type ViewParams } from "./render/gl";
 export * from "./render/overlay";

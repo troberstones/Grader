@@ -1,4 +1,5 @@
 import type { LayerInfo, LayerManifest, ReviewItem } from "../core/types";
+import type { VideoQuality } from "../core/budget";
 
 /**
  * Anything the renderer can turn into a texture.
@@ -114,6 +115,8 @@ export interface SourceContext {
   viewportWidth: number;
   /** Where the pdf.js worker lives. */
   pdfWorkerUrl: string;
+  /** Video cache resolution chosen in the player; absent means "auto". */
+  videoQuality?: VideoQuality;
 }
 
 export const DEFAULT_SOURCE_CONTEXT: SourceContext = {

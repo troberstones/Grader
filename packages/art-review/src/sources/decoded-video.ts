@@ -47,6 +47,20 @@ export class DecodedVideoSource implements FrameSource {
   private fitsWholeClip: boolean;
   private windowCenter = 0;
   private scratch: OffscreenCanvas | null = null;
+  /**
+   * The demuxed clip, kept only when the cache is below native so fullRes()
+   * can decode a sharp frame. Compressed, so it costs about the proxy file's
+   * size rather than a frame cache's; it is not charged to the ledger, which
+   * counts decoded frames.
+   */
+  private encoded: {
+    samples: import("mp4box").MP4Sample[];
+    config: VideoDecoderConfig;
+    /** Decode-order sample index for each presentation-order frame. */
+    order: number[];
+  } | null = null;
+  private sharp: { frame: number; bitmap: ImageBitmap } | null = null;
+  private sharpJob: { frame: number; promise: Promise<TexSource | null> } | null = null;
 
   private ledger: MemoryLedger;
 
@@ -66,12 +80,15 @@ export class DecodedVideoSource implements FrameSource {
     this.ledger = ledger ?? sharedLedger();
     this.offLedger = this.ledger.onChange(() => this.trim());
 
+    // Sized against the ledger's ceiling rather than the detected budget, so
+    // raising the cache by hand buys resolution and not just headroom.
     const choice = chooseCacheSize(
-      budget,
+      { ...budget, ram: this.ledger.bytesLimit },
       item.width,
       item.height,
       this.frameCount,
       ctx.viewportWidth,
+      ctx.videoQuality,
     );
     this.cacheWidth = choice.width;
     this.cacheHeight = choice.height;
@@ -175,14 +192,7 @@ export class DecodedVideoSource implements FrameSource {
 
     for (const s of samples) {
       if (this.disposed) break;
-      decoder.decode(
-        new EncodedVideoChunk({
-          type: s.is_sync ? "key" : "delta",
-          timestamp: (s.cts * 1_000_000) / s.timescale,
-          duration: (s.duration * 1_000_000) / s.timescale,
-          data: s.data,
-        }),
-      );
+      decoder.decode(toChunk(s));
       // Keep the decoder's output pool from filling: it stops emitting if too
       // many frames are outstanding, which reads as a silent hang.
       if (decoder.decodeQueueSize > 24) {
@@ -194,8 +204,14 @@ export class DecodedVideoSource implements FrameSource {
     decoder.close();
 
     // Drop the demuxed samples and the source buffer — together they are the
-    // size of the whole proxy file and nothing needs them once decoded.
-    samples.length = 0;
+    // size of the whole proxy file and nothing needs them once decoded, unless
+    // the cache is below native and a paused frame may want sharpening.
+    if (this.cacheWidth < this.width && !this.disposed) {
+      const order = samples.map((_, i) => i).sort((a, b) => samples[a].cts - samples[b].cts);
+      this.encoded = { samples, config, order };
+    } else {
+      samples.length = 0;
+    }
     file.stop();
 
     this.decoding = false;
@@ -379,8 +395,67 @@ export class DecodedVideoSource implements FrameSource {
     this.windowCenter = center;
   }
 
-  async fullRes(): Promise<TexSource | null> {
-    return null;
+  /**
+   * One frame at native resolution, for a paused frame when the cache holds
+   * the clip smaller. Decodes from the nearest keyframe before it with a
+   * decoder of its own — the ingest proxy puts a keyframe every second, so
+   * that is at most a second of frames. Only the latest frame is kept.
+   */
+  fullRes(frame: number): Promise<TexSource | null> {
+    const f = Math.min(this.frameCount - 1, Math.max(0, Math.round(frame)));
+    if (this.sharp?.frame === f) return Promise.resolve(bitmapTex(this.sharp.bitmap));
+    if (this.sharpJob?.frame === f) return this.sharpJob.promise;
+    const promise = this.decodeOne(f).finally(() => {
+      if (this.sharpJob?.promise === promise) this.sharpJob = null;
+    });
+    this.sharpJob = { frame: f, promise };
+    return promise;
+  }
+
+  private async decodeOne(frame: number): Promise<TexSource | null> {
+    const enc = this.encoded;
+    if (!enc || this.disposed) return null;
+    const target = enc.order[frame];
+    if (target === undefined) return null;
+
+    let start = target;
+    while (start > 0 && !enc.samples[start].is_sync) start--;
+    const wanted = toChunk(enc.samples[target]).timestamp;
+
+    let captured: VideoFrame | null = null;
+    const decoder = new VideoDecoder({
+      output: (vf) => {
+        if (!captured && Math.abs(vf.timestamp - wanted) < 1) captured = vf;
+        else vf.close();
+      },
+      error: () => {},
+    });
+    try {
+      decoder.configure(enc.config);
+      // Everything from the keyframe through the target in decode order is
+      // what the target can reference; flush() then forces out any frame the
+      // decoder was holding back for reordering.
+      for (let i = start; i <= target; i++) decoder.decode(toChunk(enc.samples[i]));
+      await decoder.flush();
+    } finally {
+      if (decoder.state !== "closed") decoder.close();
+    }
+
+    const vf = captured as VideoFrame | null;
+    if (!vf) return null;
+    let bitmap: ImageBitmap;
+    try {
+      bitmap = await createImageBitmap(vf);
+    } finally {
+      vf.close();
+    }
+    if (this.disposed) {
+      bitmap.close();
+      return null;
+    }
+    this.sharp?.bitmap.close();
+    this.sharp = { frame, bitmap };
+    return bitmapTex(bitmap);
   }
 
   stats(): CacheStats {
@@ -418,7 +493,23 @@ export class DecodedVideoSource implements FrameSource {
     this.releaseAll();
     this.listeners.clear();
     this.scratch = null;
+    this.encoded = null;
+    this.sharp?.bitmap.close();
+    this.sharp = null;
   }
+}
+
+function toChunk(s: import("mp4box").MP4Sample): EncodedVideoChunk {
+  return new EncodedVideoChunk({
+    type: s.is_sync ? "key" : "delta",
+    timestamp: (s.cts * 1_000_000) / s.timescale,
+    duration: (s.duration * 1_000_000) / s.timescale,
+    data: s.data,
+  });
+}
+
+function bitmapTex(bitmap: ImageBitmap): TexSource {
+  return { type: "bitmap", bitmap, width: bitmap.width, height: bitmap.height };
 }
 
 /**

@@ -3,16 +3,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Action, Envelope } from "../core/actions";
 import { isBroadcast, shouldApply } from "../core/actions";
-import { detectBudget, type Budget } from "../core/budget";
+import { detectBudget, type Budget, type VideoQuality } from "../core/budget";
 import { needsResync, projectFrame, type TransportSnapshot } from "../core/clock";
 import { fold, step } from "../core/fold";
 import { initialStateFor, reduceViewer } from "../core/reducer";
 import { DEFAULT_VIEWER_STATE, type ReviewItem, type ViewerState } from "../core/types";
 import { GLRenderer, type ViewParams } from "../render/gl";
 import { createSource, DecodedVideoSource, VideoElementSource } from "../sources";
-import type { CacheStats, FrameSource, SourceContext } from "../sources/types";
+import type { CacheStats, FrameSource, SourceContext, TexSource } from "../sources/types";
 import { LayeredSource } from "../sources/layered";
 import { sharedLedger, storedCacheLimit } from "../sources/ledger";
+import {
+  setStoredSharpenOnPause,
+  setStoredVideoQuality,
+  storedSharpenOnPause,
+  storedVideoQuality,
+} from "../sources/playback-prefs";
 import type { SessionApi } from "./useSession";
 
 /** Master heartbeat. Cheap: one small message, and idle beats change nothing. */
@@ -35,6 +41,12 @@ export interface ViewerApi {
   /** Force a redraw when something outside viewer state changed. */
   invalidate: () => void;
   fallbackNotice: string | null;
+  /** Resolution video is cached at. Changing it re-decodes open videos. */
+  videoQuality: VideoQuality;
+  setVideoQuality: (q: VideoQuality) => void;
+  /** Swap a paused, downscaled video frame for a native-resolution decode. */
+  sharpenOnPause: boolean;
+  setSharpenOnPause: (on: boolean) => void;
 }
 
 export interface UseViewerOptions {
@@ -83,6 +95,15 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   const [glError, setGlError] = useState<string | null>(null);
   const [stats, setStats] = useState<CacheStats | null>(null);
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
+  const [videoQuality, setVideoQualityState] = useState<VideoQuality>(storedVideoQuality);
+  const [sharpenOnPause, setSharpenState] = useState(storedSharpenOnPause);
+  const sharpenRef = useRef(sharpenOnPause);
+  sharpenRef.current = sharpenOnPause;
+  // The latest native-resolution frame for a paused video, and which one the
+  // loop is waiting on. Keyed "itemId:frame" so a stale answer is ignored.
+  const sharpRef = useRef<{ key: string; tex: TexSource } | null>(null);
+  const sharpWantRef = useRef<string | null>(null);
+  const sharpTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -121,8 +142,9 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
         ? containerRef.current.clientWidth * (window.devicePixelRatio || 1)
         : 1600,
       pdfWorkerUrl,
+      videoQuality,
     }),
-    [budget, pdfWorkerUrl, containerRef],
+    [budget, pdfWorkerUrl, containerRef, videoQuality],
   );
 
   const invalidate = useCallback(() => {
@@ -175,6 +197,24 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
 
   const source = item ? sourcesRef.current.get(item.id) ?? null : null;
 
+  // A new quality means new cache dimensions, which a source fixes when it is
+  // built — so open videos are dropped here and the effect below rebuilds the
+  // current one. Declared first so it runs before that effect does.
+  const qualityRef = useRef(videoQuality);
+  useEffect(() => {
+    if (qualityRef.current === videoQuality) return;
+    qualityRef.current = videoQuality;
+    for (const [id, src] of [...sourcesRef.current]) {
+      if (src.item.kind !== "video") continue;
+      src.dispose();
+      sourcesRef.current.delete(id);
+      rendererRef.current?.purge(`frame:${id}:`);
+      rendererRef.current?.purge(`sharp:${id}:`);
+    }
+    sharpRef.current = null;
+    sharpWantRef.current = null;
+  }, [videoQuality]);
+
   useEffect(() => {
     // An item we already know is broken gets no source — attempting to decode
     // it again would only produce a second, less informative error.
@@ -199,6 +239,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
         src.dispose();
         sourcesRef.current.delete(id);
         rendererRef.current?.purge(`frame:${id}:`);
+        rendererRef.current?.purge(`sharp:${id}:`);
         rendererRef.current?.purge(`layer:`);
       }
     }
@@ -490,6 +531,37 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
 
       src.prefetch(frame, 30);
 
+      // ── sharpen on pause ──────────────────────────────────────────────────
+      // Once the playhead has sat still briefly, ask for this frame at native
+      // resolution; the draw below uses it while it still matches. The delay
+      // keeps frame-stepping and scrubbing from queueing a decode per frame.
+      const sharpKey = `${it.id}:${frame}`;
+      const canSharpen =
+        !st.playing &&
+        sharpenRef.current &&
+        src instanceof DecodedVideoSource &&
+        src.cacheWidth < src.width;
+      if (canSharpen) {
+        if (sharpRef.current?.key !== sharpKey && sharpWantRef.current !== sharpKey) {
+          sharpWantRef.current = sharpKey;
+          clearTimeout(sharpTimerRef.current);
+          sharpTimerRef.current = setTimeout(() => {
+            if (sharpWantRef.current !== sharpKey) return;
+            void src
+              .fullRes(frame)
+              .then((tex) => {
+                if (!tex || sharpWantRef.current !== sharpKey) return;
+                sharpRef.current = { key: sharpKey, tex };
+                dirtyRef.current = true;
+              })
+              .catch(() => {});
+          }, 150);
+        }
+      } else if (sharpWantRef.current) {
+        sharpWantRef.current = null;
+        clearTimeout(sharpTimerRef.current);
+      }
+
       // Detect a stage resize here rather than trusting the ResizeObserver
       // alone. Switching file types mounts or unmounts the layer panel, which
       // changes the stage width via a React render that the observer may not
@@ -562,7 +634,10 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
         }
 
         const ref = src.peek(frame);
-        if (ref) {
+        const sharp = canSharpen && sharpRef.current?.key === sharpKey ? sharpRef.current : null;
+        if (sharp) {
+          renderer.draw(`sharp:${sharpKey}`, sharp.tex, 0, { x: 0, y: 0, w: it.width, h: it.height });
+        } else if (ref) {
           renderer.draw(`frame:${it.id}:${ref.frame}`, ref.tex, ref.version, {
             x: 0, y: 0, w: it.width, h: it.height,
           });
@@ -613,5 +688,16 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
     viewParams,
     invalidate,
     fallbackNotice,
+    videoQuality,
+    setVideoQuality: (q: VideoQuality) => {
+      setStoredVideoQuality(q);
+      setVideoQualityState(q);
+    },
+    sharpenOnPause,
+    setSharpenOnPause: (on: boolean) => {
+      setStoredSharpenOnPause(on);
+      setSharpenState(on);
+      invalidate();
+    },
   };
 }

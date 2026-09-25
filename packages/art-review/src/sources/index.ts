@@ -1,4 +1,5 @@
-import { suitsFrameCache, type Budget } from "../core/budget";
+import { chooseCacheSize, frameBytes, suitsFrameCache, type Budget } from "../core/budget";
+import { sharedLedger } from "./ledger";
 import type { ReviewItem } from "../core/types";
 import { DecodedVideoSource } from "./decoded-video";
 import { LayeredSource } from "./layered";
@@ -45,6 +46,8 @@ export function createSource(
         item.frameCount > 1 &&
         suitsFrameCache(item)
       ) {
+        const tooBig = handPickedTooBig(item, ctx, budget);
+        if (tooBig) return new VideoElementSource(item, tooBig);
         return new DecodedVideoSource(item, ctx, budget);
       }
       return new VideoElementSource(item, streamingReason(item, opts));
@@ -75,6 +78,22 @@ function streamingReason(
       : "no frame cache: this browser has no WebCodecs";
   }
   return "clip too long to cache; streaming it instead";
+}
+
+/**
+ * A resolution picked by hand is a promise about what is on screen, so when
+ * the whole clip will not fit the cache at that size it streams at native
+ * resolution instead — never quietly cached smaller, which is the behaviour
+ * picking one is meant to get away from. The note says which way to move.
+ */
+function handPickedTooBig(item: ReviewItem, ctx: SourceContext, budget: Budget): string | undefined {
+  const quality = ctx.videoQuality ?? "auto";
+  if (quality === "auto") return undefined;
+  const ceiling = sharedLedger().bytesLimit;
+  const choice = chooseCacheSize({ ...budget, ram: ceiling }, item.width, item.height, item.frameCount, ctx.viewportWidth, quality);
+  if (choice.fitsWholeClip) return undefined;
+  const need = Math.ceil((frameBytes(choice.width, choice.height) * item.frameCount) / (1024 * 1024));
+  return `streaming: ${choice.width}×${choice.height} needs ${need} MB to cache, over the ${Math.round(ceiling / (1024 * 1024))} MB ceiling — raise the cache or pick a lower resolution`;
 }
 
 /**

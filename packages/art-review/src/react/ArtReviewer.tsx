@@ -4,6 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { hexToRgba, Smoother, simplify } from "../core/strokes";
 import { nextMarker, prevMarker } from "../core/fold";
 import { RGBE_TRANSFER } from "../core/rgbe";
+import { QUALITY_STEPS, type VideoQuality } from "../core/budget";
+import { DecodedVideoSource } from "../sources/decoded-video";
+import type { FrameSource } from "../sources/types";
 import type { Author, LoopMode, Stroke, StrokeTool, ViewerState } from "../core/types";
 import { GLRenderer, type ViewParams } from "../render/gl";
 import {
@@ -1162,6 +1165,16 @@ export function ArtReviewer({
           <span style={label}>Audio</span>
         </label>
         <MemoryReadout autoBytes={viewer.budget.ram} item={item} />
+        {item?.kind === "video" && (
+          <VideoQualityControl
+            item={item}
+            source={viewer.source}
+            quality={viewer.videoQuality}
+            onQuality={viewer.setVideoQuality}
+            sharpen={viewer.sharpenOnPause}
+            onSharpen={viewer.setSharpenOnPause}
+          />
+        )}
         <Playlist
           items={items}
           index={state.itemIndex}
@@ -1487,6 +1500,82 @@ function MemoryReadout({ autoBytes, item }: { autoBytes: number; item: ReviewIte
           </option>
         ))}
       </select>
+    </span>
+  );
+}
+
+/** "1080p" for a 1920×1080 frame; measured on the short side, as YouTube does. */
+function linesLabel(width: number, height: number): string {
+  return `${Math.min(width, height)}p`;
+}
+
+/**
+ * Cache resolution for the open video, YouTube-style: Auto, the clip's own
+ * resolution, then the standard steps below it. Auto names what it actually
+ * chose, because "Auto" alone is how a 1080p render ended up on screen at
+ * 180p without anyone knowing why.
+ */
+function VideoQualityControl({
+  item,
+  source,
+  quality,
+  onQuality,
+  sharpen,
+  onSharpen,
+}: {
+  item: ReviewItem;
+  source: FrameSource | null;
+  quality: VideoQuality;
+  onQuality: (q: VideoQuality) => void;
+  sharpen: boolean;
+  onSharpen: (on: boolean) => void;
+}) {
+  const native = Math.min(item.width, item.height);
+  const steps = QUALITY_STEPS.filter((h) => h < native);
+  const cached = source instanceof DecodedVideoSource ? source : null;
+  const streaming = source instanceof VideoElementSource;
+
+  // A remembered step at or above this clip's own size means native here.
+  const value = quality === "auto" ? "auto" : quality === "full" || quality >= native ? "full" : String(quality);
+  const autoLabel = cached ? `Auto (${linesLabel(cached.cacheWidth, cached.cacheHeight)})` : "Auto";
+
+  return (
+    <span style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+      <select
+        value={value}
+        onChange={(e) => {
+          const v = e.target.value;
+          onQuality(v === "auto" || v === "full" ? v : Number(v));
+        }}
+        title={
+          cached
+            ? `Cached at ${cached.cacheWidth}×${cached.cacheHeight} of ${item.width}×${item.height}.`
+            : streaming
+              ? `Streaming at ${item.width}×${item.height}.`
+              : "Video resolution"
+        }
+        style={{ ...selectStyle, padding: "1px 4px", fontSize: 10 }}
+      >
+        <option value="auto">{autoLabel}</option>
+        <option value="full">Full ({linesLabel(item.width, item.height)})</option>
+        {steps.map((h) => (
+          <option key={h} value={h}>
+            {h}p
+          </option>
+        ))}
+      </select>
+      <label
+        style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}
+        title="When paused, redraw the frame at the clip's full resolution even if the cache holds it smaller"
+      >
+        <input
+          type="checkbox"
+          checked={sharpen}
+          onChange={(e) => onSharpen(e.target.checked)}
+          style={{ accentColor: C.primary }}
+        />
+        <span style={label}>Sharpen on pause</span>
+      </label>
     </span>
   );
 }

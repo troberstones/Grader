@@ -137,9 +137,27 @@ export function detectBudget(hints: DetectHints = {}): Budget {
 }
 
 /**
+ * The resolution a video is cached at, picked by hand in the player.
+ *
+ * "auto" lets the budget decide (below), which for a 20 s 1080p clip on an
+ * unknown browser means 320 px wide — it holds the whole clip, but it is not
+ * what anyone rendered. "full" is native; a number is a target line count the
+ * way YouTube labels it (720 → 720p), measured on the short side so a
+ * portrait clip at 720p is 720 wide, not 720 tall.
+ */
+export type VideoQuality = "auto" | "full" | number;
+
+/** The fixed steps offered below native, largest first. */
+export const QUALITY_STEPS = [2160, 1440, 1080, 720, 480, 360];
+
+/**
  * Choose the cache resolution for an item given a budget.
  * Above `maxCacheWidth`, or when the clip cannot fit at native size, step down
  * in halves until the whole clip fits or we hit the floor.
+ *
+ * A quality chosen by hand is taken as asked and never stepped down: the
+ * caller learns from `fitsWholeClip` whether it can be held, and decides what
+ * to do instead (see createSource).
  */
 export function chooseCacheSize(
   budget: Budget,
@@ -147,7 +165,16 @@ export function chooseCacheSize(
   height: number,
   frameCount: number,
   viewportWidth: number,
+  quality: VideoQuality = "auto",
 ): { width: number; height: number; fitsWholeClip: boolean; scale: number } {
+  if (quality !== "auto") {
+    const scale = quality === "full" ? 1 : Math.min(1, quality / Math.max(1, Math.min(width, height)));
+    // Even dimensions, as the ingest proxy has — odd ones smear on some GPUs.
+    const w = Math.max(2, Math.round((width * scale) / 2) * 2);
+    const h = Math.max(2, Math.round((height * scale) / 2) * 2);
+    return { width: w, height: h, fitsWholeClip: frameBytes(w, h) * frameCount <= budget.ram, scale };
+  }
+
   const ceiling = Math.min(width, budget.maxCacheWidth);
   // Never cache more pixels than the viewport can show at 2x zoom headroom —
   // beyond that, a paused full-res decode is cheaper than the memory.

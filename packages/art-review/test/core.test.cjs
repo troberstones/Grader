@@ -380,6 +380,28 @@ test("budget: a short clip still caches at native resolution", () => {
   assert.equal(r.width, 1920);
 });
 
+test("budget: a hand-picked quality is honoured, never stepped down", () => {
+  // 600 frames of 1080p on the smallest tier: auto shrinks this to 320 wide.
+  const auto = chooseCacheSize(BUDGETS.conservative, 1920, 1080, 600, 1600);
+  assert.equal(auto.width, 320);
+
+  const p720 = chooseCacheSize(BUDGETS.conservative, 1920, 1080, 600, 1600, 720);
+  assert.deepEqual([p720.width, p720.height], [1280, 720]);
+  assert.equal(p720.fitsWholeClip, false, "must report it will not fit so the caller can stream");
+
+  const full = chooseCacheSize(BUDGETS.workstation, 1920, 1080, 60, 1600, "full");
+  assert.deepEqual([full.width, full.height, full.fitsWholeClip], [1920, 1080, true]);
+});
+
+test("budget: quality steps measure the short side, and never upscale", () => {
+  // A portrait phone clip at 720p is 720 wide.
+  const portrait = chooseCacheSize(BUDGETS.workstation, 1080, 1920, 30, 1600, 720);
+  assert.deepEqual([portrait.width, portrait.height], [720, 1280]);
+  // Asking a 720p clip for 1080p gives native, not a blow-up.
+  const small = chooseCacheSize(BUDGETS.workstation, 1280, 720, 30, 1600, 1080);
+  assert.deepEqual([small.width, small.height], [1280, 720]);
+});
+
 test("budget: no tier allows more than the absolute tab ceiling", () => {
   const { ABSOLUTE_RAM_CEILING } = require(path.join(OUT, "budget.js"));
   for (const tier of Object.keys(BUDGETS)) {
