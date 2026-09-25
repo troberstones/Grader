@@ -75,6 +75,11 @@ export class GLRenderer {
   private lostHandler: (() => void) | null = null;
   private restoredHandler: (() => void) | null = null;
   private onLost: (() => void) | null = null;
+  // Bound references to the actual listeners attached to the canvas, kept
+  // separately from lostHandler/restoredHandler above so dispose() can
+  // removeEventListener with the exact function identity that was added.
+  private contextLostListener: ((e: Event) => void) | null = null;
+  private contextRestoredListener: (() => void) | null = null;
   private textureBytes = 0;
   /**
    * True when the drawing buffer really is Display-P3, so the shader has to
@@ -130,11 +135,13 @@ export class GLRenderer {
     this.restoredHandler = () => {
       this.buildProgram();
     };
-    this.canvas.addEventListener("webglcontextlost", (e) => {
+    this.contextLostListener = (e: Event) => {
       e.preventDefault();
       this.lostHandler?.();
-    });
-    this.canvas.addEventListener("webglcontextrestored", () => this.restoredHandler?.());
+    };
+    this.contextRestoredListener = () => this.restoredHandler?.();
+    this.canvas.addEventListener("webglcontextlost", this.contextLostListener);
+    this.canvas.addEventListener("webglcontextrestored", this.contextRestoredListener);
 
     return this.buildProgram();
   }
@@ -551,6 +558,18 @@ export class GLRenderer {
   }
 
   dispose(): void {
+    if (this.contextLostListener) {
+      this.canvas.removeEventListener("webglcontextlost", this.contextLostListener);
+      this.contextLostListener = null;
+    }
+    if (this.contextRestoredListener) {
+      this.canvas.removeEventListener("webglcontextrestored", this.contextRestoredListener);
+      this.contextRestoredListener = null;
+    }
+    this.lostHandler = null;
+    this.restoredHandler = null;
+    this.onLost = null;
+
     const gl = this.gl;
     if (!gl) return;
     for (const v of this.textures.values()) gl.deleteTexture(v.tex);
@@ -558,6 +577,14 @@ export class GLRenderer {
     this.textureBytes = 0;
     if (this.lutTexture) gl.deleteTexture(this.lutTexture);
     if (this.program) gl.deleteProgram(this.program);
+    // ArtReviewer remounts (and rebuilds a renderer) per student. Without
+    // this, the context and everything the driver holds for it — GPU memory,
+    // shader compiler state — outlives the component for the life of the
+    // page, and 30+ students in a session means 30+ live contexts stacking
+    // up. Most browsers cap live WebGL contexts in the teens and start
+    // silently evicting the oldest, which is worse than this and harder to
+    // diagnose.
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
     this.gl = null;
   }
 }
