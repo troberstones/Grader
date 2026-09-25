@@ -209,15 +209,21 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
    * edit needs its own flush before this is allowed to report "clean".
    */
   const flushAutoSave = useCallback(async (): Promise<boolean> => {
-    for (;;) {
+    // Re-loops on the revision counter, not dirtyRef: dirtyRef only catches up
+    // on the next render, and a save that's a no-op (unconverted rubric) never
+    // clears dirty at all — either would spin this loop. Bounded as a backstop.
+    for (let attempt = 0; attempt < 5; attempt++) {
       if (autoSaveTimerRef.current) {
         clearTimeout(autoSaveTimerRef.current);
         autoSaveTimerRef.current = null;
       }
-      if (!dirtyRef.current) return true;
+      if (attempt === 0 && !dirtyRef.current) return true;
+      const revision = revisionRef.current;
       const ok = await handleSaveRef.current(false);
       if (!ok) return false;
+      if (revisionRef.current === revision) return true;
     }
+    return true;
   }, []);
 
   const allGraded = criteria.length > 0 && (scoreResult?.complete ?? false);
