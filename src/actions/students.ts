@@ -6,6 +6,35 @@ import { eq, and, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { parseRoster } from "@/lib/learning-suite";
 import { requireCapability } from "@/lib/auth/require";
+import { can } from "@/lib/auth/roles";
+import { resolveAuthContext } from "@/lib/auth/course-context";
+import type { SessionUser } from "@/lib/auth/session";
+
+/**
+ * Whether `user` has course.edit on every course a student is currently
+ * enrolled in.
+ *
+ * Students are shared across courses (one `students` row, many
+ * `course_enrollments`), so an import into course B must not overwrite a
+ * student's name/email on the strength of course B alone when that same
+ * student is also enrolled in course A and the caller has no edit rights
+ * there — otherwise any instructor could stand up their own course, enroll
+ * someone else's student by netId, and redirect that student's identity
+ * (and therefore their upload-link emails) to themselves.
+ */
+async function callerMayEditAllEnrolledCourses(user: SessionUser, studentId: number): Promise<boolean> {
+  const enrollments = await db
+    .select({ courseId: courseEnrollments.courseId })
+    .from(courseEnrollments)
+    .where(eq(courseEnrollments.studentId, studentId));
+
+  for (const { courseId } of enrollments) {
+    const resource = { kind: "course" as const, courseId };
+    const ctx = await resolveAuthContext(resource, user.id);
+    if (!can(user, "course.edit", resource, ctx)) return false;
+  }
+  return true;
+}
 
 /**
  * Just the count, for stat cards on pages a department-visibility bypass can
@@ -51,7 +80,7 @@ export async function getStudentsForCourse(courseId: number) {
  * knowing to rename a column. See parseRoster in src/lib/learning-suite.ts.
  */
 export async function importRoster(courseId: number, csvText: string) {
-  await requireCapability("course.edit", { kind: "course", courseId });
+  const user = await requireCapability("course.edit", { kind: "course", courseId });
   const roster = parseRoster(csvText);
 
   if (roster.error) {
@@ -61,6 +90,10 @@ export async function importRoster(courseId: number, csvText: string) {
   let imported = 0;
   let updated = 0;
   let failed = 0;
+  // Existing students matched by netId whose name/email were left alone
+  // because the caller lacks course.edit on at least one course they're
+  // already enrolled in — see callerMayEditAllEnrolledCourses() above.
+  let keptExisting = 0;
 
   for (const student of roster.students) {
     try {
@@ -74,18 +107,22 @@ export async function importRoster(courseId: number, csvText: string) {
 
         if (existing) {
           studentId = existing.id;
-          await db
-            .update(students)
-            .set({
-              name: student.name,
-              sortName: student.sortName,
-              // Keep what we already hold when the export omits a column, so a
-              // roster without an Email column does not blank everyone's email.
-              ...(student.email ? { email: student.email } : {}),
-              ...(student.lmsStudentId ? { lmsStudentId: student.lmsStudentId } : {}),
-            })
-            .where(eq(students.id, studentId));
-          updated++;
+          if (await callerMayEditAllEnrolledCourses(user, studentId)) {
+            await db
+              .update(students)
+              .set({
+                name: student.name,
+                sortName: student.sortName,
+                // Keep what we already hold when the export omits a column, so a
+                // roster without an Email column does not blank everyone's email.
+                ...(student.email ? { email: student.email } : {}),
+                ...(student.lmsStudentId ? { lmsStudentId: student.lmsStudentId } : {}),
+              })
+              .where(eq(students.id, studentId));
+            updated++;
+          } else {
+            keptExisting++;
+          }
         } else {
           const [created] = await db
             .insert(students)
@@ -162,6 +199,10 @@ export async function importRoster(courseId: number, csvText: string) {
     skipped: roster.skipped + failed,
     duplicates: roster.duplicates,
     columns: roster.columns,
+    // Surfaced separately from `updated` so an import summary can say
+    // "N existing students kept their current name/email" rather than
+    // silently doing nothing for rows an instructor might expect to change.
+    keptExisting,
   };
 }
 

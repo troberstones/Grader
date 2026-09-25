@@ -11,6 +11,30 @@ import { db } from "@/db";
 import { students, courseEnrollments, courses } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { apiRequireCapability } from "@/lib/auth/api";
+import { can } from "@/lib/auth/roles";
+import { resolveAuthContext } from "@/lib/auth/course-context";
+import type { SessionUser } from "@/lib/auth/session";
+
+/**
+ * Whether `user` has course.edit on every course a student is currently
+ * enrolled in — see the identical helper in src/actions/students.ts for why
+ * this matters: a student matched by netId/lmsStudentId here may belong to
+ * another instructor's course, and this sync must not let that course's
+ * roster overwrite that student's name/email.
+ */
+async function callerMayEditAllEnrolledCourses(user: SessionUser, studentId: number): Promise<boolean> {
+  const enrollments = await db
+    .select({ courseId: courseEnrollments.courseId })
+    .from(courseEnrollments)
+    .where(eq(courseEnrollments.studentId, studentId));
+
+  for (const { courseId } of enrollments) {
+    const resource = { kind: "course" as const, courseId };
+    const ctx = await resolveAuthContext(resource, user.id);
+    if (!can(user, "course.edit", resource, ctx)) return false;
+  }
+  return true;
+}
 
 interface LSStudent {
   netId: string;
@@ -73,6 +97,7 @@ export async function POST(request: NextRequest) {
 
     let imported = 0;
     let updated = 0;
+    let keptExisting = 0;
 
     for (const ls of lsStudents) {
       if (!ls.netId && !ls.lmsStudentId) continue;
@@ -93,16 +118,20 @@ export async function POST(request: NextRequest) {
 
       if (existing.length > 0) {
         studentId = existing[0].id;
-        await db
-          .update(students)
-          .set({
-            name: ls.name,
-            sortName: ls.sortName,
-            email: ls.email,
-            lmsStudentId: ls.lmsStudentId || existing[0].lmsStudentId,
-          })
-          .where(eq(students.id, studentId));
-        updated++;
+        if (await callerMayEditAllEnrolledCourses(auth.user, studentId)) {
+          await db
+            .update(students)
+            .set({
+              name: ls.name,
+              sortName: ls.sortName,
+              email: ls.email,
+              lmsStudentId: ls.lmsStudentId || existing[0].lmsStudentId,
+            })
+            .where(eq(students.id, studentId));
+          updated++;
+        } else {
+          keptExisting++;
+        }
       } else {
         const result = await db
           .insert(students)
@@ -134,7 +163,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ imported, updated });
+    return NextResponse.json({ imported, updated, keptExisting });
   } catch (err) {
     console.error("[ls-bridge/sync-roster]", err);
     return NextResponse.json({ error: "Sync failed" }, { status: 500 });

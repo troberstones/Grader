@@ -302,8 +302,12 @@ export async function archiveCourse(id: number) {
  *
  * Due dates are rebased by day-offset, not cleared, when both the source's
  * and destination's start dates are known — `sourceStartDate` lets the
- * caller backfill a source course that has none on record as part of the
- * same call, so it's on file for future copies too.
+ * caller supply a start date for a source course that has none on record,
+ * used only in-memory for this copy's rebasing math. It is never written
+ * back onto the source: `course.view` (not `course.edit`) is all this
+ * requires of the caller on `sourceId`, including via the department-
+ * visibility bypass in can(), so the source may belong to a course the
+ * caller cannot edit at all.
  */
 export async function copyCourse(
   sourceId: number,
@@ -323,11 +327,9 @@ export async function copyCourse(
   const [source] = await db.select().from(courses).where(eq(courses.id, sourceId));
   if (!source) throw new Error("Course not found.");
 
-  let sourceStartDate = source.startDate;
-  if (overrides.sourceStartDate && !sourceStartDate) {
-    await db.update(courses).set({ startDate: overrides.sourceStartDate }).where(eq(courses.id, sourceId));
-    sourceStartDate = overrides.sourceStartDate;
-  }
+  // In-memory only — never persisted onto the source course. See the
+  // doc comment above for why: the caller may hold only `course.view` here.
+  const sourceStartDate = source.startDate ?? overrides.sourceStartDate ?? null;
 
   const [newCourse] = await db
     .insert(courses)

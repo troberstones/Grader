@@ -382,21 +382,18 @@ async function handleRequest(msg) {
       for (const sub of lsSubmissions) {
         // 1. Match by lmsStudentId (LS user ID, if stored)
         // 2. Match by exact sortName
-        // 3. Match by last name only — LS uses different names in roster vs discussion
-        //    (e.g. "Song, Hanna" in gradebook vs "Song, Dain" in discussions)
-        let mapping = studentMap.find((s) =>
+        //
+        // A last-name-only fallback used to sit here for when LS shows a
+        // different name in the discussion than in the gradebook (e.g.
+        // "Song, Hanna" vs "Song, Dain"). It's gone: with two same-surname
+        // students in a course, "Smith, Bob"'s submission would silently land
+        // on "Smith, Alice" instead of being reported unmatched. An unmatched
+        // submission is now always surfaced in `errors` below rather than
+        // risking a wrong match.
+        const mapping = studentMap.find((s) =>
           (s.lmsStudentId && s.lmsStudentId === sub.lmsStudentId) ||
           (s.sortName && s.sortName === sub.sortName)
         );
-
-        if (!mapping && sub.sortName) {
-          const lsLastName = sub.sortName.split(',')[0].trim().toLowerCase();
-          const candidates = studentMap.filter((s) => {
-            const last = (s.sortName ?? s.name ?? '').split(',')[0].trim().toLowerCase();
-            return last === lsLastName;
-          });
-          if (candidates.length === 1) mapping = candidates[0];
-        }
 
         if (!mapping) {
           errors.push({ lmsStudentId: sub.lmsStudentId, sortName: sub.sortName, error: 'No matching student in grader' });
