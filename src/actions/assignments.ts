@@ -9,14 +9,14 @@ import {
   rubricCriteria,
   rubricLevels,
   grades,
-  gradeEntries,
   submissions,
   annotations,
   reviewStrokes,
 } from "@/db/schema";
-import { eq, desc, and, inArray, isNotNull, ne, or } from "drizzle-orm";
+import { eq, desc, and, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireCapability } from "@/lib/auth/require";
+import { gradedStudentCount } from "@/lib/grading/graded-count";
 import { writeAudit } from "@/lib/audit";
 import { removeAssignmentStorage } from "@/lib/file-storage";
 import { feedbackTestMode } from "@/lib/feedback/config";
@@ -28,21 +28,6 @@ import type { Term } from "@/lib/terms";
 /** `{ ok: true }` on success, or a refusal with a message safe to show the caller. */
 export type DeleteOutcome = { ok: true } | { ok: false; reason: "has_grades" | "not_found"; message: string };
 
-/**
- * Distinct students, across the given assignments, with a grade that means
- * more than "row exists": a status other than "ungraded", or at least one
- * grade_entries row. This is the bar deleteAssignment()/deleteCourse() use to
- * refuse a destructive delete — see the owner's decision in the task brief.
- */
-export async function gradedStudentCount(assignmentIds: number[]): Promise<number> {
-  if (assignmentIds.length === 0) return 0;
-  const rows = await db
-    .selectDistinct({ studentId: grades.studentId })
-    .from(grades)
-    .leftJoin(gradeEntries, eq(gradeEntries.gradeId, grades.id))
-    .where(and(inArray(grades.assignmentId, assignmentIds), or(ne(grades.status, "ungraded"), isNotNull(gradeEntries.id))));
-  return rows.length;
-}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

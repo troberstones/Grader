@@ -17,7 +17,8 @@ import { revalidatePath } from "next/cache";
 import { requireCapability } from "@/lib/auth/require";
 import { isTerm, termSortKey, type Term } from "@/lib/terms";
 import { cloneRubric } from "./rubrics";
-import { gradedStudentCount, type DeleteOutcome } from "./assignments";
+import type { DeleteOutcome } from "./assignments";
+import { gradedStudentCount } from "@/lib/grading/graded-count";
 import { writeAudit } from "@/lib/audit";
 import { removeAssignmentStorage } from "@/lib/file-storage";
 
