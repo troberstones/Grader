@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Upload } from "lucide-react";
 import { importRoster } from "@/actions/students";
+import { decodeCsv } from "@/lib/csv";
 import { toast } from "sonner";
 
 export function ImportRosterDialog({ courseId }: { courseId: number }) {
@@ -19,39 +20,60 @@ export function ImportRosterDialog({ courseId }: { courseId: number }) {
   const [importing, setImporting] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const csvTextRef = useRef<string>("");
+  /*
+   * State, not a ref. This used to be a ref filled in by an async FileReader
+   * while the Import button enabled itself the moment a name was set, so
+   * clicking straight after choosing a file could send an empty string and be
+   * told to select a file — with a file plainly selected. Holding the text in
+   * state keeps the button honest about whether there is anything to send.
+   */
+  const [csvText, setCsvText] = useState<string | null>(null);
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setFileName(file.name);
+    setCsvText(null);
 
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      csvTextRef.current = ev.target?.result as string;
-    };
-    reader.readAsText(file);
+    file
+      .arrayBuffer()
+      .then((buffer) => setCsvText(decodeCsv(buffer)))
+      .catch(() => {
+        setFileName(null);
+        toast.error("Could not read that file.");
+      });
   }
 
   async function handleImport() {
-    if (!csvTextRef.current) {
-      toast.error("Please select a CSV file first.");
-      return;
-    }
+    if (!csvText) return;
 
     setImporting(true);
     try {
-      const result = await importRoster(courseId, csvTextRef.current);
-      if (result.success) {
-        toast.success(`Imported ${result.imported} students${result.skipped ? ` (${result.skipped} skipped)` : ""}`);
-        setOpen(false);
-        setFileName(null);
-        csvTextRef.current = "";
-      } else {
-        toast.error(result.error || "Import failed");
+      const result = await importRoster(courseId, csvText);
+      if (!result.success) {
+        // parseRoster's errors name the columns it found, so they are worth
+        // showing in full rather than truncating to a toast one-liner.
+        toast.error(result.error || "Import failed", { duration: 12000 });
+        return;
       }
-    } catch {
-      toast.error("An error occurred during import");
+
+      const parts: string[] = [];
+      if (result.imported) parts.push(`${result.imported} added`);
+      if (result.updated) parts.push(`${result.updated} updated`);
+      if (result.skipped) parts.push(`${result.skipped} skipped`);
+      if (result.duplicates) parts.push(`${result.duplicates} duplicate`);
+
+      if (!result.imported && !result.updated) {
+        toast.error(`No students imported${parts.length ? ` (${parts.join(", ")})` : ""}.`);
+        return;
+      }
+
+      toast.success(parts.join(", "));
+      setOpen(false);
+      setFileName(null);
+      setCsvText(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "An error occurred during import");
     } finally {
       setImporting(false);
     }
@@ -67,8 +89,10 @@ export function ImportRosterDialog({ courseId }: { courseId: number }) {
         <DialogHeader>
           <DialogTitle>Import Student Roster</DialogTitle>
           <DialogDescription>
-            Upload a CSV file exported from Learning Suite. The file should contain columns like
-            &quot;Student Name&quot; or &quot;First Name&quot;/&quot;Last Name&quot;, and optionally &quot;Net ID&quot; and &quot;Email&quot;.
+            Upload a CSV exported from Learning Suite, or any list with a name column.
+            Column names and their order do not have to match — a full name, or a first
+            and last name, is the only thing required. A Net ID or BYU email is used to
+            recognise students you already have.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -98,8 +122,8 @@ export function ImportRosterDialog({ courseId }: { courseId: number }) {
             <Button variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleImport} disabled={!fileName || importing}>
-              {importing ? "Importing..." : "Import"}
+            <Button onClick={handleImport} disabled={!csvText || importing}>
+              {importing ? "Importing..." : fileName && !csvText ? "Reading..." : "Import"}
             </Button>
           </div>
         </div>

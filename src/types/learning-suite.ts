@@ -1,14 +1,6 @@
-// Learning Suite CSV roster format (columns vary by export)
-export interface LMSRosterRow {
-  "Student Name"?: string;
-  "Last Name"?: string;
-  "First Name"?: string;
-  "Net ID"?: string;
-  "Student ID"?: string;
-  "Email"?: string;
-  "Section"?: string;
-  [key: string]: string | undefined;
-}
+// Roster columns are not modelled as a type any more: exports disagree on
+// what they are called, so parseRoster in src/lib/learning-suite.ts detects
+// them at runtime instead of asserting a shape the files do not honour.
 
 // Grade export format for Learning Suite bulk import
 export interface LMSGradeExportRow {

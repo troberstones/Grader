@@ -19,6 +19,7 @@
     "predev": "npm run sync:pdf-worker",
     "prebuild": "npm run sync:pdf-worker",
     "review:import-sequence": "node scripts/import-sequence.mjs",
+    "roster:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-roster.mjs",
     "test:rubric": "./scripts/build-rubric-test.sh && node --test test/rubric.test.cjs",
     "test:auth": "vitest run",
     "test": "npm run test:rubric && npm run review:test && npm run test:auth"
