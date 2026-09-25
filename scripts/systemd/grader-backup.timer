@@ -1,6 +1,10 @@
 [Unit]
 Description=Run grader-backup.service daily
 
+# This is a --user timer: it only fires while cnh5 is logged in unless
+# lingering is enabled for that account. See docs/operations.md "Backup &
+# restore" — the one-time fix is `loginctl enable-linger cnh5` on the host.
+
 [Timer]
 OnCalendar=*-*-* 03:30:00
 RandomizedDelaySec=600
