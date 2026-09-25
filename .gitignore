@@ -68,6 +68,14 @@ testData/**/*.webm
 # test/backup.test.mjs (npm run test:backup)
 /test/.tmp-backup/
 
+# server fixture built fresh by packages/art-review's test suite
+# (npm run review:test)
+/packages/art-review/test/.srv/
+
+# vestigial zero-byte file at the repo root — the real database lives at
+# storage/grader.db (DB_PATH, see .env.example) and is already ignored above
+/grader.db
+
 # TLS key/cert for server.mjs — generated per-host by scripts/make-cert.sh,
 # never shared between machines and never committed.
 /certs/

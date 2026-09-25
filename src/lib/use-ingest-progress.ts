@@ -14,8 +14,16 @@ export function useIngestProgress(submissionIds: number[]): string | null {
   const key = submissionIds.join(",");
   const [label, setLabel] = useState<string | null>(null);
 
-  useEffect(() => {
+  // Reset during render rather than at the top of the effect below: adjusting
+  // state when a prop changes belongs in render, not in an effect.
+  // See https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes.
+  const [labelFor, setLabelFor] = useState(key);
+  if (labelFor !== key) {
+    setLabelFor(key);
     setLabel(null);
+  }
+
+  useEffect(() => {
     if (!key) return;
     const ids = key.split(",").map(Number);
     const sources = ids.map((id) => {
@@ -31,7 +39,6 @@ export function useIngestProgress(submissionIds: number[]): string | null {
       return es;
     });
     return () => sources.forEach((es) => es.close());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
   return label;

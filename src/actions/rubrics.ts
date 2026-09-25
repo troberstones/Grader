@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { rubrics, rubricCriteria, rubricLevels, gradeEntries, assignments } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import type { RubricJSON, RubricCriterion, RubricSettings } from "@/types/rubric";
+import type { RubricJSON, RubricSettings } from "@/types/rubric";
 import { requireCapability } from "@/lib/auth/require";
 import type { SessionUser } from "@/lib/auth/session";
 import { validateRubric, isShareModel, type AuthoredRubric } from "@/lib/rubric";

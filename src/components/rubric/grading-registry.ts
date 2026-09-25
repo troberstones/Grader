@@ -12,7 +12,9 @@ import type { ShareGrading } from "@/hooks/use-rubric-grading";
  *
  * They read and write exactly the same thing, a level per criterion, so the
  * choice is ergonomic rather than pedagogical and is remembered per browser.
- * The points-model views they replaced are archived under `_archive/`.
+ * The points-model views they replaced were deleted; see the
+ * `archive/review-v1` git tag for the last commit that had
+ * `src/components/rubric/_archive/`.
  *
  * A `Record`, not an array: the key union is closed, so the compiler flags a
  * key added without an entry, where an array `.find()` would quietly hand back

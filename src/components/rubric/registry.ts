@@ -6,8 +6,10 @@ import type { AuthoredRubric, NormalRubric } from "@/lib/rubric";
  * The rubric editors the app offers.
  *
  * One, now. The Classic / Weighted / Spreadsheet editors that used to sit
- * beside it authored into the points model and are archived under
- * `_archive/` — see the README there for why and how to retrieve one.
+ * beside it authored into the points model and were deleted once every
+ * rubric was converted to the share model — see the `archive/review-v1` git
+ * tag for the last commit that had them, and its
+ * `src/components/rubric/_archive/README.md` for why and how to retrieve one.
  *
  * The registry survives the cull on purpose: the pages that render an editor
  * read from this array rather than naming a component, so adding a second one

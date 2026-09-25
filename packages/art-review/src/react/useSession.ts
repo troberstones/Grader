@@ -55,7 +55,9 @@ export function useSession(channel: ReviewChannel, author: Author): SessionApi {
 
   const clock = useMemo(() => new ClockSync(), []);
   const roleRef = useRef(role);
-  roleRef.current = role;
+  useEffect(() => {
+    roleRef.current = role;
+  }, [role]);
 
   /**
    * "free" means two different things and they must not be confused: a device
@@ -225,7 +227,7 @@ export function useSession(channel: ReviewChannel, author: Author): SessionApi {
         }
       }
     });
-  }, [channel, send, author.name, clock, updatePeers, hasOtherMaster]);
+  }, [channel, send, author.name, clock, updatePeers, hasOtherMaster, measureClock]);
 
   // ── Announce, ping, and say goodbye ─────────────────────────────────────────
   useEffect(() => {
