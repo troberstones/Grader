@@ -327,8 +327,9 @@ test("duplicate criterion names are an error", () => {
   assert.match(result.errors[0].message, /repeats the name of criterion 1/);
 });
 
-test("too few and too many criteria are both rejected", () => {
-  assert.strictEqual(validateRubric(rubric(1)).ok, false);
+test("zero and too many criteria are rejected; one is fine", () => {
+  assert.strictEqual(validateRubric(rubric(0)).ok, false);
+  assert.strictEqual(validateRubric(rubric(1)).ok, true);
   const many = { version: 1, name: "Huge", criteria: Array.from({ length: 13 }, (_, i) => criterion(`C${i}`)) };
   const result = validateRubric(many);
   assert.strictEqual(result.ok, false);

@@ -31,7 +31,7 @@ export interface ValidationResult {
 }
 
 const MAX_CRITERIA = 12;
-const MIN_CRITERIA = 2;
+const MIN_CRITERIA = 1;
 /** Below this a level description is almost always a stub rather than a spec. */
 const THIN_DESCRIPTION = 40;
 

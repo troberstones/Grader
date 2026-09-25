@@ -71,7 +71,7 @@ points, percentages, totals, or a grading scale anywhere. A key called
 **Hard constraints — the importer rejects anything that breaks these**
 
 - `"version": 1`, a `name` of 3–120 characters, and a `criteria` array.
-- 2 to 12 criteria. Criterion names must be unique (case-insensitive), 2–80
+- 1 to 12 criteria. Criterion names must be unique (case-insensitive), 2–80
   characters. Criterion `description` at most 500 characters.
 - Exactly 4 levels per criterion — never 3, never 5.
 - Each level `description` is 10–400 characters, and no two levels within the
@@ -119,9 +119,9 @@ points, percentages, totals, or a grading scale anywhere. A key called
     },
     "criteria": {
       "type": "array",
-      "minItems": 2,
+      "minItems": 1,
       "maxItems": 12,
-      "description": "The rows of the rubric. Two to twelve; beyond that a rubric stops being usable during a live critique.",
+      "description": "The rows of the rubric. One to twelve; beyond that a rubric stops being usable during a live critique.",
       "items": {
         "type": "object",
         "required": ["name", "levels"],

@@ -83,7 +83,7 @@ that would still break something:
 
 **Errors**
 
-- Fewer than 2 or more than 12 criteria. Beyond twelve a rubric cannot be used
+- No criteria, or more than 12. Beyond twelve a rubric cannot be used
   during a live critique.
 - Not exactly 4 levels on some criterion — the grading grid is a fixed grid.
 - Duplicate criterion names, which make grade entries ambiguous to read back.

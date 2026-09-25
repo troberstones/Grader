@@ -117,10 +117,10 @@ export function AiPromptPanel() {
           <Input
             id="ai-count"
             type="number"
-            min={2}
+            min={1}
             max={12}
             value={criteriaCount}
-            onChange={(e) => setCriteriaCount(Math.min(12, Math.max(2, Number(e.target.value) || 4)))}
+            onChange={(e) => setCriteriaCount(Math.min(12, Math.max(1, Number(e.target.value) || 4)))}
           />
         </div>
       </div>

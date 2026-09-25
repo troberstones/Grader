@@ -64,7 +64,7 @@ async function seedShareRubric(name = "Composition") {
   return rubric;
 }
 
-/** A rubric payload that satisfies validateRubric(): >= 2 criteria, each with exactly 4 levels and distinguishable descriptions. */
+/** A rubric payload that satisfies validateRubric(): >= 1 criterion, each with exactly 4 levels and distinguishable descriptions. */
 function authoredPayload(name: string): AuthoredRubric {
   const levels = (label: string) => [
     { label: "Emerging", description: `${label} is barely present in this submission.` },
