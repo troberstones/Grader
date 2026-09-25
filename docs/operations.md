@@ -367,8 +367,14 @@ What one run does, in order:
    (so a new release's new migrations run), via
    `DB_PATH=.../grader/storage/grader.db`.
 7. Swap `grader-staging`'s code, `node_modules`, and `.next` into `grader`
-   (rsync with `--delete`, excluding `storage/`, `certs/`, `.env*`).
-8. Reinstall `scripts/systemd/grader.service`, `daemon-reload`, and restart.
+   (rsync with `--delete`, excluding the top-level `/storage`, `/certs`,
+   `/.env*` only — anchored so a `node_modules` package that happens to be
+   named `storage` still gets updated).
+8. Install `scripts/systemd/grader.service` **only if no unit is installed
+   yet**. The unit running on the server today was set up by hand and may
+   carry settings the committed file doesn't, so when the two differ the
+   script prints the diff and keeps the installed one — merge by hand if
+   the committed version should win. Then `daemon-reload` and restart.
 9. Poll `GET /api/health` (see "Health & monitoring" below) for up to ~30s.
    - Healthy: done. `grader-backup.service`/`.timer` are reinstalled and
      (re-)enabled, same as the previous version of this script did.
@@ -377,6 +383,15 @@ What one run does, in order:
      never went live; if it doesn't either, the script says so and stops —
      that's a "someone needs to look at this machine" situation, not one to
      retry automatically.
+
+If any step from 4 on fails outright (the backup, the migration, the
+rsync), the script doesn't just exit with the app stopped: before the swap
+it starts the untouched previous release again; mid-swap it restores
+`grader-previous` first.
+
+After an automatic rollback, "healthy" also accepts any non-5xx answer from
+`/login`, because the release being rolled back to may predate
+`/api/health`.
 
 **The one thing a failed health check does *not* undo is the database
 migration** (step 6) — see "Rollback" below.
@@ -474,12 +489,13 @@ journalctl --user -u grader --since "5 minutes ago" | grep preflight
 
 ### Large uploads
 
-`server.mjs` sets `requestTimeout = 0` (no limit) and `headersTimeout = 60s`
+`server.mjs` sets `requestTimeout = 60 minutes` and `headersTimeout = 60s`
 on both the HTTP and HTTPS servers it runs. Node's default `requestTimeout`
 (5 minutes) was killing large submission/EXR-sequence uploads over the
-studio's slow upstream partway through; `headersTimeout` stays finite so a
-connection that opens and never finishes sending headers can't hold a slot
-forever.
+studio's slow upstream partway through. An hour covers any real upload
+while still bounding a client that trickles a body forever; `headersTimeout`
+stays short so a connection that never finishes sending headers can't hold
+a slot.
 
 ## Certificates
 

@@ -60,7 +60,7 @@ REMOTE_BUILD
 
 echo "==> Build succeeded — backing up, migrating, and swapping in the new release"
 ssh "$REMOTE" bash -s -- "$NODE_BIN" "$REMOTE_DIR" "$STAGING_DIR" "$PREVIOUS_DIR" "$PORT" <<'REMOTE_SWAP'
-set -euo pipefail
+set -Eeuo pipefail
 NODE_BIN="$1"
 REMOTE_DIR="$2"
 STAGING_DIR="$3"
@@ -70,8 +70,32 @@ export PATH="$NODE_BIN:$PATH"
 
 # storage/, certs/, and .env* live only in $REMOTE_DIR and must never be
 # duplicated, deleted, or overwritten by a sync between these directories —
-# every rsync below that touches $REMOTE_DIR excludes all three.
-EXCLUDE_LIVE_ONLY=(--exclude storage --exclude certs --exclude '.env*')
+# every rsync below that touches $REMOTE_DIR excludes all three. The leading
+# "/" anchors each pattern to the top of the transfer: unanchored, "storage"
+# would also match any node_modules package directory of that name, which
+# would then never be updated or cleaned up in the live copy.
+EXCLUDE_LIVE_ONLY=(--exclude /storage --exclude /certs --exclude '/.env*')
+
+# What to do if any command below fails, by how far the deploy got. Before
+# the swap the old release is untouched, so it just needs starting again;
+# mid-swap the live directory is half old, half new, so it goes back to the
+# snapshot taken below. Without this, `set -e` would exit with the app
+# stopped and nobody told.
+PHASE=running
+on_error() {
+  case "$PHASE" in
+    stopped)
+      echo "!!! Deploy failed before the swap — restarting the previous release, which was not touched." >&2
+      systemctl --user start grader.service || true
+      ;;
+    swapping)
+      echo "!!! Deploy failed mid-swap — restoring the previous release." >&2
+      rsync -a --delete "${EXCLUDE_LIVE_ONLY[@]}" "$PREVIOUS_DIR/" "$REMOTE_DIR/" || true
+      systemctl --user restart grader.service || true
+      ;;
+  esac
+}
+trap on_error ERR
 
 health_check() {
   # Prefer HTTPS (what every device actually uses, per server.mjs) but fall
@@ -85,9 +109,21 @@ health_check() {
   return 1
 }
 
-wait_for_healthy() {
+# Any non-5xx answer from /login. Used only after an automatic rollback: the
+# release being rolled back to may predate /api/health, and a 404 there
+# would otherwise read as "the rollback is unhealthy too".
+responding() {
+  local code
+  for scheme in https http; do
+    code="$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' "$scheme://localhost:$PORT/login" 2>/dev/null || true)"
+    case "$code" in 2*|3*) return 0 ;; esac
+  done
+  return 1
+}
+
+wait_for() {
   for _ in $(seq 1 15); do
-    if health_check; then return 0; fi
+    if "$@"; then return 0; fi
     sleep 2
   done
   return 1
@@ -106,6 +142,7 @@ fi
 mkdir -p "$REMOTE_DIR/storage" ~/.config/systemd/user
 
 echo "--> Stopping grader.service"
+PHASE=stopped
 systemctl --user stop grader.service 2>/dev/null || true
 
 if [ -f "$REMOTE_DIR/storage/grader.db" ]; then
@@ -122,9 +159,19 @@ echo "--> Migrating live database"
 (cd "$STAGING_DIR" && DB_PATH="$REMOTE_DIR/storage/grader.db" node scripts/migrate.mjs)
 
 echo "--> Swapping the new release into $REMOTE_DIR"
+PHASE=swapping
 rsync -a --delete "${EXCLUDE_LIVE_ONLY[@]}" "$STAGING_DIR/" "$REMOTE_DIR/"
 
-cp "$REMOTE_DIR/scripts/systemd/grader.service" ~/.config/systemd/user/
+# The unit running on the server today was set up by hand, before this repo
+# had one, and may carry settings this file doesn't. Install ours only when
+# none exists; otherwise show the difference and leave the installed one be.
+UNIT=~/.config/systemd/user/grader.service
+if [ ! -f "$UNIT" ]; then
+  cp "$REMOTE_DIR/scripts/systemd/grader.service" "$UNIT"
+elif ! cmp -s "$REMOTE_DIR/scripts/systemd/grader.service" "$UNIT"; then
+  echo "--> NOTE: installed grader.service differs from scripts/systemd/grader.service; keeping the installed one:"
+  diff "$UNIT" "$REMOTE_DIR/scripts/systemd/grader.service" || true
+fi
 systemctl --user daemon-reload
 
 echo "--> Starting grader.service"
@@ -132,13 +179,14 @@ systemctl --user enable grader.service >/dev/null
 systemctl --user restart grader.service
 
 echo "--> Waiting for /api/health"
-if wait_for_healthy; then
+PHASE=started
+if wait_for health_check; then
   echo "--> Healthy."
 else
   echo "!!! /api/health did not come up healthy after restart — rolling back to the previous release." >&2
   rsync -a --delete "${EXCLUDE_LIVE_ONLY[@]}" "$PREVIOUS_DIR/" "$REMOTE_DIR/"
   systemctl --user restart grader.service
-  if wait_for_healthy; then
+  if wait_for health_check || wait_for responding; then
     echo "!!! Rolled back to the previous release, which is healthy again. The new release did NOT go live." >&2
     echo "!!! Note: any database migration that ran above was NOT undone — see docs/operations.md \"Rollback\"." >&2
   else

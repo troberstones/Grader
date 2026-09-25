@@ -39,15 +39,21 @@ health_check() {
       return 0
     fi
   done
+  # The previous release may predate /api/health: any non-5xx answer from
+  # /login counts as up in that case.
+  local code
+  for scheme in https http; do
+    code="$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' "$scheme://localhost:$PORT/login" 2>/dev/null || true)"
+    case "$code" in 2*|3*) return 0 ;; esac
+  done
   return 1
 }
 
 echo "--> Restoring previous release"
-rsync -a --delete --exclude storage --exclude certs --exclude '.env*' "$PREVIOUS_DIR/" "$REMOTE_DIR/"
+# Anchored: see EXCLUDE_LIVE_ONLY in deploy-remote.sh.
+rsync -a --delete --exclude /storage --exclude /certs --exclude '/.env*' "$PREVIOUS_DIR/" "$REMOTE_DIR/"
 
 echo "--> Restarting grader.service"
-cp "$REMOTE_DIR/scripts/systemd/grader.service" ~/.config/systemd/user/
-systemctl --user daemon-reload
 systemctl --user restart grader.service
 
 echo "--> Waiting for /api/health"

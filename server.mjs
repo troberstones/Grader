@@ -188,14 +188,14 @@ const https = tlsServer();
  * Node's default requestTimeout (5 minutes) kills any connection that
  * hasn't finished a full request/response by then — including a large
  * submission or EXR-sequence upload over the studio's slow upstream, which
- * routinely runs past that. Uploads are bounded by disk space and patience,
- * not a clock, so disable it. headersTimeout (just receiving the request
- * line + headers) is left at a normal, finite value so a connection that
- * opens and never finishes sending headers can't hold a slot indefinitely.
+ * routinely runs past that. An hour covers any real upload while still
+ * bounding a client that trickles a body forever. headersTimeout (just the
+ * request line + headers) stays short so a connection that never finishes
+ * sending headers can't hold a slot.
  */
 for (const server of [http, https]) {
   if (!server) continue;
-  server.requestTimeout = 0;
+  server.requestTimeout = 60 * 60_000;
   server.headersTimeout = 60_000;
 }
 
