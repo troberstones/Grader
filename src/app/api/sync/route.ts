@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { assignments } from "@/db/schema";
 import { apiRequireCapability } from "@/lib/auth/api";
 import { resolveAuthContext } from "@/lib/auth/course-context";
-import { can } from "@/lib/auth/roles";
+import { can, GLOBAL } from "@/lib/auth/roles";
 import type { SessionUser } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
@@ -63,14 +63,27 @@ function resolveAssignmentId(body: Record<string, unknown>): number | null {
 }
 
 export async function POST(req: Request) {
-  const auth = await apiRequireCapability("course.view");
-  if (!auth.user) return auth.response;
+  let body: Record<string, unknown>;
+  try {
+    const parsed = await req.json();
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return NextResponse.json({ error: "Invalid body" }, { status: 400 });
+    }
+    body = parsed as Record<string, unknown>;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
-  const body = (await req.json()) as Record<string, unknown>;
   const assignmentId = resolveAssignmentId(body);
 
-  // Nothing to check a course against — drop rather than broadcast unfiltered.
-  if (assignmentId === null) return NextResponse.json({ ok: true });
+  // Nothing to check a course against — still requires a real session, but
+  // with no resolvable course there's nothing to gate `roster.view` on, so
+  // this can only ever drop rather than broadcast unfiltered.
+  if (assignmentId === null) {
+    const auth = await apiRequireCapability("course.view", GLOBAL, req);
+    if (!auth.user) return auth.response;
+    return NextResponse.json({ ok: true });
+  }
 
   const [row] = await db
     .select({ courseId: assignments.courseId })
@@ -78,6 +91,12 @@ export async function POST(req: Request) {
     .where(eq(assignments.id, assignmentId));
   if (!row) return NextResponse.json({ ok: true });
   const courseId = row.courseId;
+
+  // The sender must themselves have real access to this course, not merely
+  // be an instructor/assistant somewhere — same capability the per-listener
+  // fan-out below already uses to decide who receives it.
+  const auth = await apiRequireCapability("roster.view", { kind: "course", courseId }, req);
+  if (!auth.user) return auth.response;
 
   const message = encoder.encode(`data: ${JSON.stringify(body)}\n\n`);
   for (const [controller, user] of [...listeners]) {

@@ -4,6 +4,7 @@ import fs from "fs/promises";
 import { db } from "@/db";
 import { submissions } from "@/db/schema";
 import { requireCapability } from "@/lib/auth/require";
+import { apiRequireCapability } from "@/lib/auth/api";
 import { assignmentResource } from "@/lib/auth/resource-lookup";
 import { getSubmissionDir, getMediaType, ensureDir } from "@/lib/file-storage";
 import { storeSubmissionFile } from "@/lib/submission-store";
@@ -23,11 +24,30 @@ import { ensureIngested } from "@/actions/review";
  * that config. A single EXR frame or two slides under that; any real
  * sequence (or a large video) does not. Route Handlers read the body via
  * the Fetch API's `request.formData()` directly and aren't subject to it,
- * which is also why the CORS-open /api/submissions/upload (for the LS
- * Bridge extension) already worked fine at any size — this mirrors that,
- * with the auth gate that route deliberately can't carry.
+ * which is also why /api/submissions/upload (for the LS Bridge extension)
+ * already worked fine at any size — this mirrors that, with the auth gate
+ * that route deliberately can't carry.
+ *
+ * assignmentId/studentId are form fields here (the client, src/lib/media-
+ * upload.ts, isn't part of this sweep), so the resource-specific capability
+ * check still can't run until formData() has been read. What *can* run
+ * first — a coarse "is this even a signed-in instructor/assistant" gate,
+ * the Content-Length precheck, and the cross-origin check baked into
+ * apiRequireCapability — all happen before that parse.
  */
 export async function POST(request: NextRequest) {
+  const coarseAuth = await apiRequireCapability("course.edit", undefined, request);
+  if (!coarseAuth.user) return coarseAuth.response;
+
+  // Sanity ceiling on the whole multipart body before parsing it — a
+  // sequence upload carries many frames, each already capped at
+  // MAX_FILE_SIZE below, so this only rejects a body too large to be any
+  // legitimate request.
+  const contentLength = Number(request.headers.get("content-length") ?? "0");
+  if (contentLength > MAX_FILE_SIZE * 200) {
+    return NextResponse.json({ error: "Upload too large." }, { status: 413 });
+  }
+
   try {
     const formData = await request.formData();
     const assignmentId = Number(formData.get("assignmentId"));

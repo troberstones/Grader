@@ -3,17 +3,18 @@ import { db } from "@/db";
 import { assignments } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { apiRequireCapability } from "@/lib/auth/api";
+import { assignmentResource } from "@/lib/auth/resource-lookup";
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ assignmentId: string }> }
 ) {
-  const auth = await apiRequireCapability("course.edit");
-  if (!auth.user) return auth.response;
-
   const { assignmentId } = await params;
   const id = Number(assignmentId);
   if (!id) return NextResponse.json({ error: "Invalid assignmentId" }, { status: 400 });
+
+  const auth = await apiRequireCapability("course.edit", await assignmentResource(id), request);
+  if (!auth.user) return auth.response;
 
   const { lmsDiscussionUrl } = await request.json() as { lmsDiscussionUrl: string | null };
 

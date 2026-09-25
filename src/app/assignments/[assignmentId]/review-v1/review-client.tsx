@@ -273,10 +273,11 @@ export function ReviewV1Client({ assignment, initialSubmissions }: ReviewClientP
     try {
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("assignmentId", String(assignment.id));
-      fd.append("studentId", String(selectedStudentId));
 
-      const res = await fetch("/api/submissions/upload", { method: "POST", body: fd });
+      const res = await fetch(
+        `/api/submissions/upload?assignmentId=${assignment.id}&studentId=${selectedStudentId}`,
+        { method: "POST", body: fd },
+      );
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error ?? "Upload failed");

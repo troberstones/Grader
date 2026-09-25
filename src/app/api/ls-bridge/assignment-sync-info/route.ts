@@ -4,6 +4,10 @@
  * Returns everything the extension's content_grader.js needs to:
  *   • Sync student submission files from LS  (studentMap + lmsAssignmentId + gradebookID)
  *   • Push grades back to LS                 (grades array when includeGrades=true)
+ *
+ * Same-origin only — content_grader.js calls this with a relative fetch from
+ * the grader page itself, so the grader session cookie travels normally. See
+ * docs/security.md.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -14,17 +18,9 @@ import {
   students,
   grades,
 } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
-
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
-}
+import { eq, and, inArray } from "drizzle-orm";
+import { apiRequireCapability } from "@/lib/auth/api";
+import { assignmentResource } from "@/lib/auth/resource-lookup";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -32,11 +28,11 @@ export async function GET(request: NextRequest) {
   const includeGrades = searchParams.get("includeGrades") === "true";
 
   if (!assignmentId) {
-    return NextResponse.json(
-      { error: "assignmentId is required" },
-      { status: 400, headers: CORS_HEADERS }
-    );
+    return NextResponse.json({ error: "assignmentId is required" }, { status: 400 });
   }
+
+  const auth = await apiRequireCapability("roster.view", await assignmentResource(assignmentId));
+  if (!auth.user) return auth.response;
 
   try {
     // Load the assignment
@@ -46,10 +42,7 @@ export async function GET(request: NextRequest) {
       .where(eq(assignments.id, assignmentId));
 
     if (!assignment) {
-      return NextResponse.json(
-        { error: "Assignment not found" },
-        { status: 404, headers: CORS_HEADERS }
-      );
+      return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
     }
 
     // Load all enrolled students for this course
@@ -84,7 +77,9 @@ export async function GET(request: NextRequest) {
     };
 
     if (includeGrades) {
-      // Load all graded records for this assignment
+      // Push graded records AND recorded-missing ones — a "missing" grade is a
+      // real, deliberate 0 (nothing submitted), not the absence of a grade.
+      // 'ungraded'/'in_progress' never go out: those aren't final yet.
       const gradeRows = await db
         .select({
           studentId: grades.studentId,
@@ -96,7 +91,7 @@ export async function GET(request: NextRequest) {
         .where(
           and(
             eq(grades.assignmentId, assignmentId),
-            eq(grades.status, "graded")
+            inArray(grades.status, ["graded", "missing"])
           )
         );
 
@@ -121,12 +116,9 @@ export async function GET(request: NextRequest) {
       response.grades = gradesToPush;
     }
 
-    return NextResponse.json(response, { headers: CORS_HEADERS });
+    return NextResponse.json(response);
   } catch (err) {
     console.error("[ls-bridge/assignment-sync-info]", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed" },
-      { status: 500, headers: CORS_HEADERS }
-    );
+    return NextResponse.json({ error: "Failed to load sync info" }, { status: 500 });
   }
 }

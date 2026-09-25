@@ -266,8 +266,18 @@ async function getSubmissionsForAssignment(subsessionID, lmsDiscussionUrl) {
 }
 
 /**
- * Fetch a submission file from LS (same-origin, so session cookies work)
- * and POST it directly to the grader's upload endpoint.
+ * Ask background.js to fetch a submission file from LS and relay it to the
+ * grader app.
+ *
+ * This used to fetch the file here and POST it straight to
+ * `${graderOrigin}/api/submissions/upload` from this content script — but
+ * that's a cross-origin request from learningsuite.byu.edu to the grader
+ * origin, which can't carry the grader's session cookie (blocked by CORS,
+ * and moot anyway once that route required one). The download and the
+ * upload both happen in the service worker instead, which has
+ * host_permissions for both origins and can attach credentials — see
+ * relaySubmissionUpload() in background.js. This script only resolves the
+ * LS download URL to an absolute one and hands it off.
  */
 async function fetchAndRelaySubmission(
   downloadUrl,
@@ -279,28 +289,27 @@ async function fetchAndRelaySubmission(
   // downloadUrl may be relative or absolute
   const fetchUrl = downloadUrl.startsWith('http') ? downloadUrl : `https://learningsuite.byu.edu${downloadUrl}`;
 
-  const fileResp = await fetch(fetchUrl, { credentials: 'same-origin' });
-  if (!fileResp.ok) throw new Error(`Failed to download submission: ${fileResp.status}`);
-
-  const blob = await fileResp.blob();
-  const file = new File([blob], fileName || 'submission', { type: blob.type });
-
-  const form = new FormData();
-  form.append('file', file);
-  form.append('assignmentId', String(graderAssignmentId));
-  form.append('studentId', String(graderStudentId));
-
-  const uploadResp = await fetch(`${graderOrigin}/api/submissions/upload`, {
-    method: 'POST',
-    body: form,
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      {
+        action: 'RELAY_SUBMISSION_UPLOAD',
+        fetchUrl,
+        fileName,
+        graderOrigin,
+        graderAssignmentId,
+        graderStudentId,
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else if (response?.error) {
+          reject(new Error(response.error));
+        } else {
+          resolve(response);
+        }
+      }
+    );
   });
-
-  if (!uploadResp.ok) {
-    const text = await uploadResp.text();
-    throw new Error(`Grader upload failed: ${uploadResp.status} ${text}`);
-  }
-
-  return await uploadResp.json();
 }
 
 async function pushGrade(subsessionID, gradebookID, lmsStudentId, lmsAssignmentId, score, note) {

@@ -1,17 +1,16 @@
+/**
+ * POST /api/ls-bridge/sync-assignments
+ *
+ * Same-origin only — content_grader.js calls this with a relative fetch from
+ * the grader page itself, so the grader session cookie travels normally. See
+ * docs/security.md.
+ */
+
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { assignments, courses } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
-
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
-}
+import { apiRequireCapability } from "@/lib/auth/api";
 
 interface LSAssignment {
   lmsAssignmentId: string;
@@ -24,31 +23,33 @@ interface LSAssignment {
 }
 
 export async function POST(request: NextRequest) {
+  let body: {
+    courseId: number;
+    assignments: LSAssignment[];
+    gradebookID: string;
+    lsCourseId?: string;
+  };
   try {
-    const {
-      courseId,
-      assignments: lsAssignments,
-      gradebookID,
-      lsCourseId,
-    } = (await request.json()) as {
-      courseId: number;
-      assignments: LSAssignment[];
-      gradebookID: string;
-      lsCourseId?: string;
-    };
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
-    if (!courseId || !Array.isArray(lsAssignments)) {
-      return NextResponse.json(
-        { error: "courseId and assignments[] are required" },
-        { status: 400, headers: CORS_HEADERS }
-      );
-    }
+  const { courseId, assignments: lsAssignments, gradebookID, lsCourseId } = body;
 
+  if (!courseId || !Array.isArray(lsAssignments)) {
+    return NextResponse.json({ error: "courseId and assignments[] are required" }, { status: 400 });
+  }
+
+  const auth = await apiRequireCapability("course.edit", { kind: "course", courseId }, request);
+  if (!auth.user) return auth.response;
+
+  try {
     // Verify / auto-link the LS course
     if (lsCourseId) {
       const [course] = await db.select().from(courses).where(eq(courses.id, courseId));
       if (!course) {
-        return NextResponse.json({ error: "Course not found" }, { status: 404, headers: CORS_HEADERS });
+        return NextResponse.json({ error: "Course not found" }, { status: 404 });
       }
 
       if (course.lmsCourseId && course.lmsCourseId !== lsCourseId) {
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest) {
             lmsCourseId: course.lmsCourseId,
             openedCourseId: lsCourseId,
           },
-          { status: 409, headers: CORS_HEADERS }
+          { status: 409 }
         );
       }
 
@@ -127,12 +128,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ added, updated, synced, gradebookID }, { headers: CORS_HEADERS });
+    return NextResponse.json({ added, updated, synced, gradebookID });
   } catch (err) {
     console.error("[ls-bridge/sync-assignments]", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Sync failed" },
-      { status: 500, headers: CORS_HEADERS }
-    );
+    return NextResponse.json({ error: "Sync failed" }, { status: 500 });
   }
 }

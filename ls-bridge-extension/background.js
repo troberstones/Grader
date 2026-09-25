@@ -64,6 +64,62 @@ async function sendToLS(message) {
   return sendToTab(tab.id, { ...message, graderOrigin, ...lsState });
 }
 
+/**
+ * Downloads one submission file from Learning Suite and relays it to the
+ * grader app — the only genuinely cross-origin leg of the whole bridge.
+ *
+ * This has to happen here, in the service worker, rather than in
+ * content_ls.js: a content script's fetch() to a different origin is a
+ * normal cross-origin browser request (blocked by CORS, and even if the
+ * grader route answered with a specific Access-Control-Allow-Origin, a
+ * credentialed cross-origin fetch still can't carry the grader's
+ * sameSite=lax session cookie). A service worker's fetch to a host named in
+ * `host_permissions` bypasses CORS entirely and *can* carry that host's
+ * cookies with `credentials: 'include'` — so this is the one place the
+ * upload can actually be authenticated as the signed-in instructor.
+ *
+ * graderOrigin always comes from this module's own stored config, never
+ * from the caller's message — content_ls.js runs on learningsuite.byu.edu,
+ * and trusting an origin it supplied would let anything that can message
+ * this extension redirect uploads wherever it likes.
+ */
+async function relaySubmissionUpload({ fetchUrl, fileName, graderAssignmentId, graderStudentId }) {
+  const graderOrigin = await getGraderOrigin();
+
+  // Only ever fetch from Learning Suite — this runs with the extension's
+  // cookies for every permitted host, so an arbitrary URL here could pull
+  // grader data and re-upload it as a "submission".
+  if (new URL(fetchUrl).origin !== 'https://learningsuite.byu.edu') {
+    throw new Error('Submission downloads must come from learningsuite.byu.edu');
+  }
+
+  const fileResp = await fetch(fetchUrl, { credentials: 'include' });
+  if (!fileResp.ok) throw new Error(`Failed to download submission: ${fileResp.status}`);
+  const blob = await fileResp.blob();
+  const file = new File([blob], fileName || 'submission', { type: blob.type });
+
+  const form = new FormData();
+  form.append('file', file);
+
+  const uploadUrl =
+    `${graderOrigin}/api/submissions/upload` +
+    `?assignmentId=${encodeURIComponent(graderAssignmentId)}` +
+    `&studentId=${encodeURIComponent(graderStudentId)}`;
+
+  const uploadResp = await fetch(uploadUrl, {
+    method: 'POST',
+    body: form,
+    credentials: 'include',
+  });
+
+  if (!uploadResp.ok) {
+    const text = await uploadResp.text();
+    throw new Error(`Grader upload failed: ${uploadResp.status} ${text}`);
+  }
+
+  return await uploadResp.json();
+}
+
 // ─── Persistent port handler (keeps SW alive during sync) ────────────────────
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -117,6 +173,10 @@ async function handleMessage(msg) {
     case 'SYNC_SUBMISSIONS':
     case 'PUSH_GRADES':
       return await sendToLS(msg);
+
+    // ── Sent from content_ls.js: the one cross-origin leg ───────────────────
+    case 'RELAY_SUBMISSION_UPLOAD':
+      return await relaySubmissionUpload(msg);
 
     default:
       throw new Error(`Unknown action: ${msg.action}`);

@@ -9,9 +9,29 @@ Written 2026-08-12, when the rubric gained a dock beside the art reviewer.
 > browser extension calls these cross-origin, which is structurally
 > incompatible with cookie sessions. Read "Known gaps" below.
 
-This is a note, not a claim. Grader has real authorization as of 2026-08-14 for
-everything reachable from its own signed-in browser tab. The Learning Suite
-bridge is the one deliberate exception, not an oversight — see gap #1.
+> **Updated 2026-09-25. Gap #1 is closed.** The premise above turned out to be
+> wrong: `content_grader.js` (the extension's content script in the *grader*
+> tab, not the LS tab) was already calling `/api/ls-bridge/*` with relative
+> `fetch()`s from the grader page itself — same-origin, carrying the grader
+> session cookie like any other same-tab request. The `Access-Control-Allow-
+> Origin: *` on those four routes was never load-bearing; it just also
+> happened to leave them wide open to anyone who could reach the port. They
+> now require a normal session and the matching capability
+> (`apiRequireCapability`), same as everything else. `/api/submissions/upload`
+> *is* genuinely cross-origin — `content_ls.js`, running on
+> learningsuite.byu.edu, used to POST it directly — so that one file upload
+> was moved into the extension's background service worker instead, which
+> fetches the LS file and POSTs to `${graderOrigin}/api/submissions/upload`
+> with `credentials: "include"`; `host_permissions` (declared, for localhost,
+> or requested via `optional_host_permissions` for a real campus host — see
+> popup.js) is what lets an extension request carry cookies across origins in
+> the first place. See `isCrossOriginRequest()` in `src/lib/auth/api.ts` and
+> `ALLOWED_EXTENSION_ORIGINS` in `.env.example` for how that one legitimately
+> cross-origin caller is allow-listed without reopening the other three.
+
+This is a note, not a claim. Grader has real authorization as of 2026-09-25 for
+everything reachable from its own signed-in browser tab *and* the LS Bridge
+extension. See gap #1 for what changed and what's still worth watching.
 
 ## The invariant worth protecting
 
@@ -58,28 +78,68 @@ instructors' sessions.
 
 Roughly in the order they'd matter if the tool left the studio:
 
-1. **~~No authentication.~~ ~~The API is not.~~ One corner of it still is, on
-   purpose.** `src/proxy.ts` redirects unauthenticated page requests, the root
-   layout re-checks the session against the database, and every server action
-   (`src/actions/*.ts`) and same-origin route handler now calls
+1. **~~No authentication.~~ ~~The API is not.~~ ~~One corner of it still
+   is.~~ Closed.** `src/proxy.ts` redirects unauthenticated page requests, the
+   root layout re-checks the session against the database, and every server
+   action (`src/actions/*.ts`) and route handler now calls
    `requireCapability()` / `apiRequireCapability()`
    (`src/lib/auth/require.ts`, `src/lib/auth/api.ts`) before touching the
-   database. That covers `/api/submissions/[id]/file`, `/api/review/*`, and
-   `/api/sync/*` — all fetched from grader's own signed-in tab, so the session
-   cookie travels normally.
+   database. That covers `/api/submissions/[id]/file`, `/api/review/*`,
+   `/api/sync/*`, and — as of this sweep — `/api/ls-bridge/*` and
+   `/api/submissions/upload` too.
 
-   **`/api/ls-bridge/*` and `/api/submissions/upload` stay open.** A Chrome
-   extension content script running inside Learning Suite's own origin calls
-   these directly. That is cross-origin by definition: the routes answer with
-   `Access-Control-Allow-Origin: *` so the extension can reach them at all, and
-   a wildcard origin forbids credentialed requests by spec — the session
-   cookie could not travel here even if grader tried to send it, and
-   `sameSite=lax` would block it on the way in regardless. Gating these with a
-   cookie check wouldn't add security, it would just break the LS sync. A real
-   fix needs a *machine* credential — a shared API key the extension sends in
-   a header — which is a separate feature, not implemented yet. Until then,
-   anything that can reach the port can sync rosters, assignments, and files
-   through these four routes. This is the largest remaining gap.
+   **The earlier premise for leaving those four `/api/ls-bridge/*` routes
+   open was wrong.** `content_grader.js` — the extension's content script
+   that runs in the *grader* tab, not the LS tab — was already calling them
+   with relative `fetch()`s from the grader page itself. That's same-origin:
+   the grader session cookie travels exactly like it does for any other
+   fetch from that tab. The `Access-Control-Allow-Origin: *` on
+   `assignment-sync-info`, `course-link`, `sync-assignments`, and
+   `sync-roster` was never load-bearing — it just also meant anything that
+   could reach the port could reach them too, unauthenticated. All four now
+   call `apiRequireCapability()`: reads need `roster.view`/`course.view` on
+   the assignment or course, writes need `course.edit`, and the CORS headers
+   and `OPTIONS` handlers are gone.
+
+   **`/api/submissions/upload` is genuinely cross-origin**, and is the one
+   real exception. `content_ls.js` runs on learningsuite.byu.edu and used to
+   POST the downloaded submission file to `${graderOrigin}/api/submissions/
+   upload` directly — cross-origin, and (being a wildcard-CORS response)
+   incapable of carrying the grader session cookie either way. That upload
+   was moved into `background.js`, the extension's service worker:
+   `content_ls.js` now sends it `{fetchUrl, fileName, graderAssignmentId,
+   graderStudentId}` over `chrome.runtime.sendMessage`, and the service
+   worker fetches the file from LS and POSTs it to the grader with
+   `credentials: "include"`. A service worker's fetch to a host named in
+   `host_permissions` bypasses CORS and *can* carry cookies for that host —
+   unlike a page or content script fetch, which is why this had to move
+   there rather than just adding `credentials: "include"` in place. The
+   manifest declares `host_permissions` for `localhost`; a real (non-
+   localhost) campus deployment needs the user to save that origin in the
+   popup, which requests it via `optional_host_permissions` +
+   `chrome.permissions.request()` before storing it.
+
+   The route itself now requires a session with `course.edit` on the target
+   assignment, checks the student is actually enrolled in that assignment's
+   course, and does all of that — plus a `Content-Length` precheck — before
+   `request.formData()` ever reads the file. Its caller's `Origin` is
+   `chrome-extension://<id>`, not this app's own origin, so it would
+   otherwise fail the same-origin check every other state-changing route now
+   gets (see `isCrossOriginRequest()` in `src/lib/auth/api.ts`); it's
+   allow-listed via the comma-separated `ALLOWED_EXTENSION_ORIGINS` env var
+   instead (`.env.example`). Leave that var unset and the route simply
+   requires same-origin like everything else, which is correct if the
+   extension isn't installed against this deployment.
+
+   **Not done in this sweep:** the extension's content scripts
+   (`content_grader.js`, `inject.js`) still only match `localhost`/
+   `https?://localhost:*` in `manifest.json`'s static `content_scripts` —
+   they won't run at all against a saved campus origin without also
+   registering them dynamically (`chrome.scripting.registerContentScripts`)
+   once `optional_host_permissions` is granted. That's a real gap for a
+   non-localhost deployment, just a different one than the auth gap this
+   entry used to describe, and needs a manual pass in real Chrome to verify
+   the relay end-to-end regardless (mocking `chrome.*` doesn't cover it).
 2. **`allowedDevOrigins` uses subnet wildcards** (`192.168.86.*` and friends, in
    `next.config.ts`). Necessary because DHCP moves the studio machine between
    sessions, but it means any host on those subnets is a permitted origin.
@@ -291,7 +351,8 @@ lose.
 
 ## Before this is exposed to anything but the studio LAN
 
-At minimum: give the LS bridge a machine credential instead of leaving it
-open, drop the origin wildcards to specific hosts, set `SECURE_COOKIES=1`
-behind TLS, and decide what a student is allowed to see before `author.id`
-stops being a constant.
+At minimum: register the extension's content scripts dynamically for a saved
+campus origin (see gap #1's "Not done in this sweep"), drop the
+`allowedDevOrigins` subnet wildcards to specific hosts, set
+`SECURE_COOKIES=1` behind TLS, and decide what a student is allowed to see
+before `author.id` stops being a constant.
