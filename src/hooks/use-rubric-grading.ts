@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useGrading } from "@/components/shared/grading-context";
 import { useGradeActions } from "@/hooks/use-grade-actions";
-import type { StudentWithGrade } from "@/actions/grades";
+import type { GradeEntry, StudentGrade, StudentWithGrade } from "@/actions/grades";
 import type { getAssignment } from "@/actions/assignments";
 import { computeScore, criterionPoints, isShareModel, toNormalRubric } from "@/lib/rubric";
 import type { Level, NormalRubric, Nudge, ScoreResult, Selection } from "@/lib/rubric";
@@ -35,6 +35,25 @@ export interface ShareGrading {
    * the time anyone notices the edit never landed.
    */
   saveFailed: boolean;
+  /**
+   * Set when a save was rejected because someone else had already saved this
+   * grade (`baseUpdatedAt` didn't match). Holds the record as it currently
+   * stands on the server — entries included — so "Load theirs" can actually
+   * repaint the rubric with it. Null when there's no open conflict.
+   */
+  conflict: StudentGrade | null;
+  /** Replaces local state with the other device's grade and clears dirty. */
+  loadTheirs: () => void;
+  /** Discards the conflict and resends the local edit without a base, i.e. force-overwrites. */
+  keepMine: () => void;
+  /**
+   * Set when the last save/clear/mark-missing failed because the session is
+   * missing/expired or lacks the capability (a typed `{ reason:"auth" }`
+   * from the action, not a thrown error — see src/lib/auth/require.ts).
+   */
+  authExpired: boolean;
+  /** Re-runs whichever action last failed with `authExpired` — call after signing back in. */
+  retryAfterSignIn: () => void;
   saving: boolean;
   exporting: boolean;
   /** Resolves false if the save failed — callers must not treat it as done. */
@@ -118,12 +137,23 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
   dirtyRef.current = dirty;
 
   const [saveFailed, setSaveFailed] = useState(false);
+  const [conflict, setConflict] = useState<StudentGrade | null>(null);
+  const [authExpired, setAuthExpired] = useState(false);
 
   const savingRef = useRef(saving);
   savingRef.current = saving;
 
   const selectedStudentIdRef = useRef(selectedStudentId);
   selectedStudentIdRef.current = selectedStudentId;
+
+  // The `updatedAt` of the grade this instance last loaded or saved for the
+  // *current* student — sent back as `baseUpdatedAt` so the server can tell
+  // whether the row it's about to overwrite is the one this instance last
+  // saw. `undefined` means "no grade yet" (a fresh row, nothing to conflict
+  // with). A ref, not state: it's read at save time, never rendered.
+  const baseUpdatedAtRef = useRef<string | undefined>(
+    (selectedStudent as StudentWithGrade | null)?.grade?.updatedAt,
+  );
 
   // Bumped on every local edit. A save started before an edit lands must not
   // clear `dirty` once it resolves — that edit would otherwise look saved
@@ -138,6 +168,9 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
       setFeedbackState(student.grade?.feedback ?? "");
       setDirty(false);
       setSaveFailed(false);
+      setConflict(null);
+      setAuthExpired(false);
+      baseUpdatedAtRef.current = student.grade?.updatedAt;
     },
     [students, criteria],
   );
@@ -179,6 +212,12 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     Promise.resolve(true),
   );
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Whichever action last failed with `authExpired` — "Retry" (or clicking
+  // through after signing in on another tab) re-runs exactly that, rather
+  // than always re-attempting a save when it was actually markMissing/clear
+  // that got refused.
+  const retryActionRef = useRef<() => void>(() => {});
 
   const scheduleAutoSave = useCallback(() => {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
@@ -265,13 +304,28 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
       })
       .filter((e): e is { criteriaId: number; levelId: number; nudge: Nudge } => e !== null);
 
-    const result = await saveShare({ assignmentId: assignment.id, studentId: targetStudentId, entries, feedback: targetFeedback });
+    const result = await saveShare({
+      assignmentId: assignment.id,
+      studentId: targetStudentId,
+      entries,
+      feedback: targetFeedback,
+      baseUpdatedAt: baseUpdatedAtRef.current,
+    });
 
-    if (!result) {
+    if (!result.ok) {
       setSaveFailed(true);
+      if (result.reason === "auth") {
+        setAuthExpired(true);
+        retryActionRef.current = () => void handleSaveRef.current(markComplete);
+      } else if (result.reason === "stale") {
+        setConflict(result.current);
+      }
       return false;
     }
     setSaveFailed(false);
+    setAuthExpired(false);
+    setConflict(null);
+    baseUpdatedAtRef.current = result.updatedAt;
 
     const contextEntries = entries.map((e) => {
       const outcome = normalRubric && scoreResult
@@ -292,6 +346,7 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
       status: result.status,
       gradedAt: result.status === "graded" ? new Date().toISOString() : null,
       exportedAt: currentFull?.grade?.exportedAt ?? null,
+      updatedAt: result.updatedAt,
       entries: contextEntries,
     });
 
@@ -323,8 +378,17 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
       clearTimeout(autoSaveTimerRef.current);
       autoSaveTimerRef.current = null;
     }
-    const ok = await clear(selectedStudentId);
-    if (!ok) return;
+    const result = await clear(selectedStudentId);
+    if (!result.ok) {
+      if (result.reason === "auth") {
+        setAuthExpired(true);
+        retryActionRef.current = () => void handleClear();
+      }
+      return;
+    }
+    setAuthExpired(false);
+    setConflict(null);
+    baseUpdatedAtRef.current = undefined;
     setSelections({});
     setFeedbackState("");
     setDirty(false);
@@ -341,8 +405,17 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
       clearTimeout(autoSaveTimerRef.current);
       autoSaveTimerRef.current = null;
     }
-    const ok = await markStudentMissing(selectedStudentId);
-    if (!ok) return;
+    const result = await markStudentMissing(selectedStudentId);
+    if (!result.ok) {
+      if (result.reason === "auth") {
+        setAuthExpired(true);
+        retryActionRef.current = () => void handleMarkMissing();
+      }
+      return;
+    }
+    setAuthExpired(false);
+    setConflict(null);
+    baseUpdatedAtRef.current = result.updatedAt;
     setSelections({});
     setFeedbackState("");
     setDirty(false);
@@ -354,6 +427,7 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
       status: "missing",
       gradedAt: new Date().toISOString(),
       exportedAt: null,
+      updatedAt: result.updatedAt,
       entries: [],
     });
     toast.success("Marked missing");
@@ -430,6 +504,7 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     if (dirtyRef.current) return;
     setSelections(selectionsOf(selectedStudent as StudentWithGrade, criteria));
     setFeedbackState((selectedStudent as StudentWithGrade).grade?.feedback ?? "");
+    baseUpdatedAtRef.current = (selectedStudent as StudentWithGrade).grade?.updatedAt;
   }, [selectedStudent, criteria]);
 
   /** Level + optional nudge for one criterion. */
@@ -447,6 +522,40 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     scheduleAutoSave();
   }
 
+  /**
+   * Resolves an open conflict by adopting the other device's grade: replaces
+   * local selections/feedback with `conflict`, clears dirty, and advances
+   * `baseUpdatedAtRef` so the next save compares against what's now loaded.
+   * Also pushes the record into GradingContext so the sidebar agrees.
+   */
+  function loadTheirs() {
+    if (!conflict || !selectedStudentId) return;
+    setSelections(selectionsFromEntries(conflict.entries, criteria));
+    setFeedbackState(conflict.feedback ?? "");
+    setDirty(false);
+    setSaveFailed(false);
+    setConflict(null);
+    baseUpdatedAtRef.current = conflict.updatedAt;
+    updateStudentGrade(selectedStudentId, conflict);
+  }
+
+  /**
+   * Resolves an open conflict by discarding the other device's save: drops
+   * `baseUpdatedAt` so the retried save carries no conflict check at all,
+   * which is what "force overwrite" means here — the record on the server
+   * genuinely doesn't matter to this choice, only the local edit does.
+   */
+  function keepMine() {
+    setConflict(null);
+    baseUpdatedAtRef.current = undefined;
+    void handleSaveRef.current(false);
+  }
+
+  /** Re-runs whichever action last failed with `authExpired`. */
+  function retryAfterSignIn() {
+    retryActionRef.current();
+  }
+
   return {
     assignment,
     criteria,
@@ -455,6 +564,11 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     setFeedback,
     dirty,
     saveFailed,
+    conflict,
+    loadTheirs,
+    keepMine,
+    authExpired,
+    retryAfterSignIn,
     saving,
     exporting,
     handleSave,
@@ -469,12 +583,12 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
   };
 }
 
-function selectionsOf(
-  student: StudentWithGrade | null,
+function selectionsFromEntries(
+  entries: GradeEntry[],
   criteria: { id: number; levels: { id: number; level: number }[] }[],
 ): SelectionMap {
   const map: SelectionMap = {};
-  for (const entry of student?.grade?.entries ?? []) {
+  for (const entry of entries) {
     if (entry.levelId === null) continue;
     const criterion = criteria.find((c) => c.id === entry.criteriaId);
     const levelRow = criterion?.levels.find((l) => l.id === entry.levelId);
@@ -483,4 +597,11 @@ function selectionsOf(
     map[entry.criteriaId] = { level: levelRow.level as Level, nudge };
   }
   return map;
+}
+
+function selectionsOf(
+  student: StudentWithGrade | null,
+  criteria: { id: number; levels: { id: number; level: number }[] }[],
+): SelectionMap {
+  return selectionsFromEntries(student?.grade?.entries ?? [], criteria);
 }
