@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { assignments, courseMembers, courses, gradeEntries, grades, rubricCriteria, rubricLevels, rubrics, students, users } from "@/db/schema";
@@ -157,10 +157,16 @@ async function seedGrade(
   return { student, grade };
 }
 
-/** Like authoredPayload(), but with an explicit criteria list/shares — for tests that add, drop, or reweight criteria. */
+/**
+ * Like authoredPayload(), but with an explicit criteria list/shares/ids — for
+ * tests that add, drop, reweight, rename, reorder, or re-id criteria. `id`
+ * mirrors what the real editor sends for a criterion that already has a
+ * database row (see DraftCriterion/AuthoredCriterion) — omit it to exercise
+ * the id-less, match-by-name fallback that old clients and imports still use.
+ */
 function sharePayload(
   name: string,
-  criteria: Array<{ name: string; share?: number }>,
+  criteria: Array<{ id?: number; name: string; share?: number }>,
   bandEdges: [number, number, number] = [0.4, 0.7, 0.9],
 ): AuthoredRubric {
   const levels = (label: string) => [
@@ -173,7 +179,7 @@ function sharePayload(
     version: 1,
     name,
     bandEdges,
-    criteria: criteria.map((c) => ({ name: c.name, share: c.share ?? 1, levels: levels(c.name) })),
+    criteria: criteria.map((c) => ({ id: c.id, name: c.name, share: c.share ?? 1, levels: levels(c.name) })),
   };
 }
 
@@ -424,5 +430,172 @@ describe("updateShareRubric rescoring", () => {
     expect(unchangedGrade1.totalScore).toBe(95);
     const [unchangedGrade2] = await db.select().from(grades).where(eq(grades.id, grade2.id));
     expect(unchangedGrade2.totalScore).toBe(100);
+  });
+});
+
+describe("updateShareRubric criteria identity", () => {
+  it("keeps a graded criterion's entries and totals when it's renamed by id", async () => {
+    await seedSignedInAdmin();
+    const { rubric, criteria } = await seedGradableShareRubric("Composition", ["Balance", "Craft"]);
+    const assignment = await seedAssignmentForRubric(rubric.id, 100);
+    const { grade } = await seedGrade(
+      assignment.id,
+      "graded",
+      [
+        { criteriaId: criteria.Balance.id, levelId: criteria.Balance.levelIds[2] }, // .9
+        { criteriaId: criteria.Craft.id, levelId: criteria.Craft.levelIds[3] }, // 1.0
+      ],
+      95,
+    );
+
+    const outcome = await updateShareRubric(
+      rubric.id,
+      sharePayload("Composition", [
+        { id: criteria.Balance.id, name: "Balance & Composition" },
+        { id: criteria.Craft.id, name: "Craft" },
+      ]),
+    );
+
+    expect(outcome).toEqual({ rescored: 1, nowInProgress: 0 });
+    const [updated] = await db.select().from(grades).where(eq(grades.id, grade.id));
+    expect(updated.totalScore).toBe(95);
+    expect(updated.status).toBe("graded");
+
+    // Same row, new name — not archived, not replaced.
+    const [renamed] = await db.select().from(rubricCriteria).where(eq(rubricCriteria.id, criteria.Balance.id));
+    expect(renamed.name).toBe("Balance & Composition");
+    expect(renamed.archived).toBe(0);
+    const balanceEntry = await db.select().from(gradeEntries).where(eq(gradeEntries.criteriaId, criteria.Balance.id));
+    expect(balanceEntry).toHaveLength(1);
+    expect(balanceEntry[0].levelId).toBe(criteria.Balance.levelIds[2]);
+
+    // No extra criterion appeared under either name.
+    const all = await db.select().from(rubricCriteria).where(eq(rubricCriteria.rubricId, rubric.id));
+    expect(all).toHaveLength(2);
+  });
+
+  it("leaves a graded rubric's totals unchanged when criteria are reordered by id", async () => {
+    await seedSignedInAdmin();
+    const { rubric, criteria } = await seedGradableShareRubric("Composition", ["Balance", "Craft"]);
+    const assignment = await seedAssignmentForRubric(rubric.id, 100);
+    const { grade } = await seedGrade(
+      assignment.id,
+      "graded",
+      [
+        { criteriaId: criteria.Balance.id, levelId: criteria.Balance.levelIds[2] },
+        { criteriaId: criteria.Craft.id, levelId: criteria.Craft.levelIds[3] },
+      ],
+      95,
+    );
+
+    // Craft first, Balance second — reversed from insertion order.
+    const outcome = await updateShareRubric(
+      rubric.id,
+      sharePayload("Composition", [
+        { id: criteria.Craft.id, name: "Craft" },
+        { id: criteria.Balance.id, name: "Balance" },
+      ]),
+    );
+
+    expect(outcome).toEqual({ rescored: 1, nowInProgress: 0 });
+    const [updated] = await db.select().from(grades).where(eq(grades.id, grade.id));
+    expect(updated.totalScore).toBe(95);
+    expect(updated.status).toBe("graded");
+
+    const [craftRow] = await db.select().from(rubricCriteria).where(eq(rubricCriteria.id, criteria.Craft.id));
+    const [balanceRow] = await db.select().from(rubricCriteria).where(eq(rubricCriteria.id, criteria.Balance.id));
+    expect(craftRow.sortOrder).toBe(0);
+    expect(balanceRow.sortOrder).toBe(1);
+  });
+
+  it("rejects an id borrowed from another rubric, with no writes", async () => {
+    await seedSignedInAdmin();
+    const { rubric: rubricA, criteria: criteriaA } = await seedGradableShareRubric("Composition A", ["Balance", "Craft"]);
+    const { criteria: criteriaB } = await seedGradableShareRubric("Composition B", ["Balance", "Craft"]);
+
+    await expect(
+      updateShareRubric(
+        rubricA.id,
+        sharePayload("Composition A", [
+          // This id belongs to rubric B's "Balance", not rubric A's.
+          { id: criteriaB.Balance.id, name: "Hijacked" },
+          { id: criteriaA.Craft.id, name: "Craft" },
+        ]),
+      ),
+    ).rejects.toThrow(/does not belong to this rubric/);
+
+    // Neither rubric's name nor rubric A's criteria changed.
+    const [unchangedRubricA] = await db.select().from(rubrics).where(eq(rubrics.id, rubricA.id));
+    expect(unchangedRubricA.name).toBe("Composition A");
+    const [unchangedBalanceA] = await db.select().from(rubricCriteria).where(eq(rubricCriteria.id, criteriaA.Balance.id));
+    expect(unchangedBalanceA.name).toBe("Balance");
+    expect(unchangedBalanceA.archived).toBe(0);
+    // Rubric B's criterion wasn't touched either — no cross-rubric write happened.
+    const [unchangedBalanceB] = await db.select().from(rubricCriteria).where(eq(rubricCriteria.id, criteriaB.Balance.id));
+    expect(unchangedBalanceB.name).toBe("Balance");
+  });
+
+  it("still matches an id-less criterion to an existing row by name (back-compat with old clients/imports)", async () => {
+    await seedSignedInAdmin();
+    const { rubric, criteria } = await seedGradableShareRubric("Composition", ["Balance", "Craft"]);
+    const assignment = await seedAssignmentForRubric(rubric.id, 100);
+    const { grade } = await seedGrade(
+      assignment.id,
+      "graded",
+      [
+        { criteriaId: criteria.Balance.id, levelId: criteria.Balance.levelIds[2] },
+        { criteriaId: criteria.Craft.id, levelId: criteria.Craft.levelIds[3] },
+      ],
+      95,
+    );
+
+    // No ids at all — the shape a paste-import or an AI-generated rubric
+    // always sends. "Balance" and "Craft" must still resolve to the same
+    // rows by name, not be archived-and-recreated.
+    const outcome = await updateShareRubric(rubric.id, sharePayload("Composition", [{ name: "Balance" }, { name: "Craft" }]));
+
+    expect(outcome).toEqual({ rescored: 1, nowInProgress: 0 });
+    const [updated] = await db.select().from(grades).where(eq(grades.id, grade.id));
+    expect(updated.totalScore).toBe(95);
+    expect(updated.status).toBe("graded");
+
+    const all = await db.select().from(rubricCriteria).where(eq(rubricCriteria.rubricId, rubric.id));
+    expect(all).toHaveLength(2);
+    expect(all.map((c) => c.id).sort()).toEqual([criteria.Balance.id, criteria.Craft.id].sort());
+  });
+
+  it("still inserts a brand-new, id-less criterion and sends graded students back to in_progress", async () => {
+    await seedSignedInAdmin();
+    const { rubric, criteria } = await seedGradableShareRubric("Composition", ["Balance", "Craft"]);
+    const assignment = await seedAssignmentForRubric(rubric.id, 100);
+    const { grade } = await seedGrade(
+      assignment.id,
+      "graded",
+      [
+        { criteriaId: criteria.Balance.id, levelId: criteria.Balance.levelIds[2] },
+        { criteriaId: criteria.Craft.id, levelId: criteria.Craft.levelIds[3] },
+      ],
+      95,
+    );
+
+    const outcome = await updateShareRubric(
+      rubric.id,
+      sharePayload("Composition", [
+        { id: criteria.Balance.id, name: "Balance" },
+        { id: criteria.Craft.id, name: "Craft" },
+        { name: "Layout" }, // new — no id
+      ]),
+    );
+
+    expect(outcome).toEqual({ rescored: 1, nowInProgress: 1 });
+    const [updated] = await db.select().from(grades).where(eq(grades.id, grade.id));
+    expect(updated.status).toBe("in_progress");
+    expect(updated.totalScore).toBe(95);
+
+    const layout = await db
+      .select()
+      .from(rubricCriteria)
+      .where(and(eq(rubricCriteria.name, "Layout"), eq(rubricCriteria.rubricId, rubric.id)));
+    expect(layout).toHaveLength(1);
   });
 });

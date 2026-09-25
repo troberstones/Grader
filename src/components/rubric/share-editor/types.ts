@@ -1,5 +1,13 @@
-/** The editor's in-progress state for one criterion: no ids, no points — just what a professor edits directly. */
+/**
+ * The editor's in-progress state for one criterion: no points — just what a
+ * professor edits directly. `id` is carried along (never edited directly by
+ * the UI) so a save can tell "renamed this row" from "removed it and added a
+ * new one" — see AuthoredCriterion's doc comment. Absent for a criterion that
+ * didn't come from the database yet: blank/template start, paste-import, or
+ * AI generation.
+ */
 export interface DraftCriterion {
+  id?: number;
   name: string;
   description: string;
   share: number;

@@ -162,19 +162,25 @@ export async function createShareRubric(data: AuthoredRubric): Promise<{ id: num
  * Updates a share-model rubric without the legacy `updateRubric`'s
  * delete-and-reinsert (which throws an FK error the moment a rubric has any
  * grade_entries against it — see docs/rubric-authoring.md). Criteria are
- * reconciled by NAME, not array position: matching by position would
- * silently reassign a row's identity the moment two criteria are reordered,
- * which would make a student's existing grade for "Lighting" read back as
- * belonging to whatever criterion now occupies that row. A criterion whose
- * name disappears is archived (not deleted) if it has grade history, so
- * those grades stay FK-valid and readable; otherwise it's removed outright.
+ * reconciled primarily by ID: the editor (src/components/rubric/share-editor/)
+ * carries each existing criterion's database id along untouched, so a rename
+ * or reorder still points at the same row and its grade_entries keep
+ * counting. A criterion with no id — new from the grid's "Add Criterion", a
+ * template, a paste-import, or an AI-generated rubric, none of which can know
+ * a database id — falls back to matching an existing, still-unmatched
+ * criterion by NAME, exactly as this function used to do for everything.
+ * That fallback is what a plain rename used to be indistinguishable from a
+ * remove-and-add-under-a-new-name; now the editor's own submissions never
+ * need it; only older/foreign clients (JSON pasted from an export, or hand-
+ * built payloads) still take that path, and reordering under it stays
+ * handled exactly right, same as before.
  *
- * Known, accepted limitation: a plain rename is indistinguishable from
- * remove-and-add-under-a-new-name, since AuthoredCriterion carries no id
- * (correctly — it also has to accept fresh AI-pasted JSON, which never
- * will). Worst case: an unnecessary archive of a criterion that still reads
- * fine under its old name in grade history. Reorder — the common, dangerous
- * case — is handled exactly right by this.
+ * An id that doesn't belong to this rubric — stale, or lifted from a paste of
+ * a *different* rubric's export — is rejected outright before any row is
+ * touched; a caller must never be able to reach across rubrics by number. A
+ * criterion whose row goes unmatched (name and id both fail to find it) is
+ * archived (not deleted) if it has grade history, so those grades stay
+ * FK-valid and readable; otherwise it's removed outright.
  *
  * Also rescores every existing grade on every assignment currently using
  * this rubric, in the SAME transaction as the edit (owner's decision): a
@@ -194,6 +200,35 @@ export async function updateShareRubric(id: number, data: AuthoredRubric): Promi
   const normal = result.rubric;
 
   const outcome = db.transaction((tx) => {
+    const existing = tx
+      .select()
+      .from(rubricCriteria)
+      .where(and(eq(rubricCriteria.rubricId, id), eq(rubricCriteria.archived, 0)))
+      .all();
+    const existingById = new Map(existing.map((c) => [c.id, c]));
+    const existingByName = new Map(existing.map((c) => [c.name.toLowerCase(), c]));
+
+    // Reject a foreign/stale id before writing anything — an id only ever
+    // identifies a row on *this* rubric. (The transaction would roll back
+    // any partial writes anyway on a throw, but checking first means we
+    // never attempt them.)
+    for (const criterion of normal.criteria) {
+      if (criterion.id !== undefined && !existingById.has(criterion.id)) {
+        throw new Error(
+          `criterion "${criterion.name}" has an id (${criterion.id}) that does not belong to this rubric.`,
+        );
+      }
+    }
+
+    // Pre-claim every id match so the name fallback below only ever lands on
+    // a row nothing else in this payload has already claimed — otherwise a
+    // criterion renamed *away* from "Balance" earlier in the array could
+    // still let some other, unrelated new criterion also named "Balance"
+    // steal its row by that stale name.
+    const matchedIds = new Set<number>(
+      normal.criteria.filter((c) => c.id !== undefined).map((c) => c.id as number),
+    );
+
     tx.update(rubrics)
       .set({
         name: normal.name,
@@ -204,18 +239,19 @@ export async function updateShareRubric(id: number, data: AuthoredRubric): Promi
       .where(eq(rubrics.id, id))
       .run();
 
-    const existing = tx
-      .select()
-      .from(rubricCriteria)
-      .where(and(eq(rubricCriteria.rubricId, id), eq(rubricCriteria.archived, 0)))
-      .all();
-    const existingByName = new Map(existing.map((c) => [c.name.toLowerCase(), c]));
-    const matchedIds = new Set<number>();
-
     normal.criteria.forEach((criterion, i) => {
-      const match = existingByName.get(criterion.name.toLowerCase());
+      let match: (typeof existing)[number] | undefined;
+      if (criterion.id !== undefined) {
+        match = existingById.get(criterion.id);
+      } else {
+        const candidate = existingByName.get(criterion.name.toLowerCase());
+        if (candidate && !matchedIds.has(candidate.id)) {
+          match = candidate;
+          matchedIds.add(candidate.id);
+        }
+      }
+
       if (match) {
-        matchedIds.add(match.id);
         tx.update(rubricCriteria)
           .set({ name: criterion.name, description: criterion.description, weight: criterion.share, sortOrder: i })
           .where(eq(rubricCriteria.id, match.id))
