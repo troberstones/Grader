@@ -16,7 +16,8 @@ export type AuditAction =
   | "rubric.delete"
   | "upload_link.create"
   | "upload_link.revoke"
-  | "upload_link.use";
+  | "upload_link.use"
+  | "submission.batch_import";
 
 /**
  * Record who did what. Append-only, best-effort: a write failure here must
