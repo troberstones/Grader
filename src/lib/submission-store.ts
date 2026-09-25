@@ -59,8 +59,22 @@ export async function storeSubmissionFile(opts: {
       .update(submissions)
       .set({ filePath: relPath, fileType, fileSize: size, mediaType, submittedAt: new Date().toISOString() })
       .where(eq(submissions.id, existing[0].id));
-    // The old file's derivatives no longer match what's on disk.
+
+    // The old file's derivatives no longer match what's on disk — drop the
+    // rows and the files they point at. Read the paths before deleting the
+    // rows, and skip the "original" variant: for a submission with nothing
+    // to transcode (e.g. a PDF), that row's path *is* the submission's own
+    // file, already handled by the unlink above, not a derivative to remove.
+    const oldMedia = await db
+      .select({ path: reviewMedia.path, variant: reviewMedia.variant })
+      .from(reviewMedia)
+      .where(eq(reviewMedia.submissionId, existing[0].id));
     await db.delete(reviewMedia).where(eq(reviewMedia.submissionId, existing[0].id));
+    await Promise.all(
+      oldMedia
+        .filter((m) => m.variant !== "original")
+        .map((m) => fs.unlink(path.join(process.cwd(), m.path)).catch(() => {})),
+    );
     return existing[0].id;
   }
 

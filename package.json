@@ -20,10 +20,12 @@
     "prebuild": "npm run sync:pdf-worker",
     "review:import-sequence": "node scripts/import-sequence.mjs",
     "roster:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-roster.mjs",
+    "storage:sweep": "node scripts/sweep-orphans.mjs",
     "test:rubric": "./scripts/build-rubric-test.sh && node --test test/rubric.test.cjs",
     "test:migrations": "node --test test/migrations.test.mjs",
+    "test:sweep": "node --test test/sweep-orphans.test.mjs",
     "test:auth": "vitest run",
-    "test": "npm run test:rubric && npm run test:migrations && npm run review:test && npm run test:auth"
+    "test": "npm run test:rubric && npm run test:migrations && npm run test:sweep && npm run review:test && npm run test:auth"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

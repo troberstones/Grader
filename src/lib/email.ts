@@ -26,7 +26,26 @@ const FROM_ADDRESS = process.env.MAIL_FROM || process.env.SMTP_USER || "grader@l
 // (the existing copy-link UI resolves it against window.location instead),
 // so sending is skipped entirely rather than emailing a broken link.
 const APP_BASE_URL = process.env.APP_BASE_URL;
+// withTimeout() below races the actual send against this and resolves
+// `false` on timeout — but nodemailer's send isn't cancelled when that
+// happens, so a slow local MTA can still deliver the mail after the caller
+// has already been told it failed. Not redesigning that (a stuck send is
+// rare and the caller only uses the boolean for its own UI copy), just
+// flagging it so a "it said it failed but the student got it" report isn't
+// a mystery.
 const SEND_TIMEOUT_MS = 5000;
+
+// Logged once so an unconfigured APP_BASE_URL shows up in the server log
+// instead of silently dropping every invite/reset/upload-link email — this
+// was previously a bare early return with no trace anywhere.
+let warnedMissingBaseUrl = false;
+function warnMissingBaseUrlOnce(): void {
+  if (warnedMissingBaseUrl) return;
+  warnedMissingBaseUrl = true;
+  console.warn(
+    "[email] APP_BASE_URL is not set — skipping mail send (invite, reset, and upload-link emails will not go out until it is configured; the copy-link UI still works). See .env.example.",
+  );
+}
 
 /** Why no mail can be sent at all, in words for the professor — or null when a transport is configured. */
 export function mailTransportProblem(): string | null {
@@ -92,7 +111,10 @@ export async function sendInviteEmail(
   relativeUrl: string,
   isReset: boolean,
 ): Promise<boolean> {
-  if (!APP_BASE_URL) return false;
+  if (!APP_BASE_URL) {
+    warnMissingBaseUrlOnce();
+    return false;
+  }
   const url = new URL(relativeUrl, APP_BASE_URL).toString();
   const subject = isReset ? "Grader password reset" : "You've been invited to Grader";
   const text = isReset
@@ -113,7 +135,10 @@ export async function sendUploadLinkEmail(
   relativeUrl: string,
   expiresAt: string,
 ): Promise<boolean> {
-  if (!APP_BASE_URL) return false;
+  if (!APP_BASE_URL) {
+    warnMissingBaseUrlOnce();
+    return false;
+  }
   const url = new URL(relativeUrl, APP_BASE_URL).toString();
   const expiry = new Date(expiresAt.replace(" ", "T") + "Z").toLocaleDateString(undefined, {
     year: "numeric",
