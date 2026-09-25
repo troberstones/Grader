@@ -114,6 +114,10 @@ export function ArtReviewer({
   const [textPrompt, setTextPrompt] = useState<{ x: number; y: number; value: string } | null>(null);
   const [playlistBusy, setPlaylistBusy] = useState(false);
   const [stageDragOver, setStageDragOver] = useState(false);
+  // Keyed by item id (not a plain boolean) so switching away from a failed
+  // item mid-retry doesn't leave some other item's button looking disabled.
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
 
   const session = useSession(channel, author);
 
@@ -154,6 +158,23 @@ export function ArtReviewer({
         window.alert(e instanceof Error ? e.message : "Remove failed.");
       } finally {
         setPlaylistBusy(false);
+      }
+    },
+    [adapter, onItemsChanged],
+  );
+
+  const handleRetryItem = useCallback(
+    async (itemId: string) => {
+      if (!adapter.retryItem) return;
+      setRetryError(null);
+      setRetryingId(itemId);
+      try {
+        await adapter.retryItem(itemId);
+        onItemsChanged?.();
+      } catch (e) {
+        setRetryError(e instanceof Error ? e.message : "Retry failed.");
+      } finally {
+        setRetryingId(null);
       }
     },
     [adapter, onItemsChanged],
@@ -1325,6 +1346,21 @@ export function ArtReviewer({
                   The upload itself is damaged, so there is nothing to review here.
                   Ask for a re-upload — the other files in this playlist still work.
                 </div>
+                {adapter.retryItem && (
+                  <div style={{ marginTop: 16 }}>
+                    <button
+                      type="button"
+                      disabled={retryingId === item.id}
+                      onClick={() => handleRetryItem(item.id)}
+                      style={{ ...textButton(), opacity: retryingId === item.id ? 0.6 : 1 }}
+                    >
+                      {retryingId === item.id ? "Retrying…" : "Retry processing"}
+                    </button>
+                    {retryError && (
+                      <div style={{ fontSize: 11, color: C.danger, marginTop: 8 }}>{retryError}</div>
+                    )}
+                  </div>
+                )}
               </div>
             </Centered>
           )}
