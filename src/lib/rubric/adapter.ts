@@ -62,6 +62,7 @@ function toNormalCriterion(criterion: DbCriterionRow): NormalCriterion {
   }) as [NormalLevel, NormalLevel, NormalLevel, NormalLevel];
 
   return {
+    id: criterion.id,
     name: criterion.name,
     description: criterion.description,
     share: criterion.share,

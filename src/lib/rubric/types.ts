@@ -32,6 +32,15 @@ export interface AuthoredLevel {
 }
 
 export interface AuthoredCriterion {
+  /**
+   * The database row this criterion came from, when editing an existing
+   * rubric — absent for a brand-new criterion (blank/template/paste-import/
+   * AI-generated). Lets updateShareRubric() (src/actions/rubrics.ts) tell a
+   * rename from a remove-and-add, so grade history survives a rename. Never
+   * trust this across rubrics: the caller must reject an id that doesn't
+   * belong to the rubric being saved.
+   */
+  id?: number;
   name: string;
   description?: string;
   share?: number;
@@ -54,6 +63,8 @@ export interface NormalLevel {
 }
 
 export interface NormalCriterion {
+  /** Carried through from AuthoredCriterion.id unchanged — see its doc comment. */
+  id?: number;
   name: string;
   description: string | null;
   share: number;
