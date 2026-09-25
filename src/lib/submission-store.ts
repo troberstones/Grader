@@ -61,20 +61,22 @@ export async function storeSubmissionFile(opts: {
       .where(eq(submissions.id, existing[0].id));
 
     // The old file's derivatives no longer match what's on disk — drop the
-    // rows and the files they point at. Read the paths before deleting the
-    // rows, and skip the "original" variant: for a submission with nothing
-    // to transcode (e.g. a PDF), that row's path *is* the submission's own
-    // file, already handled by the unlink above, not a derivative to remove.
+    // rows and the files they point at. Skip the "original" variant: for a
+    // submission with nothing to transcode (e.g. a PDF), that row's path *is*
+    // the submission's own file, already handled by the unlink above.
+    // Files go before rows: ensureIngested() does nothing while rows exist,
+    // so a review page opened mid-replace can't start writing new
+    // derivatives to the same s<id>.* paths that are still being unlinked.
     const oldMedia = await db
       .select({ path: reviewMedia.path, variant: reviewMedia.variant })
       .from(reviewMedia)
       .where(eq(reviewMedia.submissionId, existing[0].id));
-    await db.delete(reviewMedia).where(eq(reviewMedia.submissionId, existing[0].id));
     await Promise.all(
       oldMedia
         .filter((m) => m.variant !== "original")
         .map((m) => fs.unlink(path.join(process.cwd(), m.path)).catch(() => {})),
     );
+    await db.delete(reviewMedia).where(eq(reviewMedia.submissionId, existing[0].id));
     return existing[0].id;
   }
 

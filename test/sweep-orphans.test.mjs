@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -43,6 +43,13 @@ function makeScratch() {
 
   db.close();
   return { root, dbPath, submissionsDir, thumbnailsDir, reviewDir, assignmentId, studentId };
+}
+
+/** Writes a file dated two hours ago, past the sweep's in-progress grace period. */
+function writeOldFile(file, contents) {
+  writeFileSync(file, contents);
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  utimesSync(file, twoHoursAgo, twoHoursAgo);
 }
 
 function insertSubmission(dbPath, { assignmentId, studentId, filePath, fileName = "a.png", mediaType = "image" }) {
@@ -98,9 +105,9 @@ test("findOrphans: ignores files referenced by submissions/review_media, flags e
 
     // Genuine orphans: nothing in the DB points at these.
     const orphanFile1 = path.join(s.submissionsDir, "orphan.png");
-    writeFileSync(orphanFile1, "orphan");
+    writeOldFile(orphanFile1, "orphan");
     const orphanFile2 = path.join(s.reviewDir, "stale_proxy.mp4");
-    writeFileSync(orphanFile2, "stale");
+    writeOldFile(orphanFile2, "stale");
 
     // A dangling row: review_media points at a file that isn't there.
     insertMedia(s.dbPath, { submissionId: subId, mediaPath: "storage/review/missing.mp4", variant: "poster" });
@@ -120,6 +127,25 @@ test("findOrphans: ignores files referenced by submissions/review_media, flags e
     assert.equal(danglingRows.length, 1);
     assert.equal(danglingRows[0].table, "review_media");
     assert.equal(danglingRows[0].path, "storage/review/missing.mp4");
+  } finally {
+    rmSync(s.root, { recursive: true, force: true });
+  }
+});
+
+test("findOrphans: never reports a file younger than an hour (upload or ingest still in progress)", () => {
+  const s = makeScratch();
+  try {
+    const fresh = path.join(s.reviewDir, "s9.proxy.mp4");
+    writeFileSync(fresh, "being written");
+    const old = path.join(s.reviewDir, "s8.proxy.mp4");
+    writeOldFile(old, "abandoned");
+
+    const { orphanFiles } = findOrphans({
+      dbPath: s.dbPath,
+      storageDirs: [s.submissionsDir, s.thumbnailsDir, s.reviewDir],
+      root: s.root,
+    });
+    assert.deepEqual(orphanFiles.map((f) => f.rel), [path.relative(s.root, old)]);
   } finally {
     rmSync(s.root, { recursive: true, force: true });
   }
@@ -155,7 +181,7 @@ test("CLI: dry run by default, --delete requires --yes, --delete --yes removes o
   const s = makeScratch();
   try {
     const orphanFile = path.join(s.submissionsDir, "orphan.png");
-    writeFileSync(orphanFile, "orphan-bytes");
+    writeOldFile(orphanFile, "orphan-bytes");
     const knownFile = path.join(s.submissionsDir, "known.png");
     writeFileSync(knownFile, "known");
     insertSubmission(s.dbPath, {

@@ -32,6 +32,11 @@ const STORAGE_DIRS = [
   path.join(ROOT, "storage", "review"),
 ];
 
+// A file younger than this is never reported: an upload or ingest writes
+// its files before inserting the row that points at them, so a sweep run
+// while the app is busy would otherwise see in-progress work as orphaned.
+const MIN_AGE_MS = 60 * 60 * 1000;
+
 const doDelete = process.argv.includes("--delete");
 const confirmed = process.argv.includes("--yes");
 
@@ -63,7 +68,7 @@ function formatBytes(n) {
   return `${value.toFixed(1)} ${units[i]}`;
 }
 
-export function findOrphans({ dbPath = DB_PATH, storageDirs = STORAGE_DIRS, root = ROOT } = {}) {
+export function findOrphans({ dbPath = DB_PATH, storageDirs = STORAGE_DIRS, root = ROOT, minAgeMs = MIN_AGE_MS } = {}) {
   const toRel = (absPath) => path.relative(root, absPath);
   const db = new Database(dbPath);
   try {
@@ -101,7 +106,10 @@ export function findOrphans({ dbPath = DB_PATH, storageDirs = STORAGE_DIRS, root
     for (const dir of storageDirs) {
       for (const abs of walkFiles(dir)) {
         const rel = toRel(abs);
-        if (!isKnown(rel)) orphanFiles.push({ abs, rel, size: statSync(abs).size });
+        if (isKnown(rel)) continue;
+        const st = statSync(abs);
+        if (Date.now() - st.mtimeMs < minAgeMs) continue;
+        orphanFiles.push({ abs, rel, size: st.size });
       }
     }
 
