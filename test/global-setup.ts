@@ -38,9 +38,20 @@ export default function setup() {
   // databases directly and never got a paired drizzle/*.sql file (unlike
   // every other migration in this repo) — a pre-existing gap, not something
   // introduced here. Replayed explicitly so the schema this builds actually
-  // matches production instead of silently missing these two columns.
+  // matches production instead of silently missing these columns/constraints.
   db.exec("ALTER TABLE rubric_criteria ADD COLUMN archived integer DEFAULT 0 NOT NULL");
   db.exec("ALTER TABLE grade_entries ADD COLUMN nudge integer");
+  // rubric_levels.points is NOT NULL in drizzle/0000_loud_hitman.sql, but the
+  // share-model editor (src/actions/rubrics.ts) writes `points: null` for its
+  // levels (computed from share + bandEdges instead — see docs/rubric-authoring.md).
+  // apply-rubric-share-model-migration.mjs loosens this to nullable on real
+  // databases via add/copy/drop/rename (SQLite can't ALTER COLUMN); replayed
+  // the same way here so a rubric edit that inserts a brand-new criterion
+  // doesn't hit a constraint in tests that production doesn't have.
+  db.exec("ALTER TABLE rubric_levels ADD COLUMN points_new real");
+  db.exec("UPDATE rubric_levels SET points_new = points");
+  db.exec("ALTER TABLE rubric_levels DROP COLUMN points");
+  db.exec("ALTER TABLE rubric_levels RENAME COLUMN points_new TO points");
 
   db.close();
 }

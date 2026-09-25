@@ -18,8 +18,17 @@ export function EditRubricClient({ rubricId, initialData }: EditRubricClientProp
   async function handleSave(data: AuthoredRubric) {
     setSaving(true);
     try {
-      await updateShareRubric(rubricId, data);
-      toast.success("Rubric saved");
+      const { rescored, nowInProgress } = await updateShareRubric(rubricId, data);
+      if (rescored > 0) {
+        const rescoredNoun = `${rescored} grade${rescored === 1 ? "" : "s"}`;
+        toast.success(
+          nowInProgress > 0
+            ? `Rescored ${rescoredNoun} — ${nowInProgress} ${nowInProgress === 1 ? "is" : "are"} now in progress because a new criterion needs scoring.`
+            : `Rubric saved — rescored ${rescoredNoun}.`
+        );
+      } else {
+        toast.success("Rubric saved");
+      }
     } catch (err) {
       toast.error(`Failed to save: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {

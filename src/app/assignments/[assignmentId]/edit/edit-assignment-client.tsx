@@ -67,7 +67,7 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
     }
     setSaving(true);
     try {
-      await updateAssignment(assignment.id, {
+      const result = await updateAssignment(assignment.id, {
         name,
         description: description || null,
         rubricId: rubricId && rubricId !== "none" ? Number(rubricId) : null,
@@ -76,7 +76,20 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
         submissionType,
         lmsAssignmentId: lmsAssignmentId || null,
       });
-      toast.success("Assignment updated");
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+      if (result.rescored > 0) {
+        const rescoredNoun = `${result.rescored} grade${result.rescored === 1 ? "" : "s"}`;
+        toast.success(
+          result.nowInProgress > 0
+            ? `Assignment updated — rescored ${rescoredNoun}, ${result.nowInProgress} now in progress.`
+            : `Assignment updated — rescored ${rescoredNoun}.`
+        );
+      } else {
+        toast.success("Assignment updated");
+      }
       router.push(`/assignments/${assignment.id}`);
     } catch (err) {
       toast.error(`Failed to update: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -173,8 +186,10 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
                 </LinkButton>
               </div>
               <p className="text-xs text-muted-foreground">
-                Changing the rubric will not delete existing grade entries. Takes you to the rubric
-                editor; saving it brings you back here with it selected.
+                Changing the rubric is only allowed while this assignment is fully ungraded —
+                once any student has a grade, clear it or create a new assignment instead.
+                &ldquo;Create new…&rdquo; takes you to the rubric editor; saving it brings you back here with
+                it selected.
               </p>
             </div>
 
