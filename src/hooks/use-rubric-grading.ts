@@ -155,6 +155,12 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     (selectedStudent as StudentWithGrade | null)?.grade?.updatedAt,
   );
 
+  // Saves run one after another (see handleSave), so each reads its base
+  // only once the previous one has landed.
+  const saveChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const studentsRef = useRef(students);
+  studentsRef.current = students;
+
   // Bumped on every local edit. A save started before an edit lands must not
   // clear `dirty` once it resolves — that edit would otherwise look saved
   // when it never left the browser (see handleSave below).
@@ -304,13 +310,28 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
       })
       .filter((e): e is { criteriaId: number; levelId: number; nudge: Nudge } => e !== null);
 
-    const result = await saveShare({
-      assignmentId: assignment.id,
-      studentId: targetStudentId,
-      entries,
-      feedback: targetFeedback,
-      baseUpdatedAt: baseUpdatedAtRef.current,
+    // Next queues action calls, but their arguments are captured at call
+    // time — so an autosave fired while the previous save was in flight would
+    // carry the pre-save updatedAt and trip a false "changed on another
+    // device" conflict against itself. Chain them and read the base at send
+    // time, for the student this save is actually for.
+    const pending = saveChainRef.current.then(async () => {
+      const baseUpdatedAt =
+        selectedStudentIdRef.current === targetStudentId
+          ? baseUpdatedAtRef.current
+          : (studentsRef.current as StudentWithGrade[]).find((s) => s.id === targetStudentId)?.grade?.updatedAt;
+      const r = await saveShare({
+        assignmentId: assignment.id,
+        studentId: targetStudentId,
+        entries,
+        feedback: targetFeedback,
+        baseUpdatedAt,
+      });
+      if (r.ok && selectedStudentIdRef.current === targetStudentId) baseUpdatedAtRef.current = r.updatedAt;
+      return r;
     });
+    saveChainRef.current = pending.catch(() => {});
+    const result = await pending;
 
     if (!result.ok) {
       setSaveFailed(true);
@@ -325,7 +346,6 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     setSaveFailed(false);
     setAuthExpired(false);
     setConflict(null);
-    baseUpdatedAtRef.current = result.updatedAt;
 
     const contextEntries = entries.map((e) => {
       const outcome = normalRubric && scoreResult
