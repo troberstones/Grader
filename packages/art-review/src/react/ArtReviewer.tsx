@@ -31,7 +31,7 @@ import { Presence } from "./components/Presence";
 import { Timeline } from "./components/Timeline";
 import { InkRail, TransportBar, ViewBar, type ToolState } from "./components/Toolbar";
 import { readDroppedFiles } from "./dropFiles";
-import { isTypingTarget } from "./keymap";
+import { isButtonTarget, isTypingTarget } from "./keymap";
 import { C, label, noSelect, select as selectStyle, selectableText, textButton } from "./styles";
 import { useAnnotations } from "./useAnnotations";
 import { useSession } from "./useSession";
@@ -959,6 +959,7 @@ export function ArtReviewer({
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
+      if (e.key === " " && isButtonTarget(e.target)) return;
       if (e.code === "Space" && !e.repeat && (e.ctrlKey || e.metaKey)) return;
 
       const mod = e.metaKey || e.ctrlKey;
@@ -1088,7 +1089,7 @@ export function ArtReviewer({
 
     const up = (e: KeyboardEvent) => {
       if (e.key !== " ") return;
-      if (isTypingTarget(e.target)) return;
+      if (isTypingTarget(e.target) || isButtonTarget(e.target)) return;
       const wasPanning = panStateRef.current !== null;
       spaceRef.current = false;
       if (!wasPanning) dispatch({ a: state.playing ? "pause" : "play" });
