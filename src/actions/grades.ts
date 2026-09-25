@@ -9,7 +9,7 @@ import { requireCapability, AuthError } from "@/lib/auth/require";
 import type { SessionUser } from "@/lib/auth/session";
 import { assignmentResource } from "@/lib/auth/resource-lookup";
 import { writeAudit } from "@/lib/audit";
-import { recomputeGrade } from "@/lib/grading/recompute";
+import { nextUpdatedAt, recomputeGrade } from "@/lib/grading/recompute";
 import { feedbackTestMode } from "@/lib/feedback/config";
 import { feedbackHistory } from "@/lib/feedback/history";
 
@@ -250,8 +250,9 @@ export async function saveShareGrade({
     const { status, totalScore } = recomputeGrade(tx, gradeId);
 
     if (feedback !== undefined) {
+      const current = tx.select({ updatedAt: grades.updatedAt }).from(grades).where(eq(grades.id, gradeId)).get();
       tx.update(grades)
-        .set({ feedback: feedback || null, updatedAt: new Date().toISOString() })
+        .set({ feedback: feedback || null, updatedAt: nextUpdatedAt(current?.updatedAt) })
         .where(eq(grades.id, gradeId))
         .run();
     }
@@ -305,7 +306,7 @@ export async function markMissing(assignmentId: number, studentId: number): Prom
   }
 
   const existing = await db
-    .select({ id: grades.id })
+    .select({ id: grades.id, updatedAt: grades.updatedAt })
     .from(grades)
     .where(and(eq(grades.assignmentId, assignmentId), eq(grades.studentId, studentId)));
 
@@ -319,11 +320,11 @@ export async function markMissing(assignmentId: number, studentId: number): Prom
   if (existing.length > 0) {
     gradeId = existing[0].id;
     await db.delete(gradeEntries).where(eq(gradeEntries.gradeId, gradeId));
+    updatedAt = nextUpdatedAt(existing[0].updatedAt);
     await db
       .update(grades)
-      .set({ totalScore: 0, feedback: null, status: "missing", gradedAt: now, updatedAt: now })
+      .set({ totalScore: 0, feedback: null, status: "missing", gradedAt: now, updatedAt })
       .where(eq(grades.id, gradeId));
-    updatedAt = now;
   } else {
     const [created] = await db
       .insert(grades)

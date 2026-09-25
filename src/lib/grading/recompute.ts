@@ -5,6 +5,19 @@ import type { GradeStatus } from "@/types/grading";
 import { computeScore, criterionPoints, toNormalRubric, toSelections } from "@/lib/rubric";
 import type { DbCriterionRow } from "@/lib/rubric";
 
+/**
+ * A timestamp strictly later than `prev`. `updated_at` doubles as the version
+ * the grading UI sends back as `baseUpdatedAt`, so two writes landing in the
+ * same millisecond must still produce different values — otherwise a stale
+ * save could slip past the conflict check. `prev` may be an ISO string or
+ * SQLite's `datetime('now')` form (UTC, space-separated).
+ */
+export function nextUpdatedAt(prev: string | null | undefined): string {
+  const now = Date.now();
+  const prevMs = prev ? Date.parse(prev.includes("T") ? prev : `${prev.replace(" ", "T")}Z`) : NaN;
+  return new Date(Number.isNaN(prevMs) ? now : Math.max(now, prevMs + 1)).toISOString();
+}
+
 // Lives outside src/actions/ on purpose: every export of a "use server" file
 // must be an async server action, and this has to stay synchronous to run
 // inside a better-sqlite3 transaction callback.
@@ -49,7 +62,7 @@ export function recomputeGrade(tx: GradeTx, gradeId: number): { status: GradeSta
   if (!assignmentRow?.rubricId) {
     // No rubric attached (or since detached) — nothing to score against.
     tx.update(grades)
-      .set({ totalScore: null, status: "ungraded", gradedAt: null, updatedAt: new Date().toISOString() })
+      .set({ totalScore: null, status: "ungraded", gradedAt: null, updatedAt: nextUpdatedAt(gradeRow.updatedAt) })
       .where(eq(grades.id, gradeId))
       .run();
     return { status: "ungraded", totalScore: 0 };
@@ -106,7 +119,7 @@ export function recomputeGrade(tx: GradeTx, gradeId: number): { status: GradeSta
       totalScore,
       status,
       gradedAt: status === "graded" ? new Date().toISOString() : null,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nextUpdatedAt(gradeRow.updatedAt),
     })
     .where(eq(grades.id, gradeId))
     .run();
