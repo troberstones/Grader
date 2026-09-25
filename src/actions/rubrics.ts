@@ -9,6 +9,7 @@ import { requireCapability } from "@/lib/auth/require";
 import type { SessionUser } from "@/lib/auth/session";
 import { validateRubric, isShareModel, type AuthoredRubric } from "@/lib/rubric";
 import { writeAudit } from "@/lib/audit";
+import { rescoreAssignmentGrades, type RescoreOutcome } from "@/lib/grading/rescore";
 
 // ─── Authorization ──────────────────────────────────────────────────────────
 
@@ -174,8 +175,17 @@ export async function createShareRubric(data: AuthoredRubric): Promise<{ id: num
  * will). Worst case: an unnecessary archive of a criterion that still reads
  * fine under its old name in grade history. Reorder — the common, dangerous
  * case — is handled exactly right by this.
+ *
+ * Also rescores every existing grade on every assignment currently using
+ * this rubric, in the SAME transaction as the edit (owner's decision): a
+ * changed weight/share, band edges, level wording, or criteria set must land
+ * or roll back together with the grades it affects, so the sidebar, CSV and
+ * LS push can never disagree with the live grading panel. Adding a criterion
+ * after students are fully graded flips them back to "in_progress" (the new
+ * criterion has no entry yet) — the returned counts let the caller surface
+ * that to the instructor.
  */
-export async function updateShareRubric(id: number, data: AuthoredRubric): Promise<void> {
+export async function updateShareRubric(id: number, data: AuthoredRubric): Promise<RescoreOutcome> {
   await requireRubricEditAccess(id);
   const result = validateRubric(data);
   if (!result.ok || !result.rubric) {
@@ -183,7 +193,7 @@ export async function updateShareRubric(id: number, data: AuthoredRubric): Promi
   }
   const normal = result.rubric;
 
-  db.transaction((tx) => {
+  const outcome = db.transaction((tx) => {
     tx.update(rubrics)
       .set({
         name: normal.name,
@@ -238,10 +248,25 @@ export async function updateShareRubric(id: number, data: AuthoredRubric): Promi
         tx.delete(rubricCriteria).where(eq(rubricCriteria.id, criterion.id)).run();
       }
     }
+
+    const affectedAssignmentIds = tx
+      .select({ id: assignments.id })
+      .from(assignments)
+      .where(eq(assignments.rubricId, id))
+      .all()
+      .map((a) => a.id);
+
+    return rescoreAssignmentGrades(tx, affectedAssignmentIds);
   });
 
   revalidatePath("/rubrics");
   revalidatePath(`/rubrics/${id}`);
+  if (outcome.rescored > 0) {
+    // Every assignment using this rubric may now show different totals/status.
+    const affected = await db.select({ id: assignments.id }).from(assignments).where(eq(assignments.rubricId, id));
+    for (const a of affected) revalidatePath(`/assignments/${a.id}`);
+  }
+  return outcome;
 }
 
 export type DeleteRubricOutcome = { ok: true } | { ok: false; reason: "in_use" | "not_found" | "referenced"; message: string };

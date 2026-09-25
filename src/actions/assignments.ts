@@ -9,6 +9,7 @@ import {
   rubricCriteria,
   rubricLevels,
   grades,
+  gradeEntries,
   submissions,
   annotations,
   reviewStrokes,
@@ -22,6 +23,7 @@ import { removeAssignmentStorage } from "@/lib/file-storage";
 import { feedbackTestMode } from "@/lib/feedback/config";
 import { feedbackHistory } from "@/lib/feedback/history";
 import type { Term } from "@/lib/terms";
+import { rescoreAssignmentGrades } from "@/lib/grading/rescore";
 
 // ─── Deletion guards ────────────────────────────────────────────────────────
 
@@ -252,6 +254,25 @@ export async function createAssignment(data: {
   return result[0];
 }
 
+export type UpdateAssignmentOutcome =
+  | { ok: true; rescored: number; nowInProgress: number }
+  | { ok: false; reason: "rubric_swap_blocked" | "not_found"; message: string };
+
+/**
+ * Updates an assignment. Two owner decisions live here:
+ *
+ * 1. Changing `rubricId` (to a different rubric, or to/from no rubric at
+ *    all) is refused once any student has a real grade on this assignment —
+ *    see `gradedStudentCount()` above, the same bar `deleteAssignment` uses.
+ *    `recomputeGrade` would otherwise silently rescore (or, for a detach,
+ *    wipe) every stored grade against a rubric structure the student was
+ *    never actually graded on. An ungraded swap proceeds and also deletes
+ *    any `grade_entries` left over referencing the OLD rubric's criteria, so
+ *    nothing orphaned lingers if grading resumes under the new rubric.
+ * 2. Changing `pointsPossible` rescores every existing grade on this
+ *    assignment in the SAME transaction as the update, so the sidebar, CSV
+ *    and LS push can never disagree with the live grading panel.
+ */
 export async function updateAssignment(
   id: number,
   data: {
@@ -263,17 +284,66 @@ export async function updateAssignment(
     rubricId?: number | null;
     lmsAssignmentId?: string | null;
   }
-) {
-  const row = await db.select({ courseId: assignments.courseId }).from(assignments).where(eq(assignments.id, id));
-  if (!row[0]) return;
-  await requireCapability("course.edit", { kind: "assignment", assignmentId: id, courseId: row[0].courseId });
-  await db
-    .update(assignments)
-    .set({ ...data, updatedAt: new Date().toISOString() })
+): Promise<UpdateAssignmentOutcome> {
+  const row = await db
+    .select({ courseId: assignments.courseId, rubricId: assignments.rubricId, pointsPossible: assignments.pointsPossible })
+    .from(assignments)
     .where(eq(assignments.id, id));
+  if (!row[0]) return { ok: false, reason: "not_found", message: "Assignment not found." };
+  const current = row[0];
+  await requireCapability("course.edit", { kind: "assignment", assignmentId: id, courseId: current.courseId });
+
+  const rubricChanging = data.rubricId !== undefined && data.rubricId !== current.rubricId;
+  if (rubricChanging) {
+    const graded = await gradedStudentCount([id]);
+    if (graded > 0) {
+      return {
+        ok: false,
+        reason: "rubric_swap_blocked",
+        message: "Grades exist for this assignment — clear them or create a new assignment to use a different rubric.",
+      };
+    }
+  }
+
+  const pointsChanging = data.pointsPossible !== undefined && data.pointsPossible !== current.pointsPossible;
+
+  const outcome = db.transaction((tx) => {
+    tx.update(assignments)
+      .set({ ...data, updatedAt: new Date().toISOString() })
+      .where(eq(assignments.id, id))
+      .run();
+
+    if (rubricChanging && current.rubricId != null) {
+      const oldCriteriaIds = tx
+        .select({ id: rubricCriteria.id })
+        .from(rubricCriteria)
+        .where(eq(rubricCriteria.rubricId, current.rubricId))
+        .all()
+        .map((c) => c.id);
+      if (oldCriteriaIds.length > 0) {
+        const gradeIds = tx
+          .select({ id: grades.id })
+          .from(grades)
+          .where(eq(grades.assignmentId, id))
+          .all()
+          .map((g) => g.id);
+        if (gradeIds.length > 0) {
+          tx.delete(gradeEntries)
+            .where(and(inArray(gradeEntries.gradeId, gradeIds), inArray(gradeEntries.criteriaId, oldCriteriaIds)))
+            .run();
+        }
+      }
+    }
+
+    if (pointsChanging) {
+      return rescoreAssignmentGrades(tx, [id]);
+    }
+    return { rescored: 0, nowInProgress: 0 };
+  });
 
   revalidatePath("/assignments");
   revalidatePath(`/assignments/${id}`);
+  return { ok: true, rescored: outcome.rescored, nowInProgress: outcome.nowInProgress };
 }
 
 /**
