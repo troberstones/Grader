@@ -15,14 +15,14 @@
 //       see scripts/restore.mjs's isLiveServiceActive()).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 
 import { migrate } from "../scripts/lib/migrations.mjs";
 import { runBackup } from "../scripts/backup.mjs";
 import { runRestore } from "../scripts/restore.mjs";
-import { assertSafeDirectory, pruneDbSnapshots, listDbSnapshots, DB_SNAPSHOT_RE } from "../scripts/lib/backup-set.mjs";
+import { assertSafeDirectory, pruneDbSnapshots, pruneAttic, listDbSnapshots, DB_SNAPSHOT_RE } from "../scripts/lib/backup-set.mjs";
 
 const root = path.join(process.cwd(), "test", ".tmp-backup");
 mkdirSync(root, { recursive: true });
@@ -204,4 +204,62 @@ test("restore --into-live proceeds once both safety flags are given", async () =
   );
   assert.equal(path.resolve(report.target), path.resolve(appDir));
   assert.equal(report.verify.counts.grades, 1); // restored, not the deleted state
+});
+
+test("a file deleted or overwritten on the server is kept in that night's attic, not lost", async () => {
+  const appDir = scratchDir("app");
+  const dest = scratchDir("dest");
+  buildFixtureApp(appDir);
+  const env = { APP_DIR: appDir, DB_PATH: path.join(appDir, "storage", "grader.db"), BACKUP_DEST: dest };
+
+  const first = await runBackup(env, { now: new Date("2026-09-01T03:30:00Z") });
+  assert.equal(first.ok, true, first.error);
+
+  // The live upload disappears and .env changes between nights.
+  unlinkSync(path.join(appDir, "storage", "submissions", "1", "1", "photo.png"));
+  writeFileSync(path.join(appDir, ".env"), "APP_BASE_URL=http://changed.test\n");
+
+  const second = await runBackup(env, { now: new Date("2026-09-02T03:30:00Z") });
+  assert.equal(second.ok, true, second.error);
+
+  // The mirror reflects the server, but the previous copies survive in the attic.
+  assert.equal(existsSync(path.join(dest, "media", "submissions", "1", "1", "photo.png")), false);
+  const attic = path.join(dest, "attic", "2026-09-02-033000");
+  assert.equal(readFileSync(path.join(attic, "media", "submissions", "1", "1", "photo.png"), "utf8"), "not-really-a-png");
+  assert.match(readFileSync(path.join(attic, "config", ".env"), "utf8"), /example\.test/);
+});
+
+test("pruneAttic drops only attic nights older than the oldest kept DB snapshot", () => {
+  const dest = scratchDir("dest");
+  mkdirSync(path.join(dest, "db"), { recursive: true });
+  for (const stamp of ["2026-09-03-033000", "2026-09-04-033000"]) {
+    writeFileSync(path.join(dest, "db", `grader-${stamp}.db`), "x");
+  }
+  for (const name of ["2026-09-01-033000", "2026-09-02-033000", "2026-09-04-033000", "not-a-stamp"]) {
+    mkdirSync(path.join(dest, "attic", name, "media"), { recursive: true });
+    writeFileSync(path.join(dest, "attic", name, "media", "f.png"), "x");
+  }
+
+  const pruned = pruneAttic(dest, () => {});
+  assert.equal(pruned, 2);
+  assert.deepEqual(readdirSync(path.join(dest, "attic")).sort(), ["2026-09-04-033000", "not-a-stamp"]);
+});
+
+test("restore --into-live sets the live grader.db and its -wal/-shm aside first", async () => {
+  const appDir = scratchDir("app");
+  const dest = scratchDir("dest");
+  buildFixtureApp(appDir);
+  await runBackup({ APP_DIR: appDir, DB_PATH: path.join(appDir, "storage", "grader.db"), BACKUP_DEST: dest });
+
+  const storage = path.join(appDir, "storage");
+  writeFileSync(path.join(storage, "grader.db-wal"), "stale wal from the old database");
+
+  const report = await runRestore(["--dest", dest, "--into-live", "--yes", "--confirm-service-stopped", "--verify"], {
+    APP_DIR: appDir,
+  });
+  assert.equal(report.verify.ok, true);
+  assert.equal(existsSync(path.join(storage, "grader.db-wal")), false, "a stale WAL must not sit next to the restored DB");
+  const kept = readdirSync(storage).filter((f) => f.includes(".pre-restore-"));
+  assert.ok(kept.some((f) => f.startsWith("grader.db.pre-restore-")));
+  assert.ok(kept.some((f) => f.startsWith("grader.db-wal.pre-restore-")));
 });

@@ -9,13 +9,19 @@
 //   <dest>/db/grader-<stamp>.db[.age|.gpg]   dated snapshots, VACUUM INTO
 //   <dest>/media/{submissions,review,thumbnails}/   rsync mirror (current state)
 //   <dest>/config/{.env,.env.local,certs/}[.age|.gpg for the small files]
+//   <dest>/attic/<stamp>/{media,config}/...   files the <stamp> run deleted
+//                                             or overwrote in the mirror
 //   <dest>/status.json                        last run's outcome
 //
 // Media is a plain rsync mirror rather than a dated/hardlinked tree: rsync
 // already only transfers what changed, so "incremental" is free, and a
 // mirror is far simpler to reason about and restore than a --link-dest farm
-// of per-night hardlinks. The cost — there is no history for media, only
-// for the DB — is a deliberate, documented tradeoff (see operations.md).
+// of per-night hardlinks. A bare `--delete` mirror would also faithfully
+// copy a disaster — uploads wiped or overwritten on the server would vanish
+// from the backup the next night — so every mirror run passes
+// `--backup --backup-dir=<dest>/attic/<stamp>/...`: anything the run would
+// delete or overwrite is moved into that night's attic instead. Attic
+// nights are pruned alongside the DB snapshots they sit next to.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -27,6 +33,9 @@ import {
   readFileSync,
   writeFileSync,
   cpSync,
+  rmSync,
+  renameSync,
+  statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -42,6 +51,7 @@ export const CONFIG_FILES = [".env", ".env.local"];
 export const CONFIG_DIRS = ["certs"];
 
 export const DB_SNAPSHOT_RE = /^grader-\d{4}-\d{2}-\d{2}-\d{6}\.db(\.age|\.gpg)?$/;
+export const STAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{6}$/;
 
 export function timestamp(date = new Date()) {
   // grader-YYYY-MM-DD-HHMMSS, sortable and matches the existing filename
@@ -157,11 +167,65 @@ export function maybeDecryptFile(filePath, destPath) {
 
 // ── rsync helpers (local dest or user@host:/path) ───────────────────────
 
+/** rsync flags that move anything about to be deleted or overwritten into
+ * `backupDir` on the receiving side (absolute, so rsync doesn't resolve it
+ * against the destination directory). Remote destinations only: the deploy
+ * host's GNU rsync honors these, but macOS's bundled openrsync silently
+ * skips every deletion when --backup-dir is combined with --delete, so local
+ * destinations use stashChangedFiles() instead, which doesn't depend on
+ * which rsync is installed. */
+function atticFlags(backupDir) {
+  if (!backupDir) return [];
+  return ["--backup", `--backup-dir=${splitRemote(backupDir).remotePath}`];
+}
+
+/**
+ * Local-destination attic: before the mirror runs, move every file in
+ * `destDir` that the mirror is about to delete (gone from `srcDir`) or
+ * overwrite (size or mtime differs — rsync's own quick check) into
+ * `atticDir`, keeping its relative path. rename() only — the attic lives
+ * under the same destination, so nothing is copied or removed here.
+ */
+function stashChangedFiles(srcDir, destDir, atticDir) {
+  const walk = (rel) => {
+    let entries;
+    try {
+      entries = readdirSync(path.join(destDir, rel), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const childRel = path.join(rel, entry.name);
+      if (entry.isDirectory()) {
+        walk(childRel);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const destFile = path.join(destDir, childRel);
+      let changed = true;
+      try {
+        const a = statSync(path.join(srcDir, childRel));
+        const b = statSync(destFile);
+        changed = !a.isFile() || a.size !== b.size || Math.floor(a.mtimeMs / 1000) !== Math.floor(b.mtimeMs / 1000);
+      } catch {
+        // Gone from the source — the mirror would delete it.
+      }
+      if (!changed) continue;
+      const atticFile = path.join(atticDir, childRel);
+      mkdirSync(path.dirname(atticFile), { recursive: true });
+      renameSync(destFile, atticFile);
+    }
+  };
+  walk("");
+}
+
 /** Mirrors `srcDir` (must exist locally) into `dest` (`localDir` or
- * `user@host:/remoteDir`), deleting anything at the destination that's gone
- * from the source. No-ops (with a note) when srcDir doesn't exist yet — a
- * brand-new install may not have created storage/review/ yet, say. */
-export function rsyncMirror(srcDir, dest, log = console.log) {
+ * `user@host:/remoteDir`), removing anything at the destination that's gone
+ * from the source — into `opts.backupDir` when given (see the attic note at
+ * the top of this file), which every backup run passes. No-ops (with a
+ * note) when srcDir doesn't exist yet — a brand-new install may not have
+ * created storage/review/ yet, say. */
+export function rsyncMirror(srcDir, dest, log = console.log, { backupDir } = {}) {
   if (!existsSync(srcDir)) {
     log(`[backup] ${srcDir} doesn't exist yet — skipping.`);
     return;
@@ -170,21 +234,28 @@ export function rsyncMirror(srcDir, dest, log = console.log) {
   if (isRemoteDest(dest)) {
     const { host, remotePath } = splitRemote(dest);
     run("ssh", [host, "mkdir", "-p", remotePath]);
-    run("rsync", ["-a", "--delete", "-e", "ssh", from, `${host}:${remotePath}/`]);
+    run("rsync", ["-a", "--delete", ...atticFlags(backupDir), "-e", "ssh", from, `${host}:${remotePath}/`]);
   } else {
     mkdirSync(dest, { recursive: true });
+    if (backupDir) stashChangedFiles(srcDir, dest, backupDir);
     run("rsync", ["-a", "--delete", from, `${dest}/`]);
   }
 }
 
-/** Ships a single local file to `dest` (local dir, or `user@host:/dir`). */
-export function shipFile(localFile, dest) {
+/** Ships a single local file to `dest` (local dir, or `user@host:/dir`); a
+ * file it replaces goes to `opts.backupDir` when given. */
+export function shipFile(localFile, dest, { backupDir } = {}) {
   if (isRemoteDest(dest)) {
     const { host, remotePath } = splitRemote(dest);
     run("ssh", [host, "mkdir", "-p", remotePath]);
-    run("rsync", ["-a", "-e", "ssh", localFile, `${host}:${remotePath}/`]);
+    run("rsync", ["-a", ...atticFlags(backupDir), "-e", "ssh", localFile, `${host}:${remotePath}/`]);
   } else {
     mkdirSync(dest, { recursive: true });
+    const existing = path.join(dest, path.basename(localFile));
+    if (backupDir && existsSync(existing)) {
+      mkdirSync(backupDir, { recursive: true });
+      renameSync(existing, path.join(backupDir, path.basename(localFile)));
+    }
     run("rsync", ["-a", localFile, `${dest}/`]);
   }
 }
@@ -237,6 +308,40 @@ export function pruneDbSnapshots(destDir, keep, log = console.log) {
   }
   log(`[backup] pruned ${toDelete.length} old DB snapshot(s), kept ${Math.min(keep, all.length)}.`);
   return toDelete.length;
+}
+
+/** The stamp part of a DB snapshot name (`grader-<stamp>.db[.age|.gpg]`). */
+export function snapshotStamp(name) {
+  return name.slice("grader-".length, "grader-".length + 17);
+}
+
+/**
+ * Removes attic nights older than the oldest DB snapshot still kept, so the
+ * attic never outlives the snapshots it pairs with. Only ever removes an
+ * entry directly under `<dest>/attic` whose name is exactly a run stamp —
+ * the same shape guard pruneDbSnapshots relies on — and never the attic
+ * directory itself or anything outside it.
+ */
+export function pruneAttic(destDir, log = console.log) {
+  const kept = listDbSnapshots(destDir);
+  if (kept.length === 0) return 0;
+  const oldestKept = snapshotStamp(kept[0]);
+  const stale = listDir(destDir, "attic").filter((name) => STAMP_RE.test(name) && name < oldestKept);
+  if (stale.length === 0) return 0;
+  if (isRemoteDest(destDir)) {
+    const { host, remotePath } = splitRemote(destDir);
+    assertSafeDirectory(remotePath);
+    for (const name of stale) {
+      run("ssh", [host, "rm", "-rf", "--", `${remotePath}/attic/${name}`]);
+    }
+  } else {
+    const atticDir = assertSafeDirectory(path.join(destDir, "attic"));
+    for (const name of stale) {
+      rmSync(path.join(atticDir, name), { recursive: true, force: true });
+    }
+  }
+  log(`[backup] pruned ${stale.length} attic night(s) older than ${oldestKept}.`);
+  return stale.length;
 }
 
 // ── status file ──────────────────────────────────────────────────────────

@@ -16,7 +16,7 @@
  * prints a report — this is the "tested restore" docs/operations.md talks
  * about. It never touches the live app dir.
  */
-import { mkdirSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync, renameSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,7 @@ import {
   pullDir,
   mkTempDir,
   commandExists,
+  timestamp,
 } from "./lib/backup-set.mjs";
 
 const KEY_TABLES = ["users", "courses", "students", "assignments", "submissions", "grades", "rubrics"];
@@ -109,6 +110,7 @@ export async function runRestore(rawArgs, env = process.env) {
     fetchFile(dest, `db/${snapshotName}`, staged);
     const dbTarget = path.join(target, "storage", "grader.db");
     mkdirSync(path.dirname(dbTarget), { recursive: true });
+    const setAside = args.intoLive ? setAsideLiveDb(dbTarget) : [];
     maybeDecryptFile(staged, dbTarget);
 
     for (const name of MEDIA_DIRS) {
@@ -126,7 +128,7 @@ export async function runRestore(rawArgs, env = process.env) {
       pullDir(dest, `config/${name}`, path.join(target, name));
     }
 
-    const report = { dest, snapshot: snapshotName, target, verify: null };
+    const report = { dest, snapshot: snapshotName, target, setAside, verify: null };
 
     if (args.verify) {
       report.verify = verifyRestoredDb(dbTarget, target);
@@ -137,6 +139,24 @@ export async function runRestore(rawArgs, env = process.env) {
   } finally {
     rmSync(stagingDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Renames the live grader.db and its -wal/-shm companions to
+ * `*.pre-restore-<stamp>` before a restore writes a new grader.db. Two
+ * reasons: a leftover -wal from the old database would be replayed onto the
+ * restored one the next time SQLite opens it (corrupting it), and keeping
+ * the old file means a restore of the wrong snapshot can be undone.
+ */
+export function setAsideLiveDb(dbPath) {
+  const suffix = `.pre-restore-${timestamp()}`;
+  const moved = [];
+  for (const p of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    if (!existsSync(p)) continue;
+    renameSync(p, `${p}${suffix}`);
+    moved.push(`${p}${suffix}`);
+  }
+  return moved;
 }
 
 export function verifyRestoredDb(dbPath, appRoot) {
@@ -173,6 +193,7 @@ export function verifyRestoredDb(dbPath, appRoot) {
 
 function printReport(report) {
   console.log(`Restored ${report.snapshot} from ${report.dest} into ${report.target}`);
+  for (const p of report.setAside ?? []) console.log(`  previous live file kept as ${p}`);
   if (!report.verify) return;
   const v = report.verify;
   console.log(`  integrity_check: ${v.integrity}`);

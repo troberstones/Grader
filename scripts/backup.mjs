@@ -38,6 +38,7 @@ import {
   rsyncMirror,
   shipFile,
   pruneDbSnapshots,
+  pruneAttic,
   writeStatus,
   mkTempDir,
 } from "./lib/backup-set.mjs";
@@ -72,14 +73,14 @@ async function maybeSendFailureAlert(env, message) {
  * callers (the CLI entrypoint, tests) can decide what to do with a failure
  * without needing a try/catch of their own.
  */
-export async function runBackup(env = process.env) {
+export async function runBackup(env = process.env, { now = new Date() } = {}) {
   const appDir = env.APP_DIR || process.cwd();
   const dbPath = env.DB_PATH || path.join(appDir, "storage", "grader.db");
   const storageDir = env.STORAGE_DIR || path.join(appDir, "storage");
   const dest = env.BACKUP_DEST && env.BACKUP_DEST.trim() ? env.BACKUP_DEST.trim() : null;
   const keep = Number(env.BACKUP_KEEP || 14);
   const encryptRecipient = env.BACKUP_ENCRYPT_RECIPIENT || null;
-  const startedAt = new Date();
+  const startedAt = now;
   const log = (...a) => console.log(...a);
   const warn = (...a) => console.error(...a);
 
@@ -139,13 +140,16 @@ export async function runBackup(env = process.env) {
       vacuumSnapshot(dbPath, dbSnapshot);
       dbSnapshot = maybeEncryptFile(dbSnapshot, encryptRecipient, warn);
       const dbDest = remote ? `${dest}/db` : path.join(dest, "db");
+      // Where this run's mirror deletions/overwrites land instead of being
+      // lost — see the attic note in scripts/lib/backup-set.mjs.
+      const attic = (...parts) => (remote ? `${dest}/attic/${stamp}/${parts.join("/")}` : path.join(dest, "attic", stamp, ...parts));
       shipFile(dbSnapshot, dbDest);
       log(`DB snapshot -> ${dest}/db/${path.basename(dbSnapshot)}`);
 
       for (const name of MEDIA_DIRS) {
         const src = path.join(storageDir, name);
         const mediaDest = remote ? `${dest}/media/${name}` : path.join(dest, "media", name);
-        rsyncMirror(src, mediaDest, log);
+        rsyncMirror(src, mediaDest, log, { backupDir: attic("media", name) });
       }
       log(`Media mirrored -> ${dest}/media/{${MEDIA_DIRS.join(",")}}`);
 
@@ -158,16 +162,17 @@ export async function runBackup(env = process.env) {
         rmSyncIfExists(staged);
         cpFile(src, staged);
         staged = maybeEncryptFile(staged, encryptRecipient, warn);
-        shipFile(staged, remote ? `${dest}/config` : path.join(dest, "config"));
+        shipFile(staged, remote ? `${dest}/config` : path.join(dest, "config"), { backupDir: attic("config") });
       }
       for (const name of CONFIG_DIRS) {
         const src = path.join(appDir, name);
         const confDest = remote ? `${dest}/config/${name}` : path.join(dest, "config", name);
-        rsyncMirror(src, confDest, log);
+        rsyncMirror(src, confDest, log, { backupDir: attic("config", name) });
       }
       log(`Config mirrored -> ${dest}/config/`);
 
       const prunedCount = pruneDbSnapshots(dest, keep, log);
+      const prunedAttic = pruneAttic(dest, log);
 
       const status = {
         ok: true,
@@ -178,6 +183,7 @@ export async function runBackup(env = process.env) {
         dbSnapshot: path.basename(dbSnapshot),
         keep,
         pruned: prunedCount,
+        prunedAttic,
         encrypted: Boolean(encryptRecipient),
       };
       writeStatus(dest, status);

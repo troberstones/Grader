@@ -138,6 +138,8 @@ Everything lives under one destination, `BACKUP_DEST`:
   db/grader-<YYYY-MM-DD-HHMMSS>.db[.age|.gpg]   dated snapshots
   media/{submissions,review,thumbnails}/         rsync mirror, current state
   config/{.env,.env.local,certs/}[.age|.gpg]     rsync mirror, current state
+  attic/<YYYY-MM-DD-HHMMSS>/{media,config}/      what that night's run removed
+                                                 or overwrote in the mirrors
   status.json                                    outcome of the last run
 ```
 
@@ -148,15 +150,20 @@ the previous night) or (b) a single mirror kept in sync with `rsync -a
 already only transfers what changed, so it's just as "incremental" as (a)
 in the sense that matters (nightly run time and bandwidth), but it's far
 simpler to reason about, browse, and restore — there's exactly one copy of
-the media tree to look at, not N mostly-identical hardlinked trees. The
-tradeoff is real and worth naming: **there is no history for media or
-config, only for the database.** If a submission file is deleted (by a bug,
-by a student re-upload, by an operator mistake) and a backup runs before
-anyone notices, it's gone from the mirror too. The database *does* have
-history — a bad `grades` row from three days ago is recoverable — because
-that's where actual grading judgment lives and where a bug is most likely to
-do quiet damage. Recovering an individual lost media file older than the
-most recent run is not covered; see "What this doesn't cover" below.
+the media tree to look at, not N mostly-identical hardlinked trees. 
+
+A bare mirror would copy a disaster faithfully: a submission deleted or
+overwritten on the server (by a bug, a re-upload, an operator mistake)
+would vanish from the backup the next night. So nothing the mirror would
+delete or overwrite is thrown away — it moves to `attic/<stamp>/` for that
+night, keeping its path (`attic/2026-09-02-033000/media/submissions/12/34/render.png`).
+To get a lost file back, find it in the attic and copy it into place. Attic
+nights are pruned together with the DB snapshots: once the oldest kept
+snapshot is newer than an attic night, that night goes. For local
+destinations the attic step is done in Node (rename only) before rsync runs;
+for `user@host:` destinations it's rsync's `--backup --backup-dir`, which
+needs GNU rsync on the receiving end — macOS's bundled openrsync silently
+skips deletions when `--backup-dir` is set.
 
 **Why `storage/rubrics` and `storage/exports` aren't backed up.** Neither is
 written to by anything under `src/` today (`RUBRICS_DIR`/`EXPORTS_DIR` in
@@ -298,10 +305,20 @@ not enough. Where `systemctl` is available, it additionally checks
 `systemctl --user is-active grader.service` and refuses if the service
 turns out to still be running, flags or no flags.
 
+Before writing the restored database, `--into-live` renames the current
+`storage/grader.db` and any `grader.db-wal`/`grader.db-shm` beside it to
+`*.pre-restore-<stamp>`. A leftover WAL from the old database would
+otherwise be replayed onto the restored one the next time the app opens it,
+and keeping the old file means restoring the wrong snapshot can be undone.
+Delete the `.pre-restore-*` files by hand once the restore is confirmed good.
+
 ### What this doesn't cover
 
-- **No history for media or config** — only the current mirror. See the
-  layout rationale above.
+- **Media/config history only covers what changed.** The attic keeps each
+  night's deleted or overwritten files, not a full point-in-time tree, so a
+  restore brings back *current* media alongside an older DB snapshot. Files
+  the old snapshot references but that were since deleted are in the attic
+  and reported as missing by `--verify`.
 - **No automated restore-drill schedule.** `restore.mjs --verify` is a
   command to run by hand (or from a separate cron/timer an operator sets
   up), not something this change wires up on its own.
