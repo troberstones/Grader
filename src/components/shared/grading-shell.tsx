@@ -30,6 +30,8 @@ import type { StudentWithGrade } from "@/actions/grades";
 interface GradingShellProps {
   students: StudentWithGrade[];
   assignmentId: number;
+  /** For the sidebar's letter grade beside each score. */
+  pointsPossible: number;
   children: React.ReactNode;
 }
 
@@ -42,6 +44,7 @@ interface GradingShellProps {
 export function GradingShell({
   students,
   assignmentId,
+  pointsPossible,
   children,
 }: GradingShellProps) {
   const pathname = usePathname();
@@ -75,7 +78,7 @@ export function GradingShell({
 
           {/* Main area: sidebar + page content */}
           <div className="flex flex-1 min-h-0">
-            <StudentSidebar />
+            <StudentSidebar pointsPossible={pointsPossible} />
             <div className="flex-1 min-w-0 overflow-hidden">{children}</div>
           </div>
         </div>
