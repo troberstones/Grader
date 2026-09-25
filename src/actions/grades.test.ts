@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { assignments, courses, grades, rubricCriteria, rubricLevels, rubrics, students, users } from "@/db/schema";
+import { assignments, courses, grades, rubricCriteria, rubricLevels, rubrics, sessions, students, users } from "@/db/schema";
 import { createSession } from "@/lib/auth/session";
 import { hashPassword } from "@/lib/auth/password";
-import { exportGradesCSV, markMissing, saveShareGrade } from "@/actions/grades";
+import { clearGrade, exportGradesCSV, markMissing, saveShareGrade } from "@/actions/grades";
 
 // Admin bypasses every resource-specific capability check (see can() in
 // src/lib/auth/roles.ts), so a signed-in admin is enough to exercise these
@@ -213,14 +213,105 @@ describe("saveShareGrade", () => {
       baseUpdatedAt: staleBase,
     });
     expect(third.success).toBe(false);
-    if (!third.success) {
-      expect(third.reason).toBe("stale");
+    expect(!third.success && third.reason).toBe("stale");
+    if (!third.success && third.reason === "stale") {
       expect(third.current.updatedAt).not.toBe(staleBase);
+      // The full current record — entries included, not just the bare row —
+      // so a client's "Load theirs" can actually repaint the rubric with the
+      // second save's winning selection (level 3) rather than nothing.
+      expect(third.current.totalScore).toBe(100);
+      expect(third.current.entries).toHaveLength(1);
+      expect(third.current.entries[0]).toMatchObject({
+        criteriaId: criteria[0].id,
+        levelId: levelId(criteria, 0, 3),
+      });
     }
 
     const [finalRow] = await db.select().from(grades).where(eq(grades.assignmentId, assignment.id));
     // Score from the third (rejected) save's level-1 entry must not have applied.
     expect(finalRow.totalScore).toBe(100);
+  });
+
+  it("returns the grade's updatedAt on success, matching the stored row", async () => {
+    await seedSignedInAdmin();
+    const course = await makeCourse("Course C2");
+    const { rubric, criteria } = await makeShareRubric(["Composition"]);
+    const assignment = await makeAssignment(course.id, rubric.id, 100);
+    const student = await makeStudent("Student Three B");
+
+    const result = await saveShareGrade({
+      assignmentId: assignment.id,
+      studentId: student.id,
+      entries: [{ criteriaId: criteria[0].id, levelId: levelId(criteria, 0, 2) }],
+      feedback: "",
+    });
+    expect(result.success).toBe(true);
+
+    const [row] = await db.select().from(grades).where(eq(grades.assignmentId, assignment.id));
+    if (result.success) {
+      expect(result.updatedAt).toBe(row.updatedAt);
+    }
+  });
+});
+
+describe("typed auth failures", () => {
+  it("saveShareGrade reports a missing session as {reason:'auth'} rather than throwing", async () => {
+    // No seedSignedInAdmin() — the cookie jar is empty (see vitest.setup.ts's
+    // beforeEach), so getCurrentUser() resolves null inside requireCapability.
+    const course = await makeCourse("Course G");
+    const { rubric, criteria } = await makeShareRubric(["Composition"]);
+    const assignment = await makeAssignment(course.id, rubric.id, 100);
+    const student = await makeStudent("No Session Student");
+
+    const result = await saveShareGrade({
+      assignmentId: assignment.id,
+      studentId: student.id,
+      entries: [{ criteriaId: criteria[0].id, levelId: levelId(criteria, 0, 2) }],
+      feedback: "",
+    });
+
+    expect(result).toEqual({ success: false, reason: "auth" });
+
+    const rows = await db.select().from(grades).where(eq(grades.assignmentId, assignment.id));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("markMissing reports a missing session as {reason:'auth'} rather than throwing", async () => {
+    const course = await makeCourse("Course H");
+    const { rubric } = await makeShareRubric(["Composition"]);
+    const assignment = await makeAssignment(course.id, rubric.id, 100);
+    const student = await makeStudent("No Session Student 2");
+
+    const result = await markMissing(assignment.id, student.id);
+    expect(result).toEqual({ success: false, reason: "auth" });
+
+    const rows = await db.select().from(grades).where(eq(grades.assignmentId, assignment.id));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("clearGrade reports a missing session as {reason:'auth'} rather than throwing", async () => {
+    const course = await makeCourse("Course I");
+    const { rubric, criteria } = await makeShareRubric(["Composition"]);
+    const assignment = await makeAssignment(course.id, rubric.id, 100);
+    const student = await makeStudent("No Session Student 3");
+
+    // Seed a real grade as an admin, then drop the session before calling
+    // clearGrade, so a failure here can only be the auth check, never "no
+    // grade to delete".
+    await seedSignedInAdmin();
+    await saveShareGrade({
+      assignmentId: assignment.id,
+      studentId: student.id,
+      entries: [{ criteriaId: criteria[0].id, levelId: levelId(criteria, 0, 2) }],
+      feedback: "",
+    });
+    await db.delete(sessions);
+
+    const result = await clearGrade(assignment.id, student.id);
+    expect(result).toEqual({ success: false, reason: "auth" });
+
+    const rows = await db.select().from(grades).where(eq(grades.assignmentId, assignment.id));
+    expect(rows).toHaveLength(1);
   });
 });
 

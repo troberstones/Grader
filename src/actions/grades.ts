@@ -14,7 +14,8 @@ import {
 import { eq, and, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { GradeStatus } from "@/types/grading";
-import { requireCapability } from "@/lib/auth/require";
+import { requireCapability, AuthError } from "@/lib/auth/require";
+import type { SessionUser } from "@/lib/auth/session";
 import { assignmentResource } from "@/lib/auth/resource-lookup";
 import { computeScore, criterionPoints, toNormalRubric, toSelections } from "@/lib/rubric";
 import type { DbCriterionRow } from "@/lib/rubric";
@@ -39,6 +40,13 @@ export type StudentGrade = {
   status: GradeStatus;
   gradedAt: string | null;
   exportedAt: string | null;
+  /**
+   * `grades.updated_at` at the time this was read. The client holds onto
+   * this per student and sends it back as `saveShareGrade`'s `baseUpdatedAt`
+   * so a save can tell whether the row it's about to overwrite is the same
+   * one it last saw — see `SaveShareGradeResult`'s "stale" branch.
+   */
+  updatedAt: string;
   entries: GradeEntry[];
 };
 
@@ -57,7 +65,7 @@ export type StudentWithGrade = {
   emailedFeedback: { sentAt: string; fingerprint: string | null } | null;
 };
 
-/** The row shape of `grades`, handed back verbatim on a stale-write conflict. */
+/** The raw row shape of `grades`. */
 export type GradeRow = typeof grades.$inferSelect;
 
 /**
@@ -128,6 +136,7 @@ export async function getGradeSheet(assignmentId: number): Promise<StudentWithGr
             status: grade.status as GradeStatus,
             gradedAt: grade.gradedAt,
             exportedAt: grade.exportedAt,
+            updatedAt: grade.updatedAt,
             entries,
           }
         : null,
@@ -237,8 +246,9 @@ export function recomputeGrade(tx: GradeTx, gradeId: number): { status: GradeSta
 // ─── Save a grade for a share-model rubric (src/lib/rubric/) ─────────────────
 
 export type SaveShareGradeResult =
-  | { success: true; status: GradeStatus; totalScore: number }
-  | { success: false; reason: "stale"; current: GradeRow };
+  | { success: true; status: GradeStatus; totalScore: number; updatedAt: string }
+  | { success: false; reason: "stale"; current: StudentGrade }
+  | { success: false; reason: "auth" };
 
 /**
  * Re-fetches the rubric server-side rather than trusting anything
@@ -253,9 +263,15 @@ export type SaveShareGradeResult =
  * untouched — pass `""` to explicitly clear it. `baseUpdatedAt`, if given, is
  * compared against the stored row's `updatedAt`; a mismatch means someone
  * else wrote to this grade since the caller last read it, and this save is
- * rejected with the fresh row instead of overwriting it. Existing callers
- * pass neither `feedback: undefined` nor `baseUpdatedAt`, so this behaves
- * exactly as before for them — wiring a real conflict UI is later work.
+ * rejected with the full current record (entries included, so the client's
+ * "Load theirs" can actually repaint the rubric) instead of overwriting it.
+ * Callers that omit `baseUpdatedAt` never hit that branch, so this behaves
+ * exactly as before for them.
+ *
+ * A missing/expired session or an insufficient capability is reported the
+ * same way — `{ success:false, reason:"auth" }` — rather than thrown, so a
+ * client mid-edit can keep the edit and show a retry affordance instead of a
+ * toast built from whatever message a production build didn't strip.
  */
 export async function saveShareGrade({
   assignmentId,
@@ -270,7 +286,14 @@ export async function saveShareGrade({
   feedback?: string;
   baseUpdatedAt?: string;
 }): Promise<SaveShareGradeResult> {
-  const actor = await requireCapability("grade.write", await assignmentResource(assignmentId));
+  const resource = await assignmentResource(assignmentId);
+  let actor: SessionUser;
+  try {
+    actor = await requireCapability("grade.write", resource);
+  } catch (err) {
+    if (err instanceof AuthError) return { success: false, reason: "auth" };
+    throw err;
+  }
 
   const assignmentRow = await db
     .select({ rubricId: assignments.rubricId, pointsPossible: assignments.pointsPossible })
@@ -287,7 +310,28 @@ export async function saveShareGrade({
       .get();
 
     if (existing && baseUpdatedAt !== undefined && existing.updatedAt !== baseUpdatedAt) {
-      return { success: false as const, reason: "stale" as const, current: existing };
+      const currentEntries = tx
+        .select()
+        .from(gradeEntries)
+        .where(eq(gradeEntries.gradeId, existing.id))
+        .all();
+      const current: StudentGrade = {
+        id: existing.id,
+        totalScore: existing.totalScore,
+        feedback: existing.feedback,
+        status: existing.status as GradeStatus,
+        gradedAt: existing.gradedAt,
+        exportedAt: existing.exportedAt,
+        updatedAt: existing.updatedAt,
+        entries: currentEntries.map((e) => ({
+          criteriaId: e.criteriaId,
+          levelId: e.levelId,
+          score: e.score,
+          comment: e.comment,
+          nudge: e.nudge,
+        })),
+      };
+      return { success: false as const, reason: "stale" as const, current };
     }
 
     let gradeId: number;
@@ -326,7 +370,12 @@ export async function saveShareGrade({
         .run();
     }
 
-    return { success: true as const, status, totalScore, gradeId };
+    // Read back updatedAt rather than reusing a timestamp computed earlier
+    // in this function — recomputeGrade and the feedback write above may
+    // each have stamped their own, and this is whichever landed last.
+    const finalRow = tx.select({ updatedAt: grades.updatedAt }).from(grades).where(eq(grades.id, gradeId)).get()!;
+
+    return { success: true as const, status, totalScore, updatedAt: finalRow.updatedAt, gradeId };
   });
 
   revalidatePath(`/assignments/${assignmentId}`);
@@ -342,36 +391,60 @@ export async function saveShareGrade({
     detail: { assignmentId, studentId, totalScore: outcome.totalScore, status: outcome.status },
   });
 
-  return { success: true, status: outcome.status, totalScore: outcome.totalScore };
+  return { success: true, status: outcome.status, totalScore: outcome.totalScore, updatedAt: outcome.updatedAt };
 }
+
+export type MarkMissingResult =
+  | { success: true; updatedAt: string }
+  | { success: false; reason: "auth" };
 
 /**
  * Distinct from a criterion graded at level 0: nothing was submitted at all.
  * A nonzero band floor is only defensible if these two states read
  * differently — see docs/rubric-authoring.md. Model-agnostic: works
  * regardless of which editor authored the rubric.
+ *
+ * Reports a missing/expired session or missing capability as
+ * `{ success:false, reason:"auth" }` rather than throwing — see
+ * `saveShareGrade` for why.
  */
-export async function markMissing(assignmentId: number, studentId: number) {
-  const actor = await requireCapability("grade.write", await assignmentResource(assignmentId));
+export async function markMissing(assignmentId: number, studentId: number): Promise<MarkMissingResult> {
+  const resource = await assignmentResource(assignmentId);
+  let actor: SessionUser;
+  try {
+    actor = await requireCapability("grade.write", resource);
+  } catch (err) {
+    if (err instanceof AuthError) return { success: false, reason: "auth" };
+    throw err;
+  }
+
   const existing = await db
     .select({ id: grades.id })
     .from(grades)
     .where(and(eq(grades.assignmentId, assignmentId), eq(grades.studentId, studentId)));
 
+  const now = new Date().toISOString();
   let gradeId: number;
+  // Echoed back to the client as `updatedAt` — must be the value actually
+  // stored, not just `now`: the insert branch leaves `updatedAt` to the
+  // column's own `datetime('now')` default, which is a different string
+  // format than the explicit ISO timestamp the update branch writes.
+  let updatedAt: string;
   if (existing.length > 0) {
     gradeId = existing[0].id;
     await db.delete(gradeEntries).where(eq(gradeEntries.gradeId, gradeId));
     await db
       .update(grades)
-      .set({ totalScore: 0, feedback: null, status: "missing", gradedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+      .set({ totalScore: 0, feedback: null, status: "missing", gradedAt: now, updatedAt: now })
       .where(eq(grades.id, gradeId));
+    updatedAt = now;
   } else {
     const [created] = await db
       .insert(grades)
-      .values({ assignmentId, studentId, totalScore: 0, status: "missing", gradedAt: new Date().toISOString() })
+      .values({ assignmentId, studentId, totalScore: 0, status: "missing", gradedAt: now })
       .returning();
     gradeId = created.id;
+    updatedAt = created.updatedAt;
   }
 
   await writeAudit(actor, {
@@ -382,12 +455,28 @@ export async function markMissing(assignmentId: number, studentId: number) {
   });
 
   revalidatePath(`/assignments/${assignmentId}`);
+  return { success: true, updatedAt };
 }
 
 // ─── Clear a student's grade (reset to ungraded) ──────────────────────────────
 
-export async function clearGrade(assignmentId: number, studentId: number) {
-  const actor = await requireCapability("grade.write", await assignmentResource(assignmentId));
+export type ClearGradeResult = { success: true } | { success: false; reason: "auth" };
+
+/**
+ * Reports a missing/expired session or missing capability as
+ * `{ success:false, reason:"auth" }` rather than throwing — see
+ * `saveShareGrade` for why.
+ */
+export async function clearGrade(assignmentId: number, studentId: number): Promise<ClearGradeResult> {
+  const resource = await assignmentResource(assignmentId);
+  let actor: SessionUser;
+  try {
+    actor = await requireCapability("grade.write", resource);
+  } catch (err) {
+    if (err instanceof AuthError) return { success: false, reason: "auth" };
+    throw err;
+  }
+
   const existing = await db
     .select({ id: grades.id })
     .from(grades)
@@ -404,6 +493,7 @@ export async function clearGrade(assignmentId: number, studentId: number) {
     });
   }
   revalidatePath(`/assignments/${assignmentId}`);
+  return { success: true };
 }
 
 // ─── Export grades as CSV for Learning Suite ──────────────────────────────────

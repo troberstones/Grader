@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { RUBRIC_GRADING_VIEWS, GRADING_VIEW_LABELS, type RubricGradingViewKey } from "@/components/rubric/grading-registry";
 import { UnconvertedRubricNotice } from "@/components/rubric/unconverted-rubric-notice";
+import { GradingAlertBanner } from "@/components/rubric/grading-alert-banner";
 import type { RubricGrading } from "@/hooks/use-rubric-grading";
 import { cn, formatScore } from "@/lib/utils";
 
@@ -58,7 +59,20 @@ function readViewPref(raw: string | null): RubricGradingViewKey | null {
  * one that reaches the nudge positions between bands.
  */
 export function RubricGradingPanel({ grading, dense = false }: Props) {
-  const { assignment, criteria, feedback, setFeedback, saving, saveFailed, handleSave } = grading;
+  const {
+    assignment,
+    criteria,
+    feedback,
+    setFeedback,
+    saving,
+    saveFailed,
+    handleSave,
+    conflict,
+    loadTheirs,
+    keepMine,
+    authExpired,
+    retryAfterSignIn,
+  } = grading;
 
   // Deliberately deferred to an effect rather than a lazy useState
   // initializer: this component renders during SSR, where localStorage
@@ -105,6 +119,12 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
 
   return (
     <div className={cn("flex-1 overflow-auto", dense ? "px-3 py-3" : "px-6 py-3")}>
+      {authExpired ? (
+        <GradingAlertBanner alert={{ kind: "auth", onRetry: retryAfterSignIn }} />
+      ) : conflict ? (
+        <GradingAlertBanner alert={{ kind: "conflict", onLoadTheirs: loadTheirs, onKeepMine: keepMine }} />
+      ) : null}
+
       <div className="mb-2 flex items-center gap-1 rounded-md border text-xs overflow-hidden self-start w-fit">
         {(Object.keys(RUBRIC_GRADING_VIEWS) as RubricGradingViewKey[]).map((key) => (
           <button
@@ -157,9 +177,11 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
           </div>
 
           <div className="flex items-center gap-3">
-            {saveFailed ? (
+            {saveFailed && !conflict && !authExpired ? (
               // Persistent — not a toast — because a toast is gone by the
-              // time anyone notices the edit never actually saved.
+              // time anyone notices the edit never actually saved. Hidden
+              // while the conflict/auth banner above is showing — that one
+              // already explains why, and already offers its own retry.
               <span className="text-xs text-destructive flex items-center gap-1.5">
                 Unsaved changes
                 <button

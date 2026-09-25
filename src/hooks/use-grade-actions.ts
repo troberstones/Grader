@@ -8,6 +8,17 @@ import type { StudentGrade } from "@/actions/grades";
 type ShareSavePayload = Parameters<typeof saveShareGrade>[0];
 
 /**
+ * Failure half of a grade-writing action's outcome, as seen by
+ * use-rubric-grading.ts.
+ *
+ * `"auth"` is distinct from a plain thrown error precisely because the
+ * caller reacts differently to it: it keeps the edit and offers a
+ * sign-in-then-retry banner, rather than the transient, already-toasted
+ * failure a generic `"error"` is.
+ */
+export type ActionFailure = { ok: false; reason: "auth" } | { ok: false; reason: "error" };
+
+/**
  * Wraps the grade server actions with loading state so GradeSheetClient
  * never has to manage setSaving / setExporting or import action names directly.
  *
@@ -19,29 +30,33 @@ export function useGradeActions(assignmentId: number) {
 
   /**
    * Save or update a student's grade for a share-model rubric
-   * (src/lib/rubric/). Returns the new status and total score so the caller
-   * can update display state. Shows a toast on error.
+   * (src/lib/rubric/). Returns the new status/score/updatedAt so the caller
+   * can update display state and advance its conflict-detection baseline.
    *
    * `saveShareGrade` can also report a "stale" conflict (someone else saved
-   * this grade since it was last read) via `{ success: false }` — no caller
-   * today passes `baseUpdatedAt`, so that branch can't yet be hit, but it's
-   * handled here rather than left as a type escape hatch. Wiring a real
-   * conflict UI for it is later work.
+   * this grade since it was last read, via `baseUpdatedAt`) or an "auth"
+   * failure (session missing/expired, or capability revoked) — both are
+   * passed through rather than toasted, so use-rubric-grading.ts can show
+   * its persistent conflict/session banners instead.
    */
   async function saveShare(
     payload: ShareSavePayload,
-  ): Promise<{ status: StudentGrade["status"]; totalScore: number } | null> {
+  ): Promise<
+    | { ok: true; status: StudentGrade["status"]; totalScore: number; updatedAt: string }
+    | { ok: false; reason: "stale"; current: StudentGrade }
+    | ActionFailure
+  > {
     setSaving(true);
     try {
       const result = await saveShareGrade(payload);
       if (!result.success) {
-        toast.error("This grade changed elsewhere — reload before saving again.");
-        return null;
+        if (result.reason === "auth") return { ok: false, reason: "auth" };
+        return { ok: false, reason: "stale", current: result.current };
       }
-      return { status: result.status, totalScore: result.totalScore };
+      return { ok: true, status: result.status, totalScore: result.totalScore, updatedAt: result.updatedAt };
     } catch (err) {
       toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
+      return { ok: false, reason: "error" };
     } finally {
       setSaving(false);
     }
@@ -49,29 +64,33 @@ export function useGradeActions(assignmentId: number) {
 
   /**
    * Marks a student as having submitted nothing — distinct from graded at
-   * the lowest level. Shows a toast on error. Returns true on success.
+   * the lowest level. Shows a toast on a generic error; an "auth" failure is
+   * passed through instead, for the same reason as `saveShare`.
    */
-  async function markStudentMissing(studentId: number): Promise<boolean> {
+  async function markStudentMissing(studentId: number): Promise<{ ok: true; updatedAt: string } | ActionFailure> {
     try {
-      await markMissing(assignmentId, studentId);
-      return true;
+      const result = await markMissing(assignmentId, studentId);
+      if (!result.success) return { ok: false, reason: "auth" };
+      return { ok: true, updatedAt: result.updatedAt };
     } catch {
       toast.error("Failed to mark missing");
-      return false;
+      return { ok: false, reason: "error" };
     }
   }
 
   /**
-   * Clear a student's grade entirely. Shows a toast on error.
-   * Returns true on success.
+   * Clear a student's grade entirely. Shows a toast on a generic error; an
+   * "auth" failure is passed through instead, for the same reason as
+   * `saveShare`.
    */
-  async function clear(studentId: number): Promise<boolean> {
+  async function clear(studentId: number): Promise<{ ok: true } | ActionFailure> {
     try {
-      await clearGrade(assignmentId, studentId);
-      return true;
+      const result = await clearGrade(assignmentId, studentId);
+      if (!result.success) return { ok: false, reason: "auth" };
+      return { ok: true };
     } catch {
       toast.error("Failed to clear grade");
-      return false;
+      return { ok: false, reason: "error" };
     }
   }
 
