@@ -89,7 +89,7 @@ function installGlobals() {
 
 installGlobals();
 
-const { BitmapCacheSource, halfFloatOf } = require(path.join(OUT, "sources", "bitmap-cache.js"));
+const { halfFloatOf } = require(path.join(OUT, "sources", "bitmap-cache.js"));
 const { StillSource, SequenceSource } = require(path.join(OUT, "sources", "still.js"));
 const { RGBE_TRANSFER } = require(path.join(OUT, "core", "rgbe.js"));
 const { frameNumberOf, sequenceFrames } = require(path.join(OUT, "server", "ingest.js"));

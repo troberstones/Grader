@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useId, useMemo } from "react";
 import type { Action, Envelope, ReviewChannel } from "@grader/art-review";
 import { useGlobalSync, type GlobalSyncPayload } from "@/components/shared/global-sync";
 
@@ -29,7 +29,10 @@ type ReviewEnvelope = Envelope & { kind: typeof REVIEW_KIND };
 
 export function useReviewChannel(contextId: string | null): ReviewChannel | null {
   const { broadcast, subscribe } = useGlobalSync();
-  const clientId = useRef(Math.random().toString(36).slice(2, 10)).current;
+  // useId rather than Math.random(): it's pure (no impure call during
+  // render) and still unique per component instance, which is all a
+  // same-tab dedup tag needs.
+  const clientId = useId();
 
   return useMemo(() => {
     if (!contextId) return null;

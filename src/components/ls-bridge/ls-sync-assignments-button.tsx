@@ -120,7 +120,7 @@ export function LsSyncAssignmentsButton({ courseId }: { courseId: number }) {
           <TooltipTrigger render={<Button variant="ghost" size="icon" onClick={handleUnlink} />}>
             <Link2Off className="h-4 w-4" />
           </TooltipTrigger>
-          <TooltipContent>Unlink from LS course "{linkedCourseId}"</TooltipContent>
+          <TooltipContent>Unlink from LS course &quot;{linkedCourseId}&quot;</TooltipContent>
         </Tooltip>
       )}
     </div>

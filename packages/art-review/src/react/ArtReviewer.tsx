@@ -431,6 +431,10 @@ export function ArtReviewer({
   // in state and was never shown.
   useEffect(() => {
     viewer.invalidate();
+    // Deliberately not depending on the whole `viewer` object: it is a fresh
+    // reference every render, which would invalidate on every render instead
+    // of only when one of the values below actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewer.invalidate, annotations.strokes, annotations.liveInk, annotations.hiddenAuthors]);
 
   // Laser events from peers.
@@ -443,8 +447,10 @@ export function ArtReviewer({
       ];
       viewer.invalidate();
     });
-    // Deliberately not depending on `viewer`: it is a fresh object every render,
-    // and resubscribing that often drops messages that land in the gap.
+    // Deliberately not depending on `viewer` or `session`: both are fresh
+    // objects every render, and resubscribing that often drops messages that
+    // land in the gap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.subscribe, viewer.invalidate, author.color]);
 
   // Only one host in the room should make noise.
@@ -1078,7 +1084,11 @@ export function ArtReviewer({
 
         case "m":
           if (readOnly) return;
-          session.isMaster ? session.release() : session.claim();
+          if (session.isMaster) {
+            session.release();
+          } else {
+            session.claim();
+          }
           return;
       }
 
@@ -1346,7 +1356,7 @@ export function ArtReviewer({
                 const [frameIn, frameOut] = holdRange(state.frame);
                 setTextPrompt(null);
                 if (!value.trim()) return;
-                const res = await annotations.commit({
+                await annotations.commit({
                   tool: "text",
                   color: inkColor,
                   width: tools.width,

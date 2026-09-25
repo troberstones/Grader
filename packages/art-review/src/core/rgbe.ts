@@ -106,7 +106,7 @@ export function floatToHalf(value: number): number {
   f32[0] = value;
   const x = u32[0];
   const sign = (x >>> 16) & 0x8000;
-  let exp = ((x >>> 23) & 0xff) - 127 + 15;
+  const exp = ((x >>> 23) & 0xff) - 127 + 15;
   const mant = x & 0x7fffff;
 
   if (exp >= 31) return sign | 0x7c00; // overflow → infinity

@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/link-button";
 import { Grid3X3, Trash2, Copy, Download, Upload } from "lucide-react";
 import { deleteRubric, duplicateRubric, createShareRubric } from "@/actions/rubrics";

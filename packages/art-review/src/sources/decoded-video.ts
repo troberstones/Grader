@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference -- scripts/build-test.sh compiles this file standalone (not via tsconfig's `include`), so the ambient "mp4box" module declaration must be pulled in this way or the build fails with TS7016.
 /// <reference path="./mp4box.d.ts" />
 import { chooseCacheSize, type Budget } from "../core/budget";
 import type { ReviewItem } from "../core/types";

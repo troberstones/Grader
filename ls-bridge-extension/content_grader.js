@@ -29,7 +29,7 @@ function sendToBackground(message) {
     let port;
     try {
       port = chrome.runtime.connect({ name: 'grader-sync' });
-    } catch (err) {
+    } catch {
       reject(new Error('Could not reach the LS Bridge extension. Reload this tab and the Learning Suite tab, then try again.'));
       return;
     }

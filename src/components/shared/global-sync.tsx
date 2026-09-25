@@ -113,7 +113,9 @@ function NavigationSyncer({
 
   // Keep pathname fresh inside stable callbacks
   const pathnameRef = useRef(pathname);
-  pathnameRef.current = pathname;
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
 
   // Track last broadcast/received assignment so we don't re-broadcast on arrival
   const lastHandledAssignmentId = useRef<number | null>(null);

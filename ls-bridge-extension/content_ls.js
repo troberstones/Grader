@@ -46,7 +46,7 @@ async function fetchGradebookId(subsessionID) {
     );
     const id = extractGradebookIdFromObject(data);
     if (id) return id;
-  } catch (e) { /* try next */ }
+  } catch { /* try next */ }
 
   // ── Strategy 2: assignment list (each assignment carries its gradebookID) ─
   for (const funcParams of [
@@ -66,7 +66,7 @@ async function fetchGradebookId(subsessionID) {
         const id = item.gradebookID ?? item.lmsGradebookId ?? item.gbId;
         if (id != null) return String(id);
       }
-    } catch (e) { /* try next */ }
+    } catch { /* try next */ }
   }
 
   // ── Strategy 3: gradebook listing endpoints ────────────────────────────────
@@ -83,7 +83,7 @@ async function fetchGradebookId(subsessionID) {
         const id = item.gradebookID ?? item.id ?? item.gbId;
         if (id != null) return String(id);
       }
-    } catch (e) { /* try next */ }
+    } catch { /* try next */ }
   }
 
   return null;
@@ -112,7 +112,7 @@ function extractGradebookIdFromObject(data) {
     const json = JSON.stringify(data);
     const m = json.match(/"(?:gradebookID|gradebook_id|gbId|gb_id)"\s*:\s*"?([A-Za-z0-9_-]{4,40})"?/);
     if (m) return m[1];
-  } catch (e) { /* ignore */ }
+  } catch { /* ignore */ }
 
   return null;
 }

@@ -83,6 +83,7 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
   useEffect(() => {
     const stored = readViewPref(window.localStorage.getItem(VIEW_PREF_KEY));
     if (stored) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- this is the one-time post-mount correction from localStorage the comment above describes; localStorage doesn't exist during SSR so it can't be a lazy initializer.
       setView(stored);
       window.localStorage.setItem(VIEW_PREF_KEY, stored);
     }

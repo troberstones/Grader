@@ -15,22 +15,19 @@ import { updateAssignment, deleteAssignment, archiveAssignment } from "@/actions
 import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog";
 import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
-import type { getAssignment, getAllAssignments } from "@/actions/assignments";
-import type { getCourses } from "@/actions/courses";
+import type { getAssignment } from "@/actions/assignments";
 import type { getRubrics } from "@/actions/rubrics";
 import { formatTerm } from "@/lib/terms";
 
 type Assignment = NonNullable<Awaited<ReturnType<typeof getAssignment>>>;
-type Course = Awaited<ReturnType<typeof getCourses>>[number];
 type Rubric = Awaited<ReturnType<typeof getRubrics>>[number];
 
 interface EditAssignmentClientProps {
   assignment: Assignment;
-  courses: Course[];
   rubrics: Rubric[];
 }
 
-export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssignmentClientProps) {
+export function EditAssignmentClient({ assignment, rubrics }: EditAssignmentClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [saving, setSaving] = useState(false);
