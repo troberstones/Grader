@@ -44,6 +44,19 @@ export function proxy(request: NextRequest) {
 
   if (request.cookies.has("grader_session")) return forward();
 
+  // A server action's client runtime POSTs back to the current route with a
+  // `Next-Action` header and expects either a normal response or something
+  // it can surface as a thrown error — not a 307 to an HTML login page, which
+  // it can't parse as an action result and reports as an opaque failure.
+  // Session expiry mid-grading is the common case this hits, so hand back a
+  // plain 401 instead: the action itself still throws/returns its own typed
+  // failure for the "cookie present but session invalid" case (see
+  // requireCapability's AuthError in src/lib/auth/require.ts) — this only
+  // covers the "no cookie at all" case, which never reaches the action.
+  if (request.headers.has("next-action")) {
+    return new NextResponse(null, { status: 401 });
+  }
+
   const url = request.nextUrl.clone();
   url.pathname = "/login";
   url.search = "";

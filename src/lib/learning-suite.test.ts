@@ -113,6 +113,24 @@ describe("parseRoster — file shapes", () => {
     expect(students.map((s) => s.name)).toEqual(["Jane Smith", "John Doe"]);
   });
 
+  it("does not drop a real student whose first name happens to be a header word", () => {
+    // Only "First Name" contains a header alias ("First"); "Last Name" and
+    // "Net ID" don't match this row at all, so it's a minority match and
+    // must be read as a student, not skipped as a repeated header.
+    const { students, skipped } = parseRoster(
+      "Last Name,First Name,Net ID\nSmith,Jane,jsmith7\nBaker,First,bbaker1\n",
+    );
+    expect(students.map((s) => s.name)).toEqual(["Jane Smith", "First Baker"]);
+    expect(skipped).toBe(0);
+  });
+
+  it("still skips a header repeated mid-file even with an extra blank-ish column", () => {
+    const { students } = parseRoster(
+      "Last Name,First Name,Net ID\nSmith,Jane,jsmith7\nLast Name,First Name,\nDoe,John,jdoe2\n",
+    );
+    expect(students.map((s) => s.name)).toEqual(["Jane Smith", "John Doe"]);
+  });
+
   it("reports an empty file rather than throwing", () => {
     expect(parseRoster("").error).toBeTruthy();
     expect(parseRoster("\n\n").error).toBeTruthy();
@@ -141,6 +159,27 @@ describe("parseRoster — identity", () => {
     );
     expect(students).toHaveLength(1);
     expect(duplicates).toBe(1);
+  });
+
+  it("keeps two different students who share a name when there's no Net ID column, and warns instead of merging them", () => {
+    const { students, duplicates, warnings } = parseRoster(
+      "Student Name\nJohn Smith\nJohn Smith\n",
+    );
+    // Both kept — there's no identifier to tell "same person twice" from
+    // "two different Johns Smith", so dropping the second would risk
+    // silently losing a real student.
+    expect(students).toHaveLength(2);
+    expect(duplicates).toBe(0);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toMatch(/Smith, John/);
+  });
+
+  it("does not warn about a same-named student when a Net ID tells them apart", () => {
+    const { students, warnings } = parseRoster(
+      "Student Name,Net ID\nJohn Smith,jsmith1\nJohn Smith,jsmith2\n",
+    );
+    expect(students).toHaveLength(2);
+    expect(warnings).toEqual([]);
   });
 });
 

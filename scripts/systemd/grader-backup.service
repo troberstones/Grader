@@ -1,8 +1,19 @@
 # Installed by scripts/deploy-remote.sh into ~/.config/systemd/user/ on the
 # deploy host. Same hardcoded paths deploy-remote.sh already uses for
 # grader.service itself.
+#
+# Runs on a schedule via grader-backup.timer, which only fires while cnh5 is
+# logged in unless lingering is enabled — see docs/operations.md "Backup &
+# restore" for `loginctl enable-linger cnh5`.
+#
+# BACKUP_DEST is unset here on purpose: the destination (a mounted volume, an
+# rsync target on another host, ...) is an infrastructure decision for
+# whoever administers this box, not something to hardcode into the repo.
+# Until it's set, backups stay on the same disk as the live database (with a
+# loud warning in the log) and uploads/config aren't backed up at all.
+# Uncomment and fill in below once a destination exists.
 [Unit]
-Description=Grader database backup (VACUUM INTO, with retention)
+Description=Grader backup (DB snapshot + uploads + config, with retention)
 
 [Service]
 Type=oneshot
@@ -11,4 +22,15 @@ Environment=PATH=/work/cnh5/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin
 Environment=DB_PATH=/work/cnh5/grader/storage/grader.db
 Environment=BACKUP_DIR=/work/cnh5/grader/storage/backups
 Environment=RETENTION_DAYS=30
+Environment=BACKUP_KEEP=14
+# EnvironmentFile is optional (the leading '-') so this unit still runs before
+# .env.local exists. Picking it up here means BACKUP_ALERT_EMAIL's failure
+# email can reuse the same SMTP_HOST/SMTP_USER/SMTP_PASS/MAIL_FROM the app
+# already has configured, instead of duplicating mail credentials into this
+# unit file.
+EnvironmentFile=-/work/cnh5/grader/.env.local
+# Environment=BACKUP_DEST=/mnt/backup/grader
+# Environment=BACKUP_DEST=cnh5@backup-host.example.edu:/srv/grader-backups
+# Environment=BACKUP_ENCRYPT_RECIPIENT=age1...              # or a gpg key id
+# Environment=BACKUP_ALERT_EMAIL=instructor@byu.edu
 ExecStart=/work/cnh5/.nvm/versions/node/v22.23.2/bin/node scripts/backup-db.mjs

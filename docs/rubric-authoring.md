@@ -307,9 +307,11 @@ what it should be: recognition that submitted work has value. F still exists.
 ## The old models are archived, and everything was converted
 
 The v1/v2/v3 editors and their grading views were moved to
-`src/components/rubric/_archive/` (see the README there). The app now has one
-editor and two grading views — a grid and a slider — and both write the same
-thing, a level per criterion.
+`src/components/rubric/_archive/`, then deleted outright once nothing needed
+retrieving one back (see the `archive/review-v1` git tag for the last commit
+that had them, and its `_archive/README.md` for why and how to retrieve one).
+The app now has one editor and two grading views — a grid and a slider — and
+both write the same thing, a level per criterion.
 
 That was only safe because every existing rubric could come with it.
 `convertLegacyRubric` (`src/lib/rubric/legacy.ts`) runs the old arithmetic

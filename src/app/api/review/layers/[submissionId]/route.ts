@@ -1,6 +1,6 @@
 import path from "path";
 import fs from "fs/promises";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { reviewMedia } from "@/db/schema";
 import { apiRequireCapability } from "@/lib/auth/api";

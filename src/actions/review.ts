@@ -11,6 +11,7 @@ import { GLOBAL } from "@/lib/auth/roles";
 import { assignmentResource, submissionResource } from "@/lib/auth/resource-lookup";
 import { publishIngestProgress } from "@/lib/ingest-progress";
 import { buildReviewItems } from "@/lib/review-items";
+import { Semaphore } from "@/lib/semaphore";
 
 /**
  * Server side of ReviewDataAdapter.
@@ -53,13 +54,35 @@ export async function parseContext(contextId: string): Promise<{ assignmentId: n
 // Module-level so two tabs opening the same student don't transcode twice.
 const inFlight = new Map<number, Promise<void>>();
 
+// Caps how many ffmpeg processes run at once, process-wide — a review page
+// for a student with a dozen submissions used to fire a dozen transcodes in
+// parallel via Promise.all in listReviewItems(); everything still kicks off
+// together, but only this many actually run ffmpeg at a time, the rest queue.
+const transcodeLimiter = new Semaphore(2);
+
+// Backoff for a submission whose ingest keeps failing (ffmpeg missing, disk
+// full, SIGTERM mid-deploy, etc.) — without this, every review-page open
+// re-runs the failed transcode forever. Not persisted: a process restart
+// resets the budget, which is fine (the schema has no column for it and this
+// is explicitly allowed to live in memory per the task) and just means a
+// deploy gives failed ingests one fresh attempt.
+const MAX_AUTO_INGEST_ATTEMPTS = 3;
+const MIN_INGEST_RETRY_INTERVAL_MS = 5 * 60 * 1000;
+const ingestAttempts = new Map<number, { count: number; lastAttemptAt: number }>();
+
 /**
  * Produce web-safe derivatives for a submission if they don't exist yet.
  *
  * Idempotent and cheap on the second call — the expensive work is guarded by
  * the presence of review_media rows, not by re-running ffmpeg.
+ *
+ * A prior failure is retried automatically, but backed off: at most
+ * MAX_AUTO_INGEST_ATTEMPTS attempts, no more often than every
+ * MIN_INGEST_RETRY_INTERVAL_MS, so a permanently-broken upload doesn't burn
+ * ffmpeg on every page open. `force` (used by retryIngest, the manual "Retry
+ * processing" path) bypasses both limits for a single attempt.
  */
-export async function ensureIngested(submissionId: number): Promise<void> {
+export async function ensureIngested(submissionId: number, opts?: { force?: boolean }): Promise<void> {
   await requireCapability("roster.view", await submissionResource(submissionId));
   const existing = await db
     .select({ id: reviewMedia.id })
@@ -71,23 +94,44 @@ export async function ensureIngested(submissionId: number): Promise<void> {
   const running = inFlight.get(submissionId);
   if (running) return running;
 
+  const force = opts?.force ?? false;
+  if (force) {
+    ingestAttempts.delete(submissionId);
+  } else {
+    const state = ingestAttempts.get(submissionId);
+    if (state) {
+      if (state.count >= MAX_AUTO_INGEST_ATTEMPTS) return;
+      if (Date.now() - state.lastAttemptAt < MIN_INGEST_RETRY_INTERVAL_MS) return;
+    }
+  }
+
   const job = (async () => {
     const rows = await db.select().from(submissions).where(eq(submissions.id, submissionId));
     const sub = rows[0];
     if (!sub) return;
+
+    // A retry starts here — clear the prior failed row(s) so a success
+    // doesn't leave a stale failure sitting alongside the new ready rows
+    // (buildReviewItems already prefers ready over failed, but there's no
+    // reason to keep the dead row around either).
+    await db
+      .delete(reviewMedia)
+      .where(and(eq(reviewMedia.submissionId, submissionId), eq(reviewMedia.status, "failed")));
 
     const absolute = path.join(process.cwd(), sub.filePath);
     const outDir = path.join(process.cwd(), REVIEW_DIR, String(sub.assignmentId), String(sub.studentId));
     const baseName = `s${submissionId}`;
 
     try {
-      const result = await ingestFile(absolute, sub.fileName, {
-        outDir,
-        baseName,
-        maxWidth: 1920,
-        allIntra: true,
-        onProgress: (stage, pct) => publishIngestProgress(submissionId, stage, pct),
-      });
+      const result = await transcodeLimiter.run(() =>
+        ingestFile(absolute, sub.fileName, {
+          outDir,
+          baseName,
+          maxWidth: 1920,
+          allIntra: true,
+          onProgress: (stage, pct) => publishIngestProgress(submissionId, stage, pct),
+        }),
+      );
 
       const relative = (p: string) => path.relative(process.cwd(), p);
 
@@ -143,6 +187,10 @@ export async function ensureIngested(submissionId: number): Promise<void> {
           })
           .where(eq(submissions.id, submissionId));
       }
+
+      // A clean run means whatever backoff state was tracked no longer
+      // applies — the next failure (if any) starts its own fresh budget.
+      ingestAttempts.delete(submissionId);
     } catch (e) {
       await db.insert(reviewMedia).values({
         submissionId,
@@ -154,11 +202,26 @@ export async function ensureIngested(submissionId: number): Promise<void> {
         status: "failed",
         warnings: e instanceof Error ? e.message : String(e),
       });
+      const prev = ingestAttempts.get(submissionId);
+      ingestAttempts.set(submissionId, { count: (prev?.count ?? 0) + 1, lastAttemptAt: Date.now() });
     }
   })().finally(() => inFlight.delete(submissionId));
 
   inFlight.set(submissionId, job);
   return job;
+}
+
+/**
+ * Manual "Retry processing" path: bypasses the auto-retry attempt cap and
+ * backoff window for one immediate attempt. Same authorization and the same
+ * no-op-if-already-ready behavior as ensureIngested() — this is just a way
+ * to say "try again now" once the professor has fixed whatever caused a
+ * failure (installed ffmpeg, freed disk, re-uploaded, etc.) without waiting
+ * out the backoff window or restarting the server.
+ */
+export async function retryIngest(submissionId: number): Promise<void> {
+  await requireCapability("course.edit", await submissionResource(submissionId));
+  return ensureIngested(submissionId, { force: true });
 }
 
 // ── Playlist ──────────────────────────────────────────────────────────────────

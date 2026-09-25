@@ -3,6 +3,8 @@ import { db } from "@/db";
 import { submissions } from "@/db/schema";
 import { ensureIngested } from "@/actions/review";
 import { apiRequireCapability } from "@/lib/auth/api";
+import { assignmentResource, submissionResource } from "@/lib/auth/resource-lookup";
+import type { Resource } from "@/lib/auth/roles";
 
 /**
  * Warm derivatives ahead of a review session.
@@ -11,32 +13,52 @@ import { apiRequireCapability } from "@/lib/auth/api";
  * open then pays for an ffmpeg transcode. Running this over an assignment
  * beforehand means the crit never waits.
  *
- * POST /api/review/ingest            → every submission
- * POST /api/review/ingest {assignmentId} → one assignment
+ * POST /api/review/ingest {assignmentId}   → every submission in that assignment
+ * POST /api/review/ingest {submissionId}   → one submission
+ *
+ * One of assignmentId/submissionId is required — it's also what the
+ * capability check runs against, so a bare "everything, no course in
+ * particular" call (which used to bypass course membership entirely) is no
+ * longer accepted. The result set is always scoped to whichever resource
+ * passed that check, studentId (if present) only narrows it further, so a
+ * caller can never see fileNames from a submission it wasn't authorized for.
  */
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 3600;
 
 export async function POST(request: Request) {
-  const auth = await apiRequireCapability("course.edit");
-  if (!auth.user) return auth.response;
-
-  let body: { assignmentId?: number; studentId?: number } = {};
+  let body: { assignmentId?: number; studentId?: number; submissionId?: number };
   try {
     body = await request.json();
   } catch {
-    // No body means "everything".
+    return Response.json({ error: "assignmentId or submissionId is required" }, { status: 400 });
   }
 
+  let resource: Resource;
+  if (body.submissionId) {
+    resource = await submissionResource(Number(body.submissionId));
+  } else if (body.assignmentId) {
+    resource = await assignmentResource(Number(body.assignmentId));
+  } else {
+    return Response.json({ error: "assignmentId or submissionId is required" }, { status: 400 });
+  }
+
+  const auth = await apiRequireCapability("course.edit", resource, request);
+  if (!auth.user) return auth.response;
+
   const filters = [];
-  if (body.assignmentId) filters.push(eq(submissions.assignmentId, body.assignmentId));
-  if (body.studentId) filters.push(eq(submissions.studentId, body.studentId));
+  if (body.submissionId) {
+    filters.push(eq(submissions.id, Number(body.submissionId)));
+  } else if (body.assignmentId) {
+    filters.push(eq(submissions.assignmentId, Number(body.assignmentId)));
+  }
+  if (body.studentId) filters.push(eq(submissions.studentId, Number(body.studentId)));
 
   const rows = await db
     .select({ id: submissions.id, fileName: submissions.fileName })
     .from(submissions)
-    .where(filters.length ? and(...filters) : undefined);
+    .where(and(...filters));
 
   const results: { id: number; file: string; ok: boolean; error?: string }[] = [];
 

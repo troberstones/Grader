@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference -- scripts/build-test.sh compiles this file standalone (not via tsconfig's `include`), so the ambient "mp4box" module declaration must be pulled in this way or the build fails with TS7016.
 /// <reference path="./mp4box.d.ts" />
 import { chooseCacheSize, type Budget } from "../core/budget";
 import type { ReviewItem } from "../core/types";
@@ -61,6 +62,13 @@ export class DecodedVideoSource implements FrameSource {
   } | null = null;
   private sharp: { frame: number; bitmap: ImageBitmap } | null = null;
   private sharpJob: { frame: number; promise: Promise<TexSource | null> } | null = null;
+  /**
+   * Cancels the in-flight fetch (and, transitively, demux/decode) when a
+   * student is skipped before their video finishes downloading. Without it a
+   * skipped clip kept pulling its whole proxy file over the wire and burning
+   * CPU on mp4box/VideoDecoder for a viewer nobody is looking at anymore.
+   */
+  private abortController: AbortController | null = null;
 
   private ledger: MemoryLedger;
 
@@ -106,8 +114,9 @@ export class DecodedVideoSource implements FrameSource {
   ready(): Promise<void> {
     if (!this.startPromise) {
       this.startPromise = this.run().catch((e) => {
-        this.error = e instanceof Error ? e.message : String(e);
         this.decoding = false;
+        if (this.disposed) return; // dispose() aborted this on purpose
+        this.error = e instanceof Error ? e.message : String(e);
         this.emit();
         throw e;
       });
@@ -123,13 +132,17 @@ export class DecodedVideoSource implements FrameSource {
     this.decoding = true;
     this.emit();
 
+    this.abortController = new AbortController();
+    const { signal } = this.abortController;
+
     const [mp4box, buffer] = await Promise.all([
       import("mp4box"),
-      fetch(this.item.url).then((r) => {
+      fetch(this.item.url, { signal }).then((r) => {
         if (!r.ok) throw new Error(`${r.status} fetching video`);
         return r.arrayBuffer();
       }),
     ]);
+    if (this.disposed) return;
 
     const file = mp4box.createFile();
     const info = await new Promise<import("mp4box").MP4Info>((resolve, reject) => {
@@ -140,6 +153,10 @@ export class DecodedVideoSource implements FrameSource {
       file.appendBuffer(buf);
       file.flush();
     });
+    if (this.disposed) {
+      file.stop();
+      return;
+    }
 
     const track = info.videoTracks?.[0];
     if (!track) throw new Error("no video track");
@@ -155,6 +172,10 @@ export class DecodedVideoSource implements FrameSource {
     if (description) config.description = description;
 
     const support = await VideoDecoder.isConfigSupported(config);
+    if (this.disposed) {
+      file.stop();
+      return;
+    }
     if (!support.supported) throw new Error(`codec not supported: ${track.codec}`);
 
     // Collect samples first: mp4box hands them over synchronously and the
@@ -183,8 +204,9 @@ export class DecodedVideoSource implements FrameSource {
         this.decodedCount = Math.max(this.decodedCount, index);
       },
       error: (e) => {
-        this.error = e.message;
         this.decoding = false;
+        if (this.disposed) return;
+        this.error = e.message;
         this.emit();
       },
     });
@@ -488,6 +510,13 @@ export class DecodedVideoSource implements FrameSource {
 
   dispose(): void {
     this.disposed = true;
+    // Stops the fetch dead (and, since run() awaits it as part of the same
+    // Promise.all, everything downstream of it — demux and decode never
+    // start for a clip that was never shown). A skipped video used to keep
+    // pulling its whole proxy file over the wire with nothing left to render
+    // into.
+    this.abortController?.abort();
+    this.abortController = null;
     this.offLedger?.();
     this.offLedger = null;
     this.releaseAll();

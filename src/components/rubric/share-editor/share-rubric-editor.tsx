@@ -22,6 +22,7 @@ interface Props {
 
 function toDraftCriteria(criteria: NormalRubric["criteria"]): DraftCriterion[] {
   return criteria.map((c) => ({
+    id: c.id,
     name: c.name,
     description: c.description ?? "",
     share: c.share,
@@ -77,6 +78,7 @@ export function ShareRubricEditor({ initialData, onSave, saving }: Props) {
       description: description || undefined,
       bandEdges,
       criteria: criteria.map((c) => ({
+        id: c.id,
         name: c.name,
         description: c.description || undefined,
         share: c.share,

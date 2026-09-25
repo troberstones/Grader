@@ -77,6 +77,16 @@ export interface CreateLinkResult {
 export async function createUploadLink(assignmentId: number, studentId: number | null): Promise<CreateLinkResult> {
   const { assignment, user } = await requireAssignmentEditor(assignmentId);
 
+  if (studentId != null) {
+    const [enrollment] = await db
+      .select({ id: courseEnrollments.id })
+      .from(courseEnrollments)
+      .where(and(eq(courseEnrollments.courseId, assignment.courseId), eq(courseEnrollments.studentId, studentId)));
+    if (!enrollment) {
+      return { ok: false, error: "That student is not enrolled in this course." };
+    }
+  }
+
   const { token } = await reissueLink(assignmentId, studentId, user.id);
 
   await writeAudit(user, {
@@ -113,10 +123,20 @@ export async function sendUploadLinks(
 
   if (studentIds.length === 0) return { ok: false, error: "Select at least one student.", sent: 0, skipped: [] };
 
+  // Joined against this assignment's course enrollment so a student who
+  // isn't actually in the class never surfaces here — not their name, not
+  // an emailed link. An id that doesn't match just falls through to the
+  // same "not found" skip as an id that doesn't exist at all.
   const roster = await db
     .select({ id: students.id, name: students.name, email: students.email })
     .from(students)
-    .where(or(...studentIds.map((id) => eq(students.id, id))));
+    .innerJoin(courseEnrollments, eq(courseEnrollments.studentId, students.id))
+    .where(
+      and(
+        eq(courseEnrollments.courseId, assignment.courseId),
+        or(...studentIds.map((id) => eq(students.id, id))),
+      ),
+    );
   const byId = new Map(roster.map((s) => [s.id, s]));
 
   // A shared link is one row for the whole assignment — issued once here,

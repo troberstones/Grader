@@ -31,7 +31,7 @@ import { Presence } from "./components/Presence";
 import { Timeline } from "./components/Timeline";
 import { InkRail, TransportBar, ViewBar, type ToolState } from "./components/Toolbar";
 import { readDroppedFiles } from "./dropFiles";
-import { isTypingTarget } from "./keymap";
+import { isButtonTarget, isTypingTarget } from "./keymap";
 import { C, label, noSelect, select as selectStyle, selectableText, textButton } from "./styles";
 import { useAnnotations } from "./useAnnotations";
 import { useSession } from "./useSession";
@@ -114,6 +114,10 @@ export function ArtReviewer({
   const [textPrompt, setTextPrompt] = useState<{ x: number; y: number; value: string } | null>(null);
   const [playlistBusy, setPlaylistBusy] = useState(false);
   const [stageDragOver, setStageDragOver] = useState(false);
+  // Keyed by item id (not a plain boolean) so switching away from a failed
+  // item mid-retry doesn't leave some other item's button looking disabled.
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<{ itemId: string; message: string } | null>(null);
 
   const session = useSession(channel, author);
 
@@ -154,6 +158,23 @@ export function ArtReviewer({
         window.alert(e instanceof Error ? e.message : "Remove failed.");
       } finally {
         setPlaylistBusy(false);
+      }
+    },
+    [adapter, onItemsChanged],
+  );
+
+  const handleRetryItem = useCallback(
+    async (itemId: string) => {
+      if (!adapter.retryItem) return;
+      setRetryError(null);
+      setRetryingId(itemId);
+      try {
+        await adapter.retryItem(itemId);
+        onItemsChanged?.();
+      } catch (e) {
+        setRetryError({ itemId, message: e instanceof Error ? e.message : "Retry failed." });
+      } finally {
+        setRetryingId(null);
       }
     },
     [adapter, onItemsChanged],
@@ -431,6 +452,10 @@ export function ArtReviewer({
   // in state and was never shown.
   useEffect(() => {
     viewer.invalidate();
+    // Deliberately not depending on the whole `viewer` object: it is a fresh
+    // reference every render, which would invalidate on every render instead
+    // of only when one of the values below actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewer.invalidate, annotations.strokes, annotations.liveInk, annotations.hiddenAuthors]);
 
   // Laser events from peers.
@@ -443,8 +468,10 @@ export function ArtReviewer({
       ];
       viewer.invalidate();
     });
-    // Deliberately not depending on `viewer`: it is a fresh object every render,
-    // and resubscribing that often drops messages that land in the gap.
+    // Deliberately not depending on `viewer` or `session`: both are fresh
+    // objects every render, and resubscribing that often drops messages that
+    // land in the gap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.subscribe, viewer.invalidate, author.color]);
 
   // Only one host in the room should make noise.
@@ -959,6 +986,7 @@ export function ArtReviewer({
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
+      if (e.key === " " && isButtonTarget(e.target)) return;
       if (e.code === "Space" && !e.repeat && (e.ctrlKey || e.metaKey)) return;
 
       const mod = e.metaKey || e.ctrlKey;
@@ -1077,7 +1105,11 @@ export function ArtReviewer({
 
         case "m":
           if (readOnly) return;
-          session.isMaster ? session.release() : session.claim();
+          if (session.isMaster) {
+            session.release();
+          } else {
+            session.claim();
+          }
           return;
       }
 
@@ -1088,7 +1120,7 @@ export function ArtReviewer({
 
     const up = (e: KeyboardEvent) => {
       if (e.key !== " ") return;
-      if (isTypingTarget(e.target)) return;
+      if (isTypingTarget(e.target) || isButtonTarget(e.target)) return;
       const wasPanning = panStateRef.current !== null;
       spaceRef.current = false;
       if (!wasPanning) dispatch({ a: state.playing ? "pause" : "play" });
@@ -1314,6 +1346,23 @@ export function ArtReviewer({
                   The upload itself is damaged, so there is nothing to review here.
                   Ask for a re-upload — the other files in this playlist still work.
                 </div>
+                {adapter.retryItem && (
+                  <div style={{ marginTop: 16 }}>
+                    <button
+                      type="button"
+                      disabled={retryingId === item.id}
+                      onClick={() => handleRetryItem(item.id)}
+                      style={{ ...textButton(), opacity: retryingId === item.id ? 0.6 : 1 }}
+                    >
+                      {retryingId === item.id ? "Retrying…" : "Retry processing"}
+                    </button>
+                    {retryError?.itemId === item.id && (
+                      <div role="alert" style={{ fontSize: 11, color: C.danger, marginTop: 8 }}>
+                        {retryError.message}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </Centered>
           )}
@@ -1345,7 +1394,7 @@ export function ArtReviewer({
                 const [frameIn, frameOut] = holdRange(state.frame);
                 setTextPrompt(null);
                 if (!value.trim()) return;
-                const res = await annotations.commit({
+                await annotations.commit({
                   tool: "text",
                   color: inkColor,
                   width: tools.width,
@@ -1641,6 +1690,10 @@ function Centered({ children }: { children: React.ReactNode }) {
 function Notice({ children, tone }: { children: React.ReactNode; tone: "warn" | "error" }) {
   return (
     <div
+      // Assistive tech announces an error notice as soon as it appears —
+      // these render silently over the canvas otherwise, with nothing to
+      // point a screen reader at them.
+      role={tone === "error" ? "alert" : undefined}
       style={{
         position: "absolute",
         left: 12,

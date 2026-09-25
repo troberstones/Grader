@@ -61,6 +61,15 @@ export interface ReviewDataAdapter {
   /** Removes one item from a context's playlist. Optional — omitted hosts get no remove affordance. */
   removeItem?(itemId: string): Promise<void>;
 
+  /**
+   * Re-attempts processing for one item, bypassing whatever auto-retry
+   * backoff the host applies. Optional — a host that omits it gets no "Retry
+   * processing" button on a failed-ingest placeholder (see `unavailable` on
+   * ReviewItem). The caller re-fetches via `listItems` afterward, same as
+   * `addItems`/`removeItem`.
+   */
+  retryItem?(itemId: string): Promise<void>;
+
   /** Persist per-user viewer preferences (fps, loop, flips) for a context. */
   savePrefs?(contextId: string, prefs: Record<string, unknown>): Promise<void>;
   loadPrefs?(contextId: string): Promise<Record<string, unknown> | null>;

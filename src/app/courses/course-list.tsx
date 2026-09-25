@@ -1,10 +1,13 @@
 "use client";
 
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Users, ClipboardList, Trash2 } from "lucide-react";
 import { LinkButton } from "@/components/ui/link-button";
-import { deleteCourse } from "@/actions/courses";
+import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog";
+import { deleteCourse, archiveCourse } from "@/actions/courses";
 
 interface Course {
   id: number;
@@ -26,6 +29,9 @@ export function CourseList({
   onSelect: (courseId: number) => void;
   onOpenAssignments: (courseId: number) => void;
 }) {
+  const router = useRouter();
+  const [deleteTarget, setDeleteTarget] = useState<Course | null>(null);
+
   if (courses.length === 0) {
     return (
       <div className="text-center py-12 text-muted-foreground text-sm">
@@ -73,11 +79,7 @@ export function CourseList({
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity text-destructive"
-                onClick={async () => {
-                  if (confirm("Delete this course? This cannot be undone.")) {
-                    await deleteCourse(course.id);
-                  }
-                }}
+                onClick={() => setDeleteTarget(course)}
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
@@ -85,6 +87,20 @@ export function CourseList({
           </div>
         );
       })}
+      {deleteTarget && (
+        <DeleteConfirmDialog
+          open={!!deleteTarget}
+          onOpenChange={(open) => {
+            if (!open) setDeleteTarget(null);
+          }}
+          itemName={deleteTarget.name}
+          itemKind="course"
+          onDelete={() => deleteCourse(deleteTarget.id)}
+          onArchive={() => archiveCourse(deleteTarget.id)}
+          onDeleted={() => router.refresh()}
+          onArchived={() => router.refresh()}
+        />
+      )}
     </div>
   );
 }

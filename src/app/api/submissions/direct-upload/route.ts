@@ -4,6 +4,7 @@ import fs from "fs/promises";
 import { db } from "@/db";
 import { submissions } from "@/db/schema";
 import { requireCapability } from "@/lib/auth/require";
+import { apiRequireCapability } from "@/lib/auth/api";
 import { assignmentResource } from "@/lib/auth/resource-lookup";
 import { getSubmissionDir, getMediaType, ensureDir } from "@/lib/file-storage";
 import { storeSubmissionFile } from "@/lib/submission-store";
@@ -23,11 +24,30 @@ import { ensureIngested } from "@/actions/review";
  * that config. A single EXR frame or two slides under that; any real
  * sequence (or a large video) does not. Route Handlers read the body via
  * the Fetch API's `request.formData()` directly and aren't subject to it,
- * which is also why the CORS-open /api/submissions/upload (for the LS
- * Bridge extension) already worked fine at any size — this mirrors that,
- * with the auth gate that route deliberately can't carry.
+ * which is also why /api/submissions/upload (for the LS Bridge extension)
+ * already worked fine at any size — this mirrors that, with the auth gate
+ * that route deliberately can't carry.
+ *
+ * assignmentId/studentId are form fields here (the client, src/lib/media-
+ * upload.ts, isn't part of this sweep), so the resource-specific capability
+ * check still can't run until formData() has been read. What *can* run
+ * first — a coarse "is this even a signed-in instructor/assistant" gate,
+ * the Content-Length precheck, and the cross-origin check baked into
+ * apiRequireCapability — all happen before that parse.
  */
 export async function POST(request: NextRequest) {
+  const coarseAuth = await apiRequireCapability("course.edit", undefined, request);
+  if (!coarseAuth.user) return coarseAuth.response;
+
+  // Sanity ceiling on the whole multipart body before parsing it — a
+  // sequence upload carries many frames, each already capped at
+  // MAX_FILE_SIZE below, so this only rejects a body too large to be any
+  // legitimate request.
+  const contentLength = Number(request.headers.get("content-length") ?? "0");
+  if (contentLength > MAX_FILE_SIZE * 200) {
+    return NextResponse.json({ error: "Upload too large." }, { status: 413 });
+  }
+
   try {
     const formData = await request.formData();
     const assignmentId = Number(formData.get("assignmentId"));
@@ -99,30 +119,46 @@ async function uploadSequence(assignmentId: number, studentId: number, files: Fi
   const dir = path.join(getSubmissionDir(assignmentId, studentId), name);
   await ensureDir(dir);
 
-  let bytes = 0;
-  for (const file of files) {
-    const safeName = path.basename(file.name).replace(/[^a-zA-Z0-9_.-]/g, "_");
-    await fs.writeFile(path.join(dir, safeName), Buffer.from(await file.arrayBuffer()));
-    bytes += file.size;
+  // `name` is time-stamped per request, so this directory is always new —
+  // if anything below fails, only the exact frame paths this request wrote
+  // need cleaning up, and the directory is then safely empty to remove.
+  const written: string[] = [];
+  try {
+    let bytes = 0;
+    for (const file of files) {
+      const safeName = path.basename(file.name).replace(/[^a-zA-Z0-9_.-]/g, "_");
+      const dest = path.join(dir, safeName);
+      await fs.writeFile(dest, Buffer.from(await file.arrayBuffer()));
+      written.push(dest);
+      bytes += file.size;
+    }
+
+    const relDir = path.join("storage", "submissions", String(assignmentId), String(studentId), name);
+    const [inserted] = await db
+      .insert(submissions)
+      .values({
+        assignmentId,
+        studentId,
+        filePath: relDir,
+        fileName: name,
+        fileType: "image/x-sequence",
+        fileSize: bytes,
+        mediaType: "image",
+        frameCount: files.length,
+      })
+      .returning({ id: submissions.id });
+
+    // Ingest now, in the background, so review never pays for it later —
+    // ensureIngested() is a no-op if a review page already triggered it.
+    after(() => ensureIngested(inserted.id).catch(() => {}));
+    return inserted.id;
+  } catch (err) {
+    // A write or the DB insert failed after some frames already landed on
+    // disk, with no submission row to ever point a later cleanup at them —
+    // remove exactly what this request wrote rather than leaving an orphan
+    // sequence directory behind.
+    await Promise.all(written.map((p) => fs.unlink(p).catch(() => {})));
+    await fs.rmdir(dir).catch(() => {});
+    throw err;
   }
-
-  const relDir = path.join("storage", "submissions", String(assignmentId), String(studentId), name);
-  const [inserted] = await db
-    .insert(submissions)
-    .values({
-      assignmentId,
-      studentId,
-      filePath: relDir,
-      fileName: name,
-      fileType: "image/x-sequence",
-      fileSize: bytes,
-      mediaType: "image",
-      frameCount: files.length,
-    })
-    .returning({ id: submissions.id });
-
-  // Ingest now, in the background, so review never pays for it later —
-  // ensureIngested() is a no-op if a review page already triggered it.
-  after(() => ensureIngested(inserted.id).catch(() => {}));
-  return inserted.id;
 }

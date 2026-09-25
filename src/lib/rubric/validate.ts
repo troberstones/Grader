@@ -36,7 +36,7 @@ const MIN_CRITERIA = 2;
 const THIN_DESCRIPTION = 40;
 
 const TOP_LEVEL_KEYS = new Set(["version", "name", "description", "bandEdges", "criteria", "$schema"]);
-const CRITERION_KEYS = new Set(["name", "description", "share", "levels"]);
+const CRITERION_KEYS = new Set(["id", "name", "description", "share", "levels"]);
 const LEVEL_KEYS = new Set(["label", "description"]);
 
 export function validateRubric(input: unknown): ValidationResult {
@@ -108,6 +108,19 @@ export function validateRubric(input: unknown): ValidationResult {
     const cname = trimmed(raw.name);
     reportUnknown(raw, CRITERION_KEYS, label(cname), warn);
 
+    // `id` identifies an existing database row (see AuthoredCriterion's doc
+    // comment) — this only checks its shape. Whether it actually belongs to
+    // the rubric being saved needs the database, so that check happens in
+    // updateShareRubric(), not here.
+    let id: number | undefined;
+    if (raw.id !== undefined) {
+      if (typeof raw.id !== "number" || !Number.isInteger(raw.id) || raw.id <= 0) {
+        err(label(cname), `has an "id" that is not a positive whole number.`);
+      } else {
+        id = raw.id;
+      }
+    }
+
     if (!cname) err(label(), `has no "name".`);
     else if (cname.length < 2) err(label(cname), "has a name shorter than 2 characters.");
     else if (cname.length > 80) err(label(cname), `has an ${cname.length}-character name; the limit is 80.`);
@@ -140,7 +153,7 @@ export function validateRubric(input: unknown): ValidationResult {
 
     const levels = validateLevels(raw.levels, label(cname), err, warn);
     if (levels && cname) {
-      criteria.push({ name: cname, description: cdesc, share, levels });
+      criteria.push({ id, name: cname, description: cdesc, share, levels });
     }
   });
 

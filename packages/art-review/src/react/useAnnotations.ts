@@ -74,6 +74,14 @@ export function useAnnotations(
   const headSeq = useRef(0);
   const undoStack = useRef<Stroke[]>([]);
   const redoStack = useRef<Stroke[]>([]);
+  /**
+   * localIds removed (by undo, erase, or clear) before their `commit()` had a
+   * server id to delete. `removeStrokes` can only tell the server about ids it
+   * already knows, so a stroke undone in that window used to survive on the
+   * server and everyone else's screen forever, and would come back on reload.
+   * `commit()` checks this once its save resolves and deletes the row then.
+   */
+  const pendingDeletes = useRef<Set<string>>(new Set());
   const [undoDepth, setUndoDepth] = useState(0);
   const [redoDepth, setRedoDepth] = useState(0);
   const lastInkSent = useRef(0);
@@ -242,6 +250,22 @@ export function useAnnotations(
             points: stroke.points.length / 2,
             frame: stroke.frameIn,
           };
+          headSeq.current = Math.max(headSeq.current, saved.seq);
+
+          if (pendingDeletes.current.has(localId)) {
+            // Undone (or erased) while the save was in flight: there was
+            // nothing to delete server-side yet, so removeStrokes couldn't.
+            // The row exists now — finish the job — and never resurrect it
+            // locally, since the user already watched it disappear.
+            pendingDeletes.current.delete(localId);
+            try {
+              await adapter.deleteStrokes(itemId, [saved.id]);
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "failed to erase");
+            }
+            return out;
+          }
+
           setStrokes((prev) =>
             prev.map((s) => (s.localId === localId ? { ...s, id: saved.id, seq: saved.seq } : s)),
           );
@@ -253,12 +277,12 @@ export function useAnnotations(
             pending.id = saved.id;
             pending.seq = saved.seq;
           }
-          headSeq.current = Math.max(headSeq.current, saved.seq);
         }
         return out;
       } catch (e) {
         const why = e instanceof Error ? e.message : "failed to save stroke";
         setError(why);
+        pendingDeletes.current.delete(localId); // no server row exists to finish deleting
         return { ok: false, why };
       } finally {
         setSaving(false);
@@ -275,6 +299,12 @@ export function useAnnotations(
       const gone = new Set(localIds);
       setStrokes((prev) => prev.filter((s) => !gone.has(s.localId)));
       send({ a: "erase", ids, localIds, itemId });
+      // A target with no numeric id yet is still mid-save (undo right after
+      // drawing, or a fast erase/clear). There's no id to delete here — mark
+      // it so the in-flight commit deletes the row itself once it lands.
+      for (const s of targets) {
+        if (typeof s.id !== "number") pendingDeletes.current.add(s.localId);
+      }
       if (ids.length) {
         try {
           await adapter.deleteStrokes(itemId, ids);

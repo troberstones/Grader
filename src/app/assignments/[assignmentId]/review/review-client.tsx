@@ -11,7 +11,7 @@ import { useGrading } from "@/components/shared/grading-context";
 import { StudentNavBar } from "@/components/shared/student-nav-bar";
 import { useViewLayout } from "@/components/shared/view-layout";
 import { RubricDock } from "@/components/rubric/rubric-dock";
-import { MediaDropZone } from "@/components/review/media-drop-zone";
+import { MediaDropZone } from "@/components/shared/media-drop-zone";
 import { useReviewChannel } from "@/lib/review-channel";
 import { uploadFiles } from "@/lib/media-upload";
 import { useIngestProgress } from "@/lib/use-ingest-progress";
@@ -24,6 +24,7 @@ import {
   getStrokes,
   listReviewItems,
   loadPrefs,
+  retryIngest,
   savePrefs,
 } from "@/actions/review";
 
@@ -131,13 +132,29 @@ export function ReviewClient({ assignment, author }: Props) {
     [refresh],
   );
 
+  // Ingest progress is scoped to whichever upload triggered it. Left alone,
+  // switching students kept showing the previous student's "Preparing
+  // media…" log — or worse, applied it to the next student's genuinely empty
+  // playlist — because ingestingIds only ever grew, on upload, and nothing
+  // ever cleared it.
+  //
+  // Adjusted during render rather than in an effect — an extra render before
+  // paint is cheaper than the effect flash, and it means a Retry or
+  // invalidate() within the same student's session (which only changes
+  // refreshKey, not contextId) can't stomp on the ingest ids upload just set.
+  // See https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes.
+  const [ingestingIdsFor, setIngestingIdsFor] = useState(contextId);
+  if (ingestingIdsFor !== contextId) {
+    setIngestingIdsFor(contextId);
+    setIngestingIds([]);
+    if (!contextId) setItems([]);
+  }
+
   useEffect(() => {
-    if (!contextId) {
-      setItems([]);
-      return;
-    }
+    if (!contextId) return;
     let cancelled = false;
     const cached = playlists.current.get(contextId);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- seeding from cache then fetching fresh data keyed by contextId is the standard data-fetching effect; there's no external system to defer this to.
     setItems(cached ?? []);
     setLoading(!cached);
     setError(null);
@@ -180,6 +197,9 @@ export function ReviewClient({ assignment, author }: Props) {
       },
       removeItem: async (itemId) => {
         await deleteSubmission(Number(itemId.replace("sub:", "")));
+      },
+      retryItem: async (itemId: string) => {
+        await retryIngest(Number(itemId.replace("sub:", "")));
       },
       savePrefs,
       loadPrefs,
@@ -244,7 +264,27 @@ export function ReviewClient({ assignment, author }: Props) {
   ) : loading ? (
     <Centered>{ingestProgress ?? `Preparing media for ${student?.name ?? "student"}…`}</Centered>
   ) : error ? (
-    <Centered tone="error">{error}</Centered>
+    <Centered tone="error">
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+        <span role="alert">{error}</span>
+        <button
+          type="button"
+          onClick={refresh}
+          style={{
+            font: "inherit",
+            fontSize: 12,
+            color: "#0e0e0e",
+            background: "#fca5a5",
+            border: "none",
+            borderRadius: 6,
+            padding: "6px 14px",
+            cursor: "pointer",
+          }}
+        >
+          Retry
+        </button>
+      </div>
+    </Centered>
   ) : items.length === 0 && selectedStudentId ? (
     <MediaDropZone
       assignmentId={assignmentId}

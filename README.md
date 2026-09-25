@@ -60,9 +60,10 @@ cross-origin requests — see `allowedDevOrigins` in `next.config.ts`.
 ## Tests
 
 ```bash
-npm test          # everything: rubric engine, art-review, auth/session/audit-log
-npm run test:rubric  # pure rubric-scoring logic only (node --test)
-npm run test:auth    # auth/session/lockout/audit-log (vitest, needs no setup — builds its own scratch DB)
+npm test          # everything: rubric engine, migrations, art-review, auth/session/audit-log
+npm run test:rubric      # pure rubric-scoring logic only (node --test)
+npm run test:migrations  # migration runner: fresh vs. baselined-legacy schemas match (node --test)
+npm run test:auth        # auth/session/lockout/audit-log (vitest, needs no setup — builds its own scratch DB)
 ```
 
 `test:auth` builds an isolated scratch SQLite DB under `test/.db/` the same
@@ -80,6 +81,9 @@ way `db:init` builds the real one — it doesn't touch `storage/grader.db`.
 - [`docs/open-threads.md`](docs/open-threads.md) — what has shipped but is not
   yet trusted, and the traps that have already caught someone. Read it before
   starting; prune it as things get closed.
+- [`docs/operations.md`](docs/operations.md) — migrations: how the one
+  runner (`scripts/migrate.mjs`) decides what to apply, how to add a new
+  migration, and why not to reach for `drizzle-kit generate`/`migrate` here.
 
 ## Deploying
 
@@ -90,7 +94,8 @@ restarts it as a `systemd --user` service (also installing/enabling the
 It's written for one specific host — read it before pointing it at another.
 
 Migrations run between `npm install` and the build, so the new code never
-serves a request against the old schema. Every `scripts/apply-*.mjs` is
-idempotent and the whole set runs on each deploy, so there is no separate
-migration step to remember — and no way to half-deploy a schema change by
-forgetting one.
+serves a request against the old schema. `scripts/migrate.mjs` — the single
+migration runner, see `docs/operations.md` — applies whatever's pending and
+records it, so re-running it on every deploy is a fast no-op once the
+database is caught up, and there's no separate migration step to remember or
+half-deploy by forgetting.

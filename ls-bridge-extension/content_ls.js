@@ -46,7 +46,7 @@ async function fetchGradebookId(subsessionID) {
     );
     const id = extractGradebookIdFromObject(data);
     if (id) return id;
-  } catch (e) { /* try next */ }
+  } catch { /* try next */ }
 
   // ── Strategy 2: assignment list (each assignment carries its gradebookID) ─
   for (const funcParams of [
@@ -66,7 +66,7 @@ async function fetchGradebookId(subsessionID) {
         const id = item.gradebookID ?? item.lmsGradebookId ?? item.gbId;
         if (id != null) return String(id);
       }
-    } catch (e) { /* try next */ }
+    } catch { /* try next */ }
   }
 
   // ── Strategy 3: gradebook listing endpoints ────────────────────────────────
@@ -83,7 +83,7 @@ async function fetchGradebookId(subsessionID) {
         const id = item.gradebookID ?? item.id ?? item.gbId;
         if (id != null) return String(id);
       }
-    } catch (e) { /* try next */ }
+    } catch { /* try next */ }
   }
 
   return null;
@@ -112,7 +112,7 @@ function extractGradebookIdFromObject(data) {
     const json = JSON.stringify(data);
     const m = json.match(/"(?:gradebookID|gradebook_id|gbId|gb_id)"\s*:\s*"?([A-Za-z0-9_-]{4,40})"?/);
     if (m) return m[1];
-  } catch (e) { /* ignore */ }
+  } catch { /* ignore */ }
 
   return null;
 }
@@ -266,8 +266,18 @@ async function getSubmissionsForAssignment(subsessionID, lmsDiscussionUrl) {
 }
 
 /**
- * Fetch a submission file from LS (same-origin, so session cookies work)
- * and POST it directly to the grader's upload endpoint.
+ * Ask background.js to fetch a submission file from LS and relay it to the
+ * grader app.
+ *
+ * This used to fetch the file here and POST it straight to
+ * `${graderOrigin}/api/submissions/upload` from this content script — but
+ * that's a cross-origin request from learningsuite.byu.edu to the grader
+ * origin, which can't carry the grader's session cookie (blocked by CORS,
+ * and moot anyway once that route required one). The download and the
+ * upload both happen in the service worker instead, which has
+ * host_permissions for both origins and can attach credentials — see
+ * relaySubmissionUpload() in background.js. This script only resolves the
+ * LS download URL to an absolute one and hands it off.
  */
 async function fetchAndRelaySubmission(
   downloadUrl,
@@ -279,28 +289,27 @@ async function fetchAndRelaySubmission(
   // downloadUrl may be relative or absolute
   const fetchUrl = downloadUrl.startsWith('http') ? downloadUrl : `https://learningsuite.byu.edu${downloadUrl}`;
 
-  const fileResp = await fetch(fetchUrl, { credentials: 'same-origin' });
-  if (!fileResp.ok) throw new Error(`Failed to download submission: ${fileResp.status}`);
-
-  const blob = await fileResp.blob();
-  const file = new File([blob], fileName || 'submission', { type: blob.type });
-
-  const form = new FormData();
-  form.append('file', file);
-  form.append('assignmentId', String(graderAssignmentId));
-  form.append('studentId', String(graderStudentId));
-
-  const uploadResp = await fetch(`${graderOrigin}/api/submissions/upload`, {
-    method: 'POST',
-    body: form,
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      {
+        action: 'RELAY_SUBMISSION_UPLOAD',
+        fetchUrl,
+        fileName,
+        graderOrigin,
+        graderAssignmentId,
+        graderStudentId,
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else if (response?.error) {
+          reject(new Error(response.error));
+        } else {
+          resolve(response);
+        }
+      }
+    );
   });
-
-  if (!uploadResp.ok) {
-    const text = await uploadResp.text();
-    throw new Error(`Grader upload failed: ${uploadResp.status} ${text}`);
-  }
-
-  return await uploadResp.json();
 }
 
 async function pushGrade(subsessionID, gradebookID, lmsStudentId, lmsAssignmentId, score, note) {
@@ -373,21 +382,18 @@ async function handleRequest(msg) {
       for (const sub of lsSubmissions) {
         // 1. Match by lmsStudentId (LS user ID, if stored)
         // 2. Match by exact sortName
-        // 3. Match by last name only — LS uses different names in roster vs discussion
-        //    (e.g. "Song, Hanna" in gradebook vs "Song, Dain" in discussions)
-        let mapping = studentMap.find((s) =>
+        //
+        // A last-name-only fallback used to sit here for when LS shows a
+        // different name in the discussion than in the gradebook (e.g.
+        // "Song, Hanna" vs "Song, Dain"). It's gone: with two same-surname
+        // students in a course, "Smith, Bob"'s submission would silently land
+        // on "Smith, Alice" instead of being reported unmatched. An unmatched
+        // submission is now always surfaced in `errors` below rather than
+        // risking a wrong match.
+        const mapping = studentMap.find((s) =>
           (s.lmsStudentId && s.lmsStudentId === sub.lmsStudentId) ||
           (s.sortName && s.sortName === sub.sortName)
         );
-
-        if (!mapping && sub.sortName) {
-          const lsLastName = sub.sortName.split(',')[0].trim().toLowerCase();
-          const candidates = studentMap.filter((s) => {
-            const last = (s.sortName ?? s.name ?? '').split(',')[0].trim().toLowerCase();
-            return last === lsLastName;
-          });
-          if (candidates.length === 1) mapping = candidates[0];
-        }
 
         if (!mapping) {
           errors.push({ lmsStudentId: sub.lmsStudentId, sortName: sub.sortName, error: 'No matching student in grader' });

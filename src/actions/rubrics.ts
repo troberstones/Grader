@@ -1,13 +1,47 @@
 "use server";
 
 import { db } from "@/db";
-import { rubrics, rubricCriteria, rubricLevels, gradeEntries } from "@/db/schema";
+import { rubrics, rubricCriteria, rubricLevels, gradeEntries, assignments } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import type { RubricJSON, RubricCriterion, RubricSettings } from "@/types/rubric";
+import type { RubricJSON, RubricSettings } from "@/types/rubric";
 import { requireCapability } from "@/lib/auth/require";
+import type { SessionUser } from "@/lib/auth/session";
 import { validateRubric, isShareModel, type AuthoredRubric } from "@/lib/rubric";
 import { writeAudit } from "@/lib/audit";
+import { rescoreAssignmentGrades, type RescoreOutcome } from "@/lib/grading/rescore";
+
+// ─── Authorization ──────────────────────────────────────────────────────────
+
+/**
+ * Rubrics are a global library (see roles.ts: `course.edit` on the global
+ * resource is granted to any instructor/assistant), which is right for a
+ * rubric nobody has attached to anything yet — but wrong the moment it's in
+ * use, since editing it then changes grading for a course the caller may
+ * have no part in. Without a schema change (no `course_id` on `rubrics`),
+ * "in use" is derived from `assignments.rubric_id`: if any assignment uses
+ * this rubric, the caller needs `course.edit` on every one of those
+ * assignments' courses, not just the global capability. An unused rubric
+ * keeps the old, library-wide behavior. Admins bypass this the same way they
+ * bypass every other capability check, via can() in roles.ts.
+ */
+async function requireRubricEditAccess(rubricId: number): Promise<SessionUser> {
+  const usingAssignments = await db
+    .select({ courseId: assignments.courseId })
+    .from(assignments)
+    .where(eq(assignments.rubricId, rubricId));
+
+  if (usingAssignments.length === 0) {
+    return requireCapability("course.edit");
+  }
+
+  const courseIds = [...new Set(usingAssignments.map((a) => a.courseId))];
+  let actor: SessionUser | null = null;
+  for (const courseId of courseIds) {
+    actor = await requireCapability("course.edit", { kind: "course", courseId });
+  }
+  return actor as SessionUser;
+}
 
 export async function getRubrics() {
   await requireCapability("course.view");
@@ -128,29 +162,79 @@ export async function createShareRubric(data: AuthoredRubric): Promise<{ id: num
  * Updates a share-model rubric without the legacy `updateRubric`'s
  * delete-and-reinsert (which throws an FK error the moment a rubric has any
  * grade_entries against it — see docs/rubric-authoring.md). Criteria are
- * reconciled by NAME, not array position: matching by position would
- * silently reassign a row's identity the moment two criteria are reordered,
- * which would make a student's existing grade for "Lighting" read back as
- * belonging to whatever criterion now occupies that row. A criterion whose
- * name disappears is archived (not deleted) if it has grade history, so
- * those grades stay FK-valid and readable; otherwise it's removed outright.
+ * reconciled primarily by ID: the editor (src/components/rubric/share-editor/)
+ * carries each existing criterion's database id along untouched, so a rename
+ * or reorder still points at the same row and its grade_entries keep
+ * counting. A criterion with no id — new from the grid's "Add Criterion", a
+ * template, a paste-import, or an AI-generated rubric, none of which can know
+ * a database id — falls back to matching an existing, still-unmatched
+ * criterion by NAME, exactly as this function used to do for everything.
+ * That fallback is what a plain rename used to be indistinguishable from a
+ * remove-and-add-under-a-new-name; now the editor's own submissions never
+ * need it; only older/foreign clients (JSON pasted from an export, or hand-
+ * built payloads) still take that path, and reordering under it stays
+ * handled exactly right, same as before.
  *
- * Known, accepted limitation: a plain rename is indistinguishable from
- * remove-and-add-under-a-new-name, since AuthoredCriterion carries no id
- * (correctly — it also has to accept fresh AI-pasted JSON, which never
- * will). Worst case: an unnecessary archive of a criterion that still reads
- * fine under its old name in grade history. Reorder — the common, dangerous
- * case — is handled exactly right by this.
+ * An id that doesn't belong to this rubric — stale, or lifted from a paste of
+ * a *different* rubric's export — is rejected outright before any row is
+ * touched; a caller must never be able to reach across rubrics by number. A
+ * criterion whose row goes unmatched (name and id both fail to find it) is
+ * archived (not deleted) if it has grade history, so those grades stay
+ * FK-valid and readable; otherwise it's removed outright.
+ *
+ * Also rescores every existing grade on every assignment currently using
+ * this rubric, in the SAME transaction as the edit (owner's decision): a
+ * changed weight/share, band edges, level wording, or criteria set must land
+ * or roll back together with the grades it affects, so the sidebar, CSV and
+ * LS push can never disagree with the live grading panel. Adding a criterion
+ * after students are fully graded flips them back to "in_progress" (the new
+ * criterion has no entry yet) — the returned counts let the caller surface
+ * that to the instructor.
  */
-export async function updateShareRubric(id: number, data: AuthoredRubric): Promise<void> {
-  await requireCapability("course.edit");
+export async function updateShareRubric(id: number, data: AuthoredRubric): Promise<RescoreOutcome> {
+  await requireRubricEditAccess(id);
   const result = validateRubric(data);
   if (!result.ok || !result.rubric) {
     throw new Error(result.errors.map((e) => `${e.where}: ${e.message}`).join("; "));
   }
   const normal = result.rubric;
 
-  db.transaction((tx) => {
+  const outcome = db.transaction((tx) => {
+    const existing = tx
+      .select()
+      .from(rubricCriteria)
+      .where(and(eq(rubricCriteria.rubricId, id), eq(rubricCriteria.archived, 0)))
+      .all();
+    const existingById = new Map(existing.map((c) => [c.id, c]));
+    const existingByName = new Map(existing.map((c) => [c.name.toLowerCase(), c]));
+
+    // Reject a foreign/stale id before writing anything — an id only ever
+    // identifies a row on *this* rubric. (The transaction would roll back
+    // any partial writes anyway on a throw, but checking first means we
+    // never attempt them.)
+    const seenIds = new Set<number>();
+    for (const criterion of normal.criteria) {
+      if (criterion.id === undefined) continue;
+      if (!existingById.has(criterion.id)) {
+        throw new Error(
+          `criterion "${criterion.name}" has an id (${criterion.id}) that does not belong to this rubric.`,
+        );
+      }
+      if (seenIds.has(criterion.id)) {
+        throw new Error(`criterion "${criterion.name}" repeats an id (${criterion.id}) already used in this rubric.`);
+      }
+      seenIds.add(criterion.id);
+    }
+
+    // Pre-claim every id match so the name fallback below only ever lands on
+    // a row nothing else in this payload has already claimed — otherwise a
+    // criterion renamed *away* from "Balance" earlier in the array could
+    // still let some other, unrelated new criterion also named "Balance"
+    // steal its row by that stale name.
+    const matchedIds = new Set<number>(
+      normal.criteria.filter((c) => c.id !== undefined).map((c) => c.id as number),
+    );
+
     tx.update(rubrics)
       .set({
         name: normal.name,
@@ -161,18 +245,19 @@ export async function updateShareRubric(id: number, data: AuthoredRubric): Promi
       .where(eq(rubrics.id, id))
       .run();
 
-    const existing = tx
-      .select()
-      .from(rubricCriteria)
-      .where(and(eq(rubricCriteria.rubricId, id), eq(rubricCriteria.archived, 0)))
-      .all();
-    const existingByName = new Map(existing.map((c) => [c.name.toLowerCase(), c]));
-    const matchedIds = new Set<number>();
-
     normal.criteria.forEach((criterion, i) => {
-      const match = existingByName.get(criterion.name.toLowerCase());
+      let match: (typeof existing)[number] | undefined;
+      if (criterion.id !== undefined) {
+        match = existingById.get(criterion.id);
+      } else {
+        const candidate = existingByName.get(criterion.name.toLowerCase());
+        if (candidate && !matchedIds.has(candidate.id)) {
+          match = candidate;
+          matchedIds.add(candidate.id);
+        }
+      }
+
       if (match) {
-        matchedIds.add(match.id);
         tx.update(rubricCriteria)
           .set({ name: criterion.name, description: criterion.description, weight: criterion.share, sortOrder: i })
           .where(eq(rubricCriteria.id, match.id))
@@ -205,23 +290,76 @@ export async function updateShareRubric(id: number, data: AuthoredRubric): Promi
         tx.delete(rubricCriteria).where(eq(rubricCriteria.id, criterion.id)).run();
       }
     }
+
+    const affectedAssignmentIds = tx
+      .select({ id: assignments.id })
+      .from(assignments)
+      .where(eq(assignments.rubricId, id))
+      .all()
+      .map((a) => a.id);
+
+    return rescoreAssignmentGrades(tx, affectedAssignmentIds);
   });
 
   revalidatePath("/rubrics");
   revalidatePath(`/rubrics/${id}`);
+  if (outcome.rescored > 0) {
+    // Every assignment using this rubric may now show different totals/status.
+    const affected = await db.select({ id: assignments.id }).from(assignments).where(eq(assignments.rubricId, id));
+    for (const a of affected) revalidatePath(`/assignments/${a.id}`);
+  }
+  return outcome;
 }
 
-export async function deleteRubric(id: number) {
-  const actor = await requireCapability("course.edit");
+export type DeleteRubricOutcome = { ok: true } | { ok: false; reason: "in_use" | "not_found" | "referenced"; message: string };
+
+/**
+ * Deletes a rubric, refusing when any assignment still uses it (owner's
+ * decision: rubrics in use can't be deleted, only unassigned first). Unlike
+ * the old delete-criteria-then-criteria-then-rubric sequence, this is a
+ * single statement inside a transaction: rubric_criteria.rubric_id and
+ * rubric_levels.criteria_id both cascade (see drizzle/0000_loud_hitman.sql),
+ * so deleting the rubrics row is enough — there's no partial-delete state to
+ * leave behind if it fails partway.
+ *
+ * `grade_entries.criteria_id` does NOT cascade, so a criterion that still has
+ * grade history from a *previous* rubric assignment (the assignment was
+ * later repointed to a different rubric) would make the cascade fail at the
+ * DB level even though no assignment currently references this rubric. That
+ * edge case isn't covered by the owner's "in use" wording, so it's handled
+ * conservatively here: caught and reported as a refusal rather than an
+ * unhandled throw.
+ */
+export async function deleteRubric(id: number): Promise<DeleteRubricOutcome> {
+  const actor = await requireRubricEditAccess(id);
   const [rubric] = await db.select({ name: rubrics.name }).from(rubrics).where(eq(rubrics.id, id));
-  const criteria = await db.select().from(rubricCriteria).where(eq(rubricCriteria.rubricId, id));
-  for (const c of criteria) {
-    await db.delete(rubricLevels).where(eq(rubricLevels.criteriaId, c.id));
+  if (!rubric) return { ok: false, reason: "not_found", message: "Rubric not found." };
+
+  const usingAssignments = await db.select({ name: assignments.name }).from(assignments).where(eq(assignments.rubricId, id));
+  if (usingAssignments.length > 0) {
+    const names = usingAssignments.map((a) => a.name).join(", ");
+    return {
+      ok: false,
+      reason: "in_use",
+      message: `This rubric is used by ${usingAssignments.length} assignment${usingAssignments.length === 1 ? "" : "s"} (${names}) — rubrics in use can't be deleted.`,
+    };
   }
-  await db.delete(rubricCriteria).where(eq(rubricCriteria.rubricId, id));
-  await db.delete(rubrics).where(eq(rubrics.id, id));
-  await writeAudit(actor, { action: "rubric.delete", targetType: "rubric", targetId: id, detail: { name: rubric?.name } });
+
+  try {
+    db.transaction((tx) => {
+      tx.delete(rubrics).where(eq(rubrics.id, id)).run();
+    });
+  } catch {
+    return {
+      ok: false,
+      reason: "referenced",
+      message: "This rubric can't be deleted because grade history still refers to it.",
+    };
+  }
+
+  await writeAudit(actor, { action: "rubric.delete", targetType: "rubric", targetId: id, detail: { name: rubric.name } });
   revalidatePath("/rubrics");
+  return { ok: true };
 }
 
 /**

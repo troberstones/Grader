@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useMemo, useState } from "react";
 import type { Action, Envelope, ReviewChannel } from "@grader/art-review";
 import { useGlobalSync, type GlobalSyncPayload } from "@/components/shared/global-sync";
 
@@ -29,7 +29,10 @@ type ReviewEnvelope = Envelope & { kind: typeof REVIEW_KIND };
 
 export function useReviewChannel(contextId: string | null): ReviewChannel | null {
   const { broadcast, subscribe } = useGlobalSync();
-  const clientId = useRef(Math.random().toString(36).slice(2, 10)).current;
+  // Must be random, not useId(): art-review keys session peers (presence,
+  // who holds master) by this id across every tab and device in the room,
+  // and useId() yields the same value in every copy of the same page.
+  const [clientId] = useState(() => Math.random().toString(36).slice(2, 10));
 
   return useMemo(() => {
     if (!contextId) return null;

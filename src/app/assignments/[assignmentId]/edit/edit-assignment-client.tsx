@@ -11,27 +11,27 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { updateAssignment } from "@/actions/assignments";
+import { updateAssignment, deleteAssignment, archiveAssignment } from "@/actions/assignments";
+import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog";
 import { toast } from "sonner";
-import type { getAssignment, getAllAssignments } from "@/actions/assignments";
-import type { getCourses } from "@/actions/courses";
+import { Trash2 } from "lucide-react";
+import type { getAssignment } from "@/actions/assignments";
 import type { getRubrics } from "@/actions/rubrics";
 import { formatTerm } from "@/lib/terms";
 
 type Assignment = NonNullable<Awaited<ReturnType<typeof getAssignment>>>;
-type Course = Awaited<ReturnType<typeof getCourses>>[number];
 type Rubric = Awaited<ReturnType<typeof getRubrics>>[number];
 
 interface EditAssignmentClientProps {
   assignment: Assignment;
-  courses: Course[];
   rubrics: Rubric[];
 }
 
-export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssignmentClientProps) {
+export function EditAssignmentClient({ assignment, rubrics }: EditAssignmentClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [saving, setSaving] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const [name, setName] = useState(assignment.name);
   const [description, setDescription] = useState(assignment.description ?? "");
@@ -64,7 +64,7 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
     }
     setSaving(true);
     try {
-      await updateAssignment(assignment.id, {
+      const result = await updateAssignment(assignment.id, {
         name,
         description: description || null,
         rubricId: rubricId && rubricId !== "none" ? Number(rubricId) : null,
@@ -73,7 +73,20 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
         submissionType,
         lmsAssignmentId: lmsAssignmentId || null,
       });
-      toast.success("Assignment updated");
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+      if (result.rescored > 0) {
+        const rescoredNoun = `${result.rescored} grade${result.rescored === 1 ? "" : "s"}`;
+        toast.success(
+          result.nowInProgress > 0
+            ? `Assignment updated — rescored ${rescoredNoun}, ${result.nowInProgress} now in progress.`
+            : `Assignment updated — rescored ${rescoredNoun}.`
+        );
+      } else {
+        toast.success("Assignment updated");
+      }
       router.push(`/assignments/${assignment.id}`);
     } catch (err) {
       toast.error(`Failed to update: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -170,8 +183,10 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
                 </LinkButton>
               </div>
               <p className="text-xs text-muted-foreground">
-                Changing the rubric will not delete existing grade entries. Takes you to the rubric
-                editor; saving it brings you back here with it selected.
+                Changing the rubric is only allowed while this assignment is fully ungraded —
+                once any student has a grade, clear it or create a new assignment instead.
+                &ldquo;Create new…&rdquo; takes you to the rubric editor; saving it brings you back here with
+                it selected.
               </p>
             </div>
 
@@ -240,6 +255,24 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
           </CardContent>
         </Card>
 
+        {/* Danger zone */}
+        <Card className="border-destructive/30">
+          <CardHeader>
+            <CardTitle className="text-base text-destructive">Danger Zone</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-sm text-muted-foreground">
+                Permanently delete this assignment and its submissions, grades, and annotations.
+              </p>
+              <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete Assignment
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
         <div className="flex justify-between gap-3">
           <LinkButton href={`/assignments/${assignment.id}`} variant="outline">
             Cancel
@@ -249,6 +282,17 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
           </Button>
         </div>
       </div>
+
+      <DeleteConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        itemName={assignment.name}
+        itemKind="assignment"
+        onDelete={() => deleteAssignment(assignment.id)}
+        onArchive={() => archiveAssignment(assignment.id)}
+        onDeleted={() => router.push(`/courses/${assignment.course.id}`)}
+        onArchived={() => router.push(`/courses/${assignment.course.id}`)}
+      />
     </PageContainer>
   );
 }

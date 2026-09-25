@@ -59,15 +59,13 @@ export interface UseViewerOptions {
   drawOverlay: (params: ViewParams, frame: number) => void;
   initial?: Partial<ViewerState>;
   pdfWorkerUrl?: string;
-  forcedBudget?: keyof ReturnType<typeof budgetKeys>;
+  forcedBudget?: keyof BudgetKeys;
   /** Frames carrying annotations, for pause-on-annotated. */
   annotatedFrames: number[];
   onFrameChange?: (frame: number) => void;
 }
 
-function budgetKeys() {
-  return { workstation: 1, laptopLarge: 1, laptopSmall: 1, tablet: 1, conservative: 1 };
-}
+type BudgetKeys = { workstation: 1; laptopLarge: 1; laptopSmall: 1; tablet: 1; conservative: 1 };
 
 export function useViewer(opts: UseViewerOptions): ViewerApi {
   const {
@@ -168,7 +166,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
       const existing = sourcesRef.current.get(target.id);
       if (existing) return existing;
 
-      let src = createSource(target, sourceCtx, budget);
+      const src = createSource(target, sourceCtx, budget);
 
       // A WebCodecs failure must not lose the review — fall back to <video>.
       if (src instanceof DecodedVideoSource) {

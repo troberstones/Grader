@@ -57,3 +57,15 @@ export function isTypingTarget(target: EventTarget | null): boolean {
     el.isContentEditable === true
   );
 }
+
+/**
+ * True when focus is on a button. Only Space cares: it's the browser's own
+ * "press" key for a focused button, and letting the global Space handler also
+ * toggle playback would do both. Every other shortcut must keep working after
+ * a toolbar click leaves a button focused.
+ */
+export function isButtonTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  return el.tagName === "BUTTON" || el.getAttribute?.("role") === "button";
+}

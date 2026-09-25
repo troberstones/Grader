@@ -22,6 +22,17 @@ import { hashToken, isExpired } from "@/lib/auth/tokens";
 export async function POST(request: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
 
+  // Reject an oversized body by its declared Content-Length before doing
+  // anything else — a real file plus multipart overhead never gets close to
+  // this, so it only ever catches a request that couldn't be legitimate.
+  // This runs ahead of the token lookup too, since it's a header check, not
+  // a body read; the token itself is still fully validated below, before
+  // request.formData() (the actual body read) is ever called.
+  const contentLength = Number(request.headers.get("content-length") ?? "0");
+  if (contentLength > MAX_FILE_SIZE * 2) {
+    return NextResponse.json({ error: "File too large (max 500MB)" }, { status: 413 });
+  }
+
   try {
     const [link] = await db
       .select({
@@ -42,6 +53,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: "This upload link is no longer valid." }, { status: 410 });
     }
 
+    // Next 16's request.formData() has no way to stream individual parts to
+    // disk — it materializes the whole multipart body (and each part) in
+    // memory before returning it, same as buffering it ourselves would.
+    // Streaming straight to disk would need a raw-body multipart parser
+    // (e.g. busboy) that isn't a dependency here; adding one is out of scope
+    // for this change, so this still buffers, same as before.
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
 
@@ -61,7 +78,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: "Choose a file to upload." }, { status: 400 });
     }
     if (file.size > MAX_FILE_SIZE) {
-      return NextResponse.json({ error: "File too large (max 500MB)" }, { status: 400 });
+      return NextResponse.json({ error: "File too large (max 500MB)" }, { status: 413 });
     }
 
     const mediaType = getMediaType(file.name);
@@ -138,7 +155,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       console.error("[audit] write failed:", err);
     }
 
-    return NextResponse.json({ submission });
+    return NextResponse.json({ submission, replaced: existing.length > 0 });
   } catch (err) {
     console.error("Upload-link upload error:", err);
     return NextResponse.json({ error: err instanceof Error ? err.message : "Upload failed" }, { status: 500 });

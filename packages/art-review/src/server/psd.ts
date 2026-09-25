@@ -3,6 +3,7 @@ import path from "node:path";
 import type { LayerInfo, LayerManifest } from "../core/types";
 import { NON_SEPARABLE_BLENDS, PSD_BLEND_MAP } from "../render/shaders";
 import type { Derivative, IngestOptions, IngestResult } from "./ingest";
+import { assertWithinImageLimits } from "./image-limits";
 
 /**
  * PSD/PSB ingest with a live layer stack.
@@ -19,6 +20,25 @@ import type { Derivative, IngestOptions, IngestResult } from "./ingest";
 
 const MAX_LAYERS = 200;
 const MAX_TOTAL_MEGAPIXELS = 600;
+
+/**
+ * The canvas size out of the fixed 26-byte PSD/PSB file header — signature,
+ * version, 6 reserved bytes, channel count, then height and width as 4-byte
+ * big-endian integers (in that order; PSB uses the same layout here, the
+ * 8-byte fields only appear in later sections). ag-psd's `readPsd` decodes
+ * every channel's pixels as part of parsing, so a crafted header claiming a
+ * huge canvas exhausts memory before the layer-count/megapixel caps below
+ * ever get a chance to run — this has to be checked first, from the raw
+ * bytes, without asking the library to parse anything.
+ */
+export function readPsdHeaderDimensions(buffer: Buffer): { width: number; height: number } {
+  if (buffer.length < 26 || buffer.toString("ascii", 0, 4) !== "8BPS") {
+    throw new Error("psd: not a valid PSD/PSB file (bad signature)");
+  }
+  const height = buffer.readUInt32BE(14);
+  const width = buffer.readUInt32BE(18);
+  return { width, height };
+}
 
 interface PsdLayerNode {
   name?: string;
@@ -67,6 +87,9 @@ export async function ingestPsd(input: string, opts: IngestOptions): Promise<Ing
   await mkdir(opts.outDir, { recursive: true });
 
   const buffer = await readFile(input);
+  const headerDims = readPsdHeaderDimensions(buffer);
+  assertWithinImageLimits(headerDims.width, headerDims.height, "psd");
+
   // useImageData keeps this headless — the canvas-based path would need a
   // native canvas binding that this machine does not have.
   const psd = readPsd(buffer, {

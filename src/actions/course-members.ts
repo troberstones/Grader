@@ -8,6 +8,7 @@ import { requireCapability } from "@/lib/auth/require";
 import { findUserByEmail, getCurrentUser } from "@/lib/auth/session";
 import { resolveAuthContext } from "@/lib/auth/course-context";
 import { type CourseRole } from "@/lib/auth/roles";
+import { writeAudit } from "@/lib/audit";
 
 export type CourseMemberRow = {
   userId: number;
@@ -58,6 +59,12 @@ export async function addCourseMember(courseId: number, email: string, role: Cou
     .values({ courseId, userId: target.id, role, addedBy: actor.id })
     .onConflictDoUpdate({ target: [courseMembers.courseId, courseMembers.userId], set: { role } });
 
+  await writeAudit(actor, {
+    action: "course_member.add",
+    targetType: "course",
+    targetId: courseId,
+    detail: { userId: target.id, email: target.email, role },
+  });
   revalidatePath(`/courses/${courseId}/members`);
 }
 
@@ -74,14 +81,15 @@ async function assertNotLastOwner(courseId: number, userId: number) {
 }
 
 export async function removeCourseMember(courseId: number, userId: number) {
-  await requireCapability("course.members.manage", { kind: "course", courseId });
+  const actor = await requireCapability("course.members.manage", { kind: "course", courseId });
   await assertNotLastOwner(courseId, userId);
   await db.delete(courseMembers).where(and(eq(courseMembers.courseId, courseId), eq(courseMembers.userId, userId)));
+  await writeAudit(actor, { action: "course_member.remove", targetType: "course", targetId: courseId, detail: { userId } });
   revalidatePath(`/courses/${courseId}/members`);
 }
 
 export async function updateCourseMemberRole(courseId: number, userId: number, role: CourseRole) {
-  await requireCapability("course.members.manage", { kind: "course", courseId });
+  const actor = await requireCapability("course.members.manage", { kind: "course", courseId });
   if (role !== "owner") {
     await assertNotLastOwner(courseId, userId);
   }
@@ -89,5 +97,11 @@ export async function updateCourseMemberRole(courseId: number, userId: number, r
     .update(courseMembers)
     .set({ role })
     .where(and(eq(courseMembers.courseId, courseId), eq(courseMembers.userId, userId)));
+  await writeAudit(actor, {
+    action: "course_member.role_change",
+    targetType: "course",
+    targetId: courseId,
+    detail: { userId, role },
+  });
   revalidatePath(`/courses/${courseId}/members`);
 }

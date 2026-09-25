@@ -40,8 +40,14 @@ export interface RosterParseResult {
   columns: Partial<Record<RosterField, string>>;
   /** Rows that held something but could not be read as a student. */
   skipped: number;
-  /** Rows dropped because an earlier row named the same student. */
+  /** Rows dropped because an earlier row named the same student by Net ID. */
   duplicates: number;
+  /**
+   * Human-readable notices that aren't errors — e.g. two students who share
+   * a name with no Net ID column to tell them apart. Both are still kept in
+   * `students`; this is just something worth a human's attention.
+   */
+  warnings: string[];
   /** Set when nothing could be read. `students` is empty when it is. */
   error?: string;
 }
@@ -136,6 +142,29 @@ function mapHeaders(cells: string[]): Partial<Record<RosterField, number>> {
 /** A row can only be the header if it names somewhere to get a name from. */
 function isHeaderRow(cols: Partial<Record<RosterField, number>>): boolean {
   return cols.fullName !== undefined || cols.lastName !== undefined || cols.firstName !== undefined;
+}
+
+/**
+ * Whether `row` is the header row repeating mid-file, as some exports do once
+ * per section — not merely a data row that happens to carry a header-ish word
+ * in one cell (a student's real first name is "First", say, or an export puts
+ * literal text "Student" in an unrelated column). `mapHeaders` alone can't
+ * tell those apart: it matches header aliases against a row's cells
+ * regardless of what row it is. So this asks a stricter question — does
+ * *most* of this row line up, cell for cell, with the header actually
+ * detected for this file — rather than "does any one cell look like a
+ * header word".
+ */
+function isRepeatedHeaderRow(row: string[], headers: string[]): boolean {
+  let total = 0;
+  let matches = 0;
+  for (let i = 0; i < headers.length; i++) {
+    const h = normalizeHeader(headers[i] ?? "");
+    if (!h) continue;
+    total++;
+    if (normalizeHeader(row[i] ?? "") === h) matches++;
+  }
+  return total > 0 && matches * 2 > total;
 }
 
 /**
@@ -246,7 +275,7 @@ function toStudent(
  * `students`, so the caller has something to show the person who chose it.
  */
 export function parseRoster(csvText: string): RosterParseResult {
-  const empty = { students: [], headers: [], columns: {}, skipped: 0, duplicates: 0 };
+  const empty = { students: [], headers: [], columns: {}, skipped: 0, duplicates: 0, warnings: [] };
 
   // papaparse strips a UTF-8 BOM itself, but a file decoded from UTF-16
   // upstream can still carry one through.
@@ -301,13 +330,19 @@ export function parseRoster(csvText: string): RosterParseResult {
   }
 
   const students: RosterStudent[] = [];
-  const seen = new Set<string>();
+  const seenNetIds = new Set<string>();
+  // Name (no Net ID) seen so far, and how many times — only used to warn
+  // about a possible collision, never to drop a row: without a Net ID there
+  // is no reliable way to tell "the same student listed twice" from "two
+  // different students who share a name".
+  const seenNamesWithoutNetId = new Map<string, number>();
   let skipped = 0;
   let duplicates = 0;
+  const warnings: string[] = [];
 
   for (const row of rows.slice(headerIndex + 1)) {
     // Some exports repeat the header once per section.
-    if (isHeaderRow(mapHeaders(row))) continue;
+    if (isRepeatedHeaderRow(row, headers)) continue;
 
     const student = toStudent(row, cols);
     if (!student) {
@@ -315,12 +350,24 @@ export function parseRoster(csvText: string): RosterParseResult {
       continue;
     }
 
-    const key = student.netId ?? `name:${student.sortName.toLowerCase()}`;
-    if (seen.has(key)) {
-      duplicates++;
-      continue;
+    if (student.netId) {
+      if (seenNetIds.has(student.netId)) {
+        duplicates++;
+        continue;
+      }
+      seenNetIds.add(student.netId);
+    } else {
+      const nameKey = student.sortName.toLowerCase();
+      const priorCount = seenNamesWithoutNetId.get(nameKey) ?? 0;
+      if (priorCount === 1) {
+        // Warn once per colliding name, not once per extra repeat of it.
+        warnings.push(
+          `Two or more students are listed as "${student.sortName}" with no Net ID to tell them apart. Both were kept — check they aren't actually the same person duplicated in the file.`,
+        );
+      }
+      seenNamesWithoutNetId.set(nameKey, priorCount + 1);
     }
-    seen.add(key);
+
     students.push(student);
   }
 
@@ -334,7 +381,7 @@ export function parseRoster(csvText: string): RosterParseResult {
     };
   }
 
-  return { students, headers, columns, skipped, duplicates };
+  return { students, headers, columns, skipped, duplicates, warnings };
 }
 
 /**

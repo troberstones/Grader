@@ -1,7 +1,8 @@
 import { beforeEach, vi } from "vitest";
 
 import { db } from "@/db";
-import { auditLog, feedbackLinks, feedbackSends, invites, sessions, users } from "@/db/schema";
+import { auditLog, feedbackLinks, feedbackSends, invites, sessions, uploadLinks, users } from "@/db/schema";
+import { SESSION_COOKIE } from "@/lib/auth/session";
 
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
@@ -25,6 +26,25 @@ let testIp = "203.0.113.5";
 /** Lets a test simulate a distinct caller IP, e.g. for the lockout throttle. */
 export function setTestIp(ip: string) {
   testIp = ip;
+}
+
+/**
+ * Lets a test simulate more than one browser sharing one account.
+ *
+ * The mocked cookie jar below has a single slot, same as a real jar has a
+ * single value per name — `createSession()` overwrites it every time it's
+ * called. Capture the token it just set with `getSessionCookie()` before
+ * calling it again, then hand that captured value back with
+ * `setSessionCookie()` to act as that earlier session once more (e.g. to show
+ * it was revoked).
+ */
+export function getSessionCookie(): string | undefined {
+  return cookieJar.get(SESSION_COOKIE);
+}
+
+export function setSessionCookie(value: string | undefined): void {
+  if (value === undefined) cookieJar.delete(SESSION_COOKIE);
+  else cookieJar.set(SESSION_COOKIE, value);
 }
 
 // Backed by a shared Map so createSession() (writes the cookie) and
@@ -58,8 +78,9 @@ beforeEach(async () => {
   await db.delete(auditLog);
   await db.delete(sessions);
   await db.delete(invites);
-  // Both reference users (sent_by / created_by), so they go first.
+  // All three reference users (sent_by / created_by), so they go first.
   await db.delete(feedbackSends);
   await db.delete(feedbackLinks);
+  await db.delete(uploadLinks);
   await db.delete(users);
 });

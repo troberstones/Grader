@@ -62,24 +62,21 @@ each other, and was only caught at merge. Before numbering a new one, check
 `git branch -a` as well as `drizzle/` — the number you want may exist on a
 branch that has not merged yet.
 
-## 4. `review-v1` and `review-v2` are ungated on purpose
+## 4. `review-v2` is ungated on purpose, and still an orphan
 
-Neither calls `requireGradeSession()`, which looks like an oversight and is not.
-They are artwork viewers: no scores, no rubric, no grading affordances (checked,
-not assumed). A review session reaching them is correct.
+`review-v1` is deleted as of `ade2516` (`w3-cleanup`) — the owner-approved dead
+code sweep, preserved at the `archive/review-v1` git tag along with the
+`components/review/*` and `_archive/` rubric editors it alone used.
 
-`review-v2` is additionally an orphan — nothing links to it. Deleting it is
-probably right, but confirm nobody is mid-rework on it first.
+`review-v2` is untouched and doesn't call `requireGradeSession()`, which still
+looks like an oversight and still is not: it's an artwork viewer — no scores,
+no rubric, no grading affordances (checked, not assumed) — so a review session
+reaching it is correct.
 
-## 5. Vestigial `grader.db` in the repo root
+It is still an orphan — nothing links to it. Deleting it is probably right, but
+confirm nobody is mid-rework on it first.
 
-Zero bytes, dated April, tracked, and not the database. The real one is
-`storage/grader.db` (`DB_PATH`, see `.env.example`). It exists on the server too.
-Every so often someone opens it, finds it empty, and concludes something is
-broken. Nothing reads it — every script and `src/db/index.ts` resolve
-`storage/grader.db` — so `git rm grader.db` should be all it takes.
-
-## 6. The TLS certificate is self-signed, and three things follow from it
+## 5. The TLS certificate is self-signed, and three things follow from it
 
 HTTPS went up 2026-09-08 so WebCodecs would exist at all (`server.mjs` explains
 why, `docs/security.md` § 6 covers the cookie consequences). The certificate is
@@ -116,7 +113,7 @@ issues a real certificate.
 every device has to be re-trusted afterwards. Irrelevant if a real certificate
 lands first, which is the point of pursuing one.
 
-## 7. Only port 3000 is open, which is why one port serves two protocols
+## 6. Only port 3000 is open, which is why one port serves two protocols
 
 The department firewall in front of cs-1017245 permits exactly one port: 3001,
 3002, 3443, 8000, 8080, 8443 and 9000 were each bound successfully on the host
@@ -129,7 +126,7 @@ urgent: the multiplexer is verified (keep-alive across five requests on one TLS
 connection, 2 MB multipart POST, SSE unbuffered) and costs one byte of latency.
 Do not remove it while 3000 is the only way in.
 
-## 8. The deploy host cannot send mail
+## 7. The deploy host cannot send mail
 
 **Nothing emailed from the server arrives yet** — feedback, invites, password
 resets, upload links. Feedback shows the failure (the first real send came back

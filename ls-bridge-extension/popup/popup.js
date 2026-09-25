@@ -38,9 +38,38 @@ async function refresh() {
   }
 }
 
+/** Declared in host_permissions already — no runtime grant needed for these. */
+function isBuiltInOrigin(origin) {
+  return /^https?:\/\/localhost(:\d+)?$/.test(origin);
+}
+
 saveBtn.addEventListener('click', async () => {
   const origin = originInput.value.trim().replace(/\/$/, '');
   if (!origin) return;
+
+  if (!isBuiltInOrigin(origin)) {
+    // A real campus deployment isn't localhost and isn't in host_permissions
+    // by default — request it now (matched against optional_host_permissions
+    // in manifest.json) so background.js's fetch to this origin can actually
+    // carry the grader session cookie later. Cross-origin credentialed
+    // requests only work for hosts the extension has permission for.
+    if (!/^https:\/\//.test(origin)) {
+      setStatus('red', 'https required', 'Enter an https:// URL for anything other than localhost.');
+      return;
+    }
+    let granted = false;
+    try {
+      granted = await chrome.permissions.request({ origins: [`${origin}/*`] });
+    } catch (err) {
+      setStatus('red', 'Permission error', err.message);
+      return;
+    }
+    if (!granted) {
+      setStatus('red', 'Permission needed', 'Grant access to this origin to sync with it.');
+      return;
+    }
+  }
+
   await chrome.runtime.sendMessage({ action: 'SET_GRADER_ORIGIN', origin });
   saveBtn.textContent = 'Saved ✓';
   setTimeout(() => (saveBtn.textContent = 'Save'), 1500);

@@ -60,6 +60,16 @@ interface GradingContextValue {
 
   /** Ref to the student list scroll container so position survives navigation. */
   scrollRef: MutableRefObject<HTMLDivElement | null>;
+
+  /**
+   * Ref the active rubric-grading instance writes its `flushAutoSave` to
+   * (see use-rubric-grading.ts), so anything that navigates away — ViewSwitch's
+   * Rubric/Artwork buttons and its `t` shortcut — can flush a pending save and
+   * find out whether it succeeded *before* pushing a route, the same way
+   * selectHandlerRef lets a student switch run the same guard. Defaults to a
+   * no-op that reports success, for routes with nothing to flush.
+   */
+  flushHandlerRef: MutableRefObject<() => Promise<boolean>>;
 }
 
 const GradingContext = createContext<GradingContextValue | null>(null);
@@ -140,22 +150,41 @@ export function GradingProvider({
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
+  // Default handler: nothing to flush. Pages replace this in useLayoutEffect,
+  // same lifecycle as selectHandlerRef.
+  const flushHandlerRef = useRef<() => Promise<boolean>>(async () => true);
+
+  // Memoized so an autosave tick (which only touches state inside
+  // use-rubric-grading.ts) doesn't force every consumer of this context —
+  // the whole reviewer tree included — to re-render on every keystroke.
+  const value = useMemo<GradingContextValue>(
+    () => ({
+      // StudentWithGrade[] is structurally assignable to GradingStudent[]
+      // because StudentWithGrade satisfies every field GradingStudent declares.
+      students: publicStudents,
+      updateStudentGrade,
+      recordFeedbackEmailed,
+      selectedStudentId,
+      setSelectedStudentId,
+      selectStudent,
+      selectHandlerRef,
+      scrollRef,
+      flushHandlerRef,
+    }),
+    [
+      publicStudents,
+      updateStudentGrade,
+      recordFeedbackEmailed,
+      selectedStudentId,
+      setSelectedStudentId,
+      selectStudent,
+      selectHandlerRef,
+      scrollRef,
+      flushHandlerRef,
+    ],
+  );
+
   return (
-    <GradingContext.Provider
-      value={{
-        // StudentWithGrade[] is structurally assignable to GradingStudent[]
-        // because StudentWithGrade satisfies every field GradingStudent declares.
-        students: publicStudents,
-        updateStudentGrade,
-        recordFeedbackEmailed,
-        selectedStudentId,
-        setSelectedStudentId,
-        selectStudent,
-        selectHandlerRef,
-        scrollRef,
-      }}
-    >
-      {children}
-    </GradingContext.Provider>
+    <GradingContext.Provider value={value}>{children}</GradingContext.Provider>
   );
 }

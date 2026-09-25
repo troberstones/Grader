@@ -23,6 +23,7 @@ import {
   countActiveAdmins,
   createSession,
   destroyAllSessions,
+  destroyOtherSessions,
   destroySession,
   findUserByEmail,
   getCurrentUser,
@@ -98,6 +99,10 @@ export async function signIn(_prevState: ActionResult | null, formData: FormData
 
   if (user && isLockedOut(user)) {
     recordIpFailure(meta.ip);
+    await writeAudit(
+      { id: user.id, email: user.email },
+      { action: "auth.sign_in_failed", targetType: "user", targetId: user.id, detail: { reason: "locked_out" } },
+    );
     return fail("This account is temporarily locked after repeated failed attempts. Try again later.");
   }
 
@@ -108,25 +113,47 @@ export async function signIn(_prevState: ActionResult | null, formData: FormData
   if (!user || !valid) {
     recordIpFailure(meta.ip);
     if (user) await recordFailedLogin(user.id);
+    // The email attempted is worth recording; the password never is.
+    await writeAudit(
+      { id: user?.id ?? null, email: normaliseEmail(email) },
+      {
+        action: "auth.sign_in_failed",
+        targetType: "user",
+        targetId: user?.id,
+        detail: { reason: user ? "bad_password" : "no_such_account" },
+      },
+    );
     return fail("That email and password do not match.");
   }
 
   if (user.status === "disabled") {
+    await writeAudit(
+      { id: user.id, email: user.email },
+      { action: "auth.sign_in_failed", targetType: "user", targetId: user.id, detail: { reason: "disabled" } },
+    );
     return fail("This account has been disabled. Ask an administrator to re-enable it.");
   }
   if (user.status === "invited" || !user.passwordHash) {
+    await writeAudit(
+      { id: user.id, email: user.email },
+      { action: "auth.sign_in_failed", targetType: "user", targetId: user.id, detail: { reason: "not_set_up" } },
+    );
     return fail("This account has not been set up yet. Use the invitation link you were sent.");
   }
 
   await resetFailedLogins(user.id);
   await createSession(user.id, meta, mode);
   await db.update(users).set({ lastLoginAt: sqlTimestamp(new Date()) }).where(eq(users.id, user.id));
+  await writeAudit({ id: user.id, email: user.email }, { action: "auth.sign_in", detail: { mode } });
 
   return ok;
 }
 
 export async function signOut(): Promise<ActionResult> {
+  // Read before destroying — there is no session left to look up afterward.
+  const user = await getCurrentUser();
   await destroySession();
+  if (user) await writeAudit({ id: user.id, email: user.email }, { action: "auth.sign_out" });
   return ok;
 }
 
@@ -369,7 +396,24 @@ export async function acceptInvite(
     })
     .where(eq(users.id, claimed[0].userId));
 
+  // Destroy every existing session for this account BEFORE issuing the new
+  // one — a password reset or an invite link (which sets a password on an
+  // account that may already have one, e.g. a reused invite) must not leave
+  // a stolen or forgotten-open session valid after the credential changes.
+  const revoked = await destroyAllSessions(claimed[0].userId);
   await createSession(claimed[0].userId, await requestMeta());
+
+  const actor = { id: claimed[0].userId, email: details.email };
+  await writeAudit(actor, { action: "user.password_change", detail: { via: details.isReset ? "reset" : "invite" } });
+  if (revoked > 0) {
+    await writeAudit(actor, {
+      action: "session.revoke",
+      targetType: "user",
+      targetId: claimed[0].userId,
+      detail: { count: revoked, reason: details.isReset ? "password_reset" : "invite_accept" },
+    });
+  }
+
   revalidatePath("/admin/users");
   redirect("/");
 }
@@ -426,6 +470,21 @@ export async function changeOwnPassword(_prevState: ActionResult | null, formDat
 
   const passwordHash = await hashPassword(newPassword);
   await db.update(users).set({ passwordHash }).where(eq(users.id, user.id));
+
+  // The request making this change keeps its own session (there's no new one
+  // to hand it), but any other session — including one copied or stolen
+  // before the password was known to be compromised — must not survive it.
+  const revoked = await destroyOtherSessions(user.id);
+  await writeAudit(user, { action: "user.password_change", detail: { via: "self" } });
+  if (revoked > 0) {
+    await writeAudit(user, {
+      action: "session.revoke",
+      targetType: "user",
+      targetId: user.id,
+      detail: { count: revoked, reason: "password_change" },
+    });
+  }
+
   revalidatePath("/account");
   return ok;
 }
@@ -547,8 +606,14 @@ export async function listAccounts(): Promise<AccountRow[]> {
 
 /** Admin-only, independent of course membership — see src/actions/archive.ts. */
 export async function setCanViewArchive(userId: number, value: boolean): Promise<ActionResult> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   await db.update(users).set({ canViewArchive: value ? 1 : 0 }).where(eq(users.id, userId));
+  await writeAudit(admin, {
+    action: "user.archive_access_change",
+    targetType: "user",
+    targetId: userId,
+    detail: { canViewArchive: value },
+  });
   revalidatePath("/admin/users");
   return ok;
 }
