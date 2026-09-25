@@ -36,16 +36,15 @@ ssh "$REMOTE" "
   # restart a few lines below and is harmless: these migrations only add
   # columns and tables, which code that does not know about them ignores.
   #
-  # Every applier here is idempotent — each checks for the column or table it
-  # would create and does nothing if it is already there — so re-running the
-  # whole set on every deploy is the point, not a cost. Filename order is the
-  # order they are applied in; it has matched dependency order so far, and any
-  # applier that needs to run after another must sort after it.
+  # scripts/migrate.mjs applies every drizzle/NNNN_*.sql file that hasn't run
+  # yet, in numeric (dependency) order, and records each one — so re-running
+  # it on every deploy is a fast no-op once the database is caught up,
+  # instead of re-deriving \"already applied\" from table/column presence on
+  # every single deploy the way the old scripts/apply-*.mjs loop did. See
+  # docs/operations.md for how it decides what's pending on a database it
+  # hasn't tracked before (i.e. this one, the first time it runs there).
   node scripts/backup-db.mjs
-  for migration in scripts/apply-*.mjs; do
-    echo \"--> \$migration\"
-    node \"\$migration\"
-  done
+  node scripts/migrate.mjs
 
   npm run build
   systemctl --user restart grader.service
