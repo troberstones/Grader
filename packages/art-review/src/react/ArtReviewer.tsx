@@ -117,7 +117,7 @@ export function ArtReviewer({
   // Keyed by item id (not a plain boolean) so switching away from a failed
   // item mid-retry doesn't leave some other item's button looking disabled.
   const [retryingId, setRetryingId] = useState<string | null>(null);
-  const [retryError, setRetryError] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<{ itemId: string; message: string } | null>(null);
 
   const session = useSession(channel, author);
 
@@ -172,7 +172,7 @@ export function ArtReviewer({
         await adapter.retryItem(itemId);
         onItemsChanged?.();
       } catch (e) {
-        setRetryError(e instanceof Error ? e.message : "Retry failed.");
+        setRetryError({ itemId, message: e instanceof Error ? e.message : "Retry failed." });
       } finally {
         setRetryingId(null);
       }
@@ -1356,8 +1356,10 @@ export function ArtReviewer({
                     >
                       {retryingId === item.id ? "Retrying…" : "Retry processing"}
                     </button>
-                    {retryError && (
-                      <div style={{ fontSize: 11, color: C.danger, marginTop: 8 }}>{retryError}</div>
+                    {retryError?.itemId === item.id && (
+                      <div role="alert" style={{ fontSize: 11, color: C.danger, marginTop: 8 }}>
+                        {retryError.message}
+                      </div>
                     )}
                   </div>
                 )}

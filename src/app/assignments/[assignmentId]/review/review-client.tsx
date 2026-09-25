@@ -198,11 +198,6 @@ export function ReviewClient({ assignment, author }: Props) {
       removeItem: async (itemId) => {
         await deleteSubmission(Number(itemId.replace("sub:", "")));
       },
-      // Explicit param type: `@grader/art-review` resolves through a
-      // workspace symlink to wherever ReviewDataAdapter is defined on disk,
-      // which lags this worktree's edits until they land on the branch that
-      // symlink points at — contextual inference for a property the linked
-      // copy doesn't know about yet would otherwise fall back to `any`.
       retryItem: async (itemId: string) => {
         await retryIngest(Number(itemId.replace("sub:", "")));
       },
