@@ -1,0 +1,41 @@
+# Installed by scripts/deploy-remote.sh into ~/.config/systemd/user/ on the
+# deploy host (cnh5@cs-1017245). A user unit, not a system one, so it runs
+# without root — but that also means it only runs while cnh5 has at least one
+# session, unless linger is enabled:
+#
+#   loginctl enable-linger cnh5
+#
+# without which the service (and grader-backup.timer) stops the moment the
+# last SSH session to cnh5 closes. See docs/operations.md "Deploy".
+#
+# NODE_BIN below must match the NODE_BIN variable at the top of
+# scripts/deploy-remote.sh — that script is the one source of truth for which
+# Node install runs this app; this file just has to agree with it, since a
+# systemd unit can't source a shell variable.
+[Unit]
+Description=Grader (self-hosted Next.js app, custom TLS server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/work/cnh5/grader
+Environment=NODE_ENV=production
+# Optional: next.js also loads storage/.env.local itself (see loadEnvConfig
+# in next/dist/server/base-server.js), so this isn't required for the app to
+# see its own config — it's here so `systemctl --user show grader.service`
+# and other tooling that inspects unit environment can see it too. The
+# leading "-" means a missing file doesn't block startup (e.g. before the
+# first .env.local is ever created on a fresh host).
+EnvironmentFile=-/work/cnh5/grader/.env.local
+ExecStart=/work/cnh5/.nvm/versions/node/v22.23.2/bin/node server.mjs
+Restart=on-failure
+RestartSec=5
+# A transcode or large upload kicked off before a stop can legitimately run
+# for a couple of minutes; give server.mjs's own SIGTERM handler (which waits
+# on after() work and closes the listening socket) room before systemd
+# escalates to SIGKILL.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
