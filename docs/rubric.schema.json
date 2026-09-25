@@ -32,9 +32,9 @@
     },
     "criteria": {
       "type": "array",
-      "minItems": 2,
+      "minItems": 1,
       "maxItems": 12,
-      "description": "The rows of the rubric. Two to twelve; beyond that a rubric stops being usable during a live critique.",
+      "description": "The rows of the rubric. One to twelve; beyond that a rubric stops being usable during a live critique.",
       "items": {
         "type": "object",
         "required": ["name", "levels"],

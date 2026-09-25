@@ -140,7 +140,7 @@ export function ShareRubricEditor({ initialData, onSave, saving }: Props) {
     );
   }
 
-  const canSave = !!name && criteria.length >= 2 && !saving;
+  const canSave = !!name && criteria.length >= 1 && !saving;
 
   return (
     <div className="space-y-6 pb-24">
@@ -212,8 +212,8 @@ export function ShareRubricEditor({ initialData, onSave, saving }: Props) {
 
       <CriteriaGrid criteria={criteria} onChange={setCriteria} showErrors={!!errors} />
 
-      {criteria.length < 2 && (
-        <p className="text-xs text-muted-foreground">A rubric needs at least 2 criteria before it can be saved.</p>
+      {criteria.length < 1 && (
+        <p className="text-xs text-muted-foreground">A rubric needs at least 1 criterion before it can be saved.</p>
       )}
 
       <div className="flex justify-end">
