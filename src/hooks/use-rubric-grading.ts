@@ -17,8 +17,9 @@ export type SelectionMap = Record<number, { level: Level; nudge: Nudge }>;
 
 /**
  * Everything the grading views and the panel read. One shape now — the
- * points-model half of this union went to the archive with the editors that
- * wrote it (src/components/rubric/_archive/).
+ * points-model half of this union was deleted along with the editors that
+ * wrote it; see the `archive/review-v1` git tag for the last commit that had
+ * them (src/components/rubric/_archive/ at that revision).
  */
 export interface ShareGrading {
   assignment: Assignment;

@@ -12,8 +12,6 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Kept for retrieval, not for building — see the README in that folder.
-    "src/components/rubric/_archive/**",
   ]),
 ]);
 

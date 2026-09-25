@@ -1,23 +1,6 @@
-export const SUPPORTED_IMAGE_TYPES = [
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "image/tiff",
-  "image/bmp",
-];
-
-export const SUPPORTED_VIDEO_TYPES = [
-  "video/mp4",
-  "video/quicktime",
-  "video/webm",
-  "video/x-msvideo",
-];
-
 /**
  * Every extension the review pipeline can ingest (see classify() in
- * packages/art-review/src/server/ingest.ts), not just the plain-image/video
- * subset the two arrays above cover — those stay as-is since they drive the
- * older review-v1 upload zone's stricter accept list.
+ * packages/art-review/src/server/ingest.ts).
  */
 export const SUPPORTED_EXTENSIONS: Record<string, string> = {
   ".png": "image/png",

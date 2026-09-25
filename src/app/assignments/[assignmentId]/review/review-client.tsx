@@ -11,7 +11,7 @@ import { useGrading } from "@/components/shared/grading-context";
 import { StudentNavBar } from "@/components/shared/student-nav-bar";
 import { useViewLayout } from "@/components/shared/view-layout";
 import { RubricDock } from "@/components/rubric/rubric-dock";
-import { MediaDropZone } from "@/components/review/media-drop-zone";
+import { MediaDropZone } from "@/components/shared/media-drop-zone";
 import { useReviewChannel } from "@/lib/review-channel";
 import { uploadFiles } from "@/lib/media-upload";
 import { useIngestProgress } from "@/lib/use-ingest-progress";
@@ -146,15 +146,14 @@ export function ReviewClient({ assignment, author }: Props) {
   if (ingestingIdsFor !== contextId) {
     setIngestingIdsFor(contextId);
     setIngestingIds([]);
+    if (!contextId) setItems([]);
   }
 
   useEffect(() => {
-    if (!contextId) {
-      setItems([]);
-      return;
-    }
+    if (!contextId) return;
     let cancelled = false;
     const cached = playlists.current.get(contextId);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- seeding from cache then fetching fresh data keyed by contextId is the standard data-fetching effect; there's no external system to defer this to.
     setItems(cached ?? []);
     setLoading(!cached);
     setError(null);
