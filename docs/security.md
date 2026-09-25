@@ -160,6 +160,21 @@ Roughly in the order they'd matter if the tool left the studio:
    one assignment for 14 days (`UPLOAD_LINK_TTL_MS`,
    `src/lib/auth/tokens.ts`) or until an instructor revokes it from the
    assignment page.
+9. **`/feedback/[token]` and the `?ft=` media access are unauthenticated by
+   design**, for the same reason as upload links: a student reading their
+   feedback (`src/actions/feedback.ts`) has no session. Scoped tighter than
+   an upload link — every feedback link is bound to one student and one
+   assignment, and read-only by construction: `src/actions/feedback-view.ts`
+   has no write path at all. `/api/review/media`, `/api/review/layers` and
+   `/api/submissions/[id]/file` accept `?ft=` only after the session check
+   fails, and only for a submission belonging to that link's student and
+   assignment (`feedbackTokenAllows`, `src/lib/feedback/links.ts`). The
+   token travels in the query string for media requests (a `<video>` element
+   cannot send a header), so it can appear in server access logs — the same
+   token is already in the page URL. Links last until the end of the course's
+   term (`termEndDate`, `src/lib/terms.ts`), and resending feedback with a
+   link revokes the previous one. There is no revoke button yet beyond
+   resending.
 
 ## Review sessions
 
@@ -269,9 +284,11 @@ fact.
   Visible to admins at `/admin/audit`.
 
 - **Invite and password-reset links are also emailed, best-effort.**
-  `src/lib/email.ts` sends through the deploy host's own local mail transport
-  (sendmail/postfix — no SMTP credentials, no third-party account),
-  configured via `APP_BASE_URL` / `MAIL_FROM` / `SENDMAIL_PATH`. This is
+  `src/lib/email.ts` sends through an authenticated SMTP account when
+  `SMTP_HOST` is set (the deploy host has no local MTA), otherwise through the
+  host's own sendmail/postfix; configured via `APP_BASE_URL` / `MAIL_FROM` /
+  `SMTP_*` / `SENDMAIL_PATH`. The SMTP password lives only in the server's
+  gitignored `.env.local`. This is
   additive: the copy-link flow in `/admin/users` is unchanged and stays the
   real mechanism regardless of whether the email arrives.
 

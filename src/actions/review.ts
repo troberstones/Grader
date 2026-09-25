@@ -10,6 +10,7 @@ import { requireCapability } from "@/lib/auth/require";
 import { GLOBAL } from "@/lib/auth/roles";
 import { assignmentResource, submissionResource } from "@/lib/auth/resource-lookup";
 import { publishIngestProgress } from "@/lib/ingest-progress";
+import { buildReviewItems } from "@/lib/review-items";
 
 /**
  * Server side of ReviewDataAdapter.
@@ -31,11 +32,11 @@ export type StoredStrokeRow = {
 
 const REVIEW_DIR = "storage/review";
 
-function itemIdFor(submissionId: number): string {
-  return `sub:${submissionId}`;
-}
-
-/** Inverse of itemIdFor — every itemId-keyed action gates on this submission's course. */
+/**
+ * `sub:{submissionId}` → submissionId (items are built in
+ * src/lib/review-items.ts) — every itemId-keyed action gates on this
+ * submission's course.
+ */
 function parseItemId(itemId: string): number | null {
   const m = /^sub:(\d+)$/.exec(itemId);
   return m ? Number(m[1]) : null;
@@ -174,78 +175,7 @@ export async function listReviewItems(contextId: string): Promise<ReviewItem[]> 
 
   await Promise.all(subs.map((s) => ensureIngested(s.id).catch(() => {})));
 
-  const items: ReviewItem[] = [];
-  for (const sub of subs) {
-    const media = await db
-      .select()
-      .from(reviewMedia)
-      .where(eq(reviewMedia.submissionId, sub.id))
-      .orderBy(asc(reviewMedia.idx));
-
-    const failed = media.find((m) => m.status === "failed");
-    if (failed) {
-      // Do not hand a file we already know is broken to the viewer as if it
-      // were an image — it just fails again as "could not be decoded", which
-      // says nothing about why. Carry the real reason instead.
-      items.push({
-        id: itemIdFor(sub.id),
-        label: sub.fileName,
-        kind: "still",
-        mime: sub.fileType,
-        url: "",
-        width: 1600,
-        height: 900,
-        frameCount: 1,
-        fps: null,
-        duration: null,
-        unavailable: failed.warnings ?? "This file could not be processed",
-      });
-      continue;
-    }
-
-    const proxy = media.find((m) => m.variant === "proxy");
-    const composite = media.find((m) => m.variant === "composite");
-    const manifest = media.find((m) => m.variant === "page" && m.idx === -1);
-    const poster = media.find((m) => m.variant === "poster");
-    // Already ordered by idx above, so this is frame order.
-    const frames = media.filter((m) => m.variant === "frame");
-    const primary = proxy ?? composite ?? frames[0] ?? media.find((m) => m.variant === "original");
-
-    const kind = (primary?.kind ?? (sub.mediaType === "video" ? "video" : "still")) as ReviewItem["kind"];
-    const url = primary?.variant === "original" || !primary
-      ? `/api/submissions/${sub.id}/file`
-      : `/api/review/media/${primary.id}`;
-
-    // A sequence addresses its frames individually; frameCount follows the
-    // urls rather than the stored count, so a frame that failed to decode
-    // cannot leave the transport seeking past the end of the list.
-    const frameUrls = frames.length
-      ? frames.map((f) => `/api/review/media/${f.id}`)
-      : undefined;
-
-    items.push({
-      id: itemIdFor(sub.id),
-      label: sub.fileName,
-      kind: failed ? "still" : kind,
-      mime: primary?.mime ?? sub.fileType,
-      url,
-      width: primary?.width ?? 1600,
-      height: primary?.height ?? 900,
-      frameCount: Math.max(1, frameUrls?.length ?? primary?.frameCount ?? 1),
-      frameUrls,
-      fps: primary?.fps ?? null,
-      duration: primary?.duration ?? null,
-      posterUrl: poster ? `/api/review/media/${poster.id}` : undefined,
-      layersUrl: manifest ? `/api/review/layers/${sub.id}` : undefined,
-      allIntra: !!proxy,
-      colorSpace: {
-        primaries: primary?.colorPrimaries ?? undefined,
-        transfer: primary?.colorTransfer ?? undefined,
-      },
-    });
-  }
-
-  return items;
+  return buildReviewItems(subs);
 }
 
 // ── Strokes ───────────────────────────────────────────────────────────────────

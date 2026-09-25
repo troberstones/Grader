@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { reviewMedia } from "@/db/schema";
 import { apiRequireCapability } from "@/lib/auth/api";
 import { submissionResource } from "@/lib/auth/resource-lookup";
+import { feedbackTokenAllows } from "@/lib/feedback/links";
 
 /**
  * PSD layer manifest.
@@ -23,7 +24,7 @@ interface Manifest {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ submissionId: string }> },
 ) {
   const { submissionId } = await params;
@@ -32,7 +33,8 @@ export async function GET(
 
   const resource = await submissionResource(id);
   const auth = await apiRequireCapability("roster.view", resource);
-  if (!auth.user) return auth.response;
+  // No session: a student's feedback link may still cover their own work.
+  if (!auth.user && !(await feedbackTokenAllows(request, id))) return auth.response;
 
   const media = await db
     .select()
@@ -59,10 +61,13 @@ export async function GET(
   const byPath = new Map<string, number>();
   for (const m of media) byPath.set(path.resolve(root, m.path), m.id);
 
+  // A link holder's layer rasters need the same token to load.
+  const ft = new URL(request.url).searchParams.get("ft");
+  const q = !auth.user && ft ? `?ft=${encodeURIComponent(ft)}` : "";
   const toUrl = (p: string | null): string | null => {
     if (!p) return null;
     const mediaId = byPath.get(path.resolve(root, p));
-    return mediaId ? `/api/review/media/${mediaId}` : null;
+    return mediaId ? `/api/review/media/${mediaId}${q}` : null;
   };
 
   manifest.layers = manifest.layers.map((l) => ({ ...l, rasterUrl: toUrl(l.rasterUrl) }));

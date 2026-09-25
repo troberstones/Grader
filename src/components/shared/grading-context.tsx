@@ -6,6 +6,7 @@ import {
   useState,
   useRef,
   useCallback,
+  useMemo,
   type ReactNode,
   type Dispatch,
   type SetStateAction,
@@ -13,6 +14,7 @@ import {
 } from "react";
 import type { StudentWithGrade, StudentGrade } from "@/actions/grades";
 import type { GradingStudent } from "@/types/grading";
+import { gradeFingerprint } from "@/lib/feedback/fingerprint";
 
 interface GradingContextValue {
   /**
@@ -31,6 +33,12 @@ interface GradingContextValue {
    * without exposing the raw setState to all consumers.
    */
   updateStudentGrade: (studentId: number, grade: StudentGrade | null) => void;
+
+  /**
+   * Record that feedback was just emailed, so the sidebar's mark updates
+   * without a reload. `fingerprint` is the grade as sent.
+   */
+  recordFeedbackEmailed: (studentId: number, sentAt: string, fingerprint: string | null) => void;
 
   /** Currently selected student id. */
   selectedStudentId: number | null;
@@ -94,6 +102,31 @@ export function GradingProvider({
     [],
   );
 
+  const recordFeedbackEmailed = useCallback(
+    (studentId: number, sentAt: string, fingerprint: string | null) => {
+      setStudents((prev) =>
+        prev.map((s) => (s.id === studentId ? { ...s, emailedFeedback: { sentAt, fingerprint } } : s)),
+      );
+    },
+    [],
+  );
+
+  // "Changed since emailed" is derived here, where the full grade (entries,
+  // feedback) is still in hand, so the sidebar can stay on the narrow type.
+  const publicStudents = useMemo(
+    () =>
+      students.map((s) => ({
+        ...s,
+        feedbackMail: s.emailedFeedback
+          ? {
+              sentAt: s.emailedFeedback.sentAt,
+              changed: gradeFingerprint(s.grade) !== s.emailedFeedback.fingerprint,
+            }
+          : null,
+      })),
+    [students],
+  );
+
   // Default handler: plain id swap. Pages replace this in useLayoutEffect.
   const selectHandlerRef = useRef<(id: number) => void>((id) =>
     setSelectedStudentId(id),
@@ -112,8 +145,9 @@ export function GradingProvider({
       value={{
         // StudentWithGrade[] is structurally assignable to GradingStudent[]
         // because StudentWithGrade satisfies every field GradingStudent declares.
-        students,
+        students: publicStudents,
         updateStudentGrade,
+        recordFeedbackEmailed,
         selectedStudentId,
         setSelectedStudentId,
         selectStudent,

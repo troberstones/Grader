@@ -5,7 +5,8 @@ import { PageContainer } from "@/components/layout/page-container";
 import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Calendar, ClipboardList, Pencil, ChevronRight, CheckCircle2, Clock, Circle } from "lucide-react";
+import { Plus, Calendar, ClipboardList, Pencil, ChevronRight, CheckCircle2, Clock, Circle, Mail } from "lucide-react";
+import { SendFeedbackDialog } from "@/components/feedback/send-feedback-dialog";
 import { formatTerm } from "@/lib/terms";
 
 export const dynamic = "force-dynamic";
@@ -107,6 +108,12 @@ function AssignmentRow({ assignment: a }: { assignment: AssignmentRow }) {
                 {a.stats.graded}/{a.stats.total} graded
               </span>
             )}
+            {a.stats.emailed > 0 && (
+              <span className="flex items-center gap-1" title="Students whose feedback has been emailed">
+                <Mail className="h-3 w-3" />
+                {a.stats.emailed} emailed
+              </span>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -124,6 +131,7 @@ function AssignmentRow({ assignment: a }: { assignment: AssignmentRow }) {
           </Badge>
         </div>
       </Link>
+      <SendFeedbackDialog assignmentId={a.id} trigger="icon" />
       <Link
         href={`/assignments/${a.id}/edit`}
         className="shrink-0 p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"

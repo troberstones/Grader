@@ -1,7 +1,7 @@
 import { beforeEach, vi } from "vitest";
 
 import { db } from "@/db";
-import { auditLog, invites, sessions, users } from "@/db/schema";
+import { auditLog, feedbackLinks, feedbackSends, invites, sessions, users } from "@/db/schema";
 
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
@@ -58,5 +58,8 @@ beforeEach(async () => {
   await db.delete(auditLog);
   await db.delete(sessions);
   await db.delete(invites);
+  // Both reference users (sent_by / created_by), so they go first.
+  await db.delete(feedbackSends);
+  await db.delete(feedbackLinks);
   await db.delete(users);
 });

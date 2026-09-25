@@ -13,6 +13,7 @@ import { Users, Plus, ClipboardList, Calendar, Pencil } from "lucide-react";
 import { formatTerm } from "@/lib/terms";
 import { TrackActiveCourse } from "./track-active-course";
 import { CopyCourseDialog } from "./copy-course-dialog";
+import { SendFeedbackDialog } from "@/components/feedback/send-feedback-dialog";
 
 export const dynamic = "force-dynamic";
 
@@ -116,6 +117,7 @@ export default async function CourseDetailPage({
                     <span>{a.pointsPossible} pts</span>
                   </div>
                 </Link>
+                <SendFeedbackDialog assignmentId={a.id} trigger="icon" />
                 <Link
                   href={`/assignments/${a.id}/edit`}
                   className="shrink-0 p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"

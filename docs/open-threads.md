@@ -129,6 +129,71 @@ urgent: the multiplexer is verified (keep-alive across five requests on one TLS
 connection, 2 MB multipart POST, SSE unbuffered) and costs one byte of latency.
 Do not remove it while 3000 is the only way in.
 
+## 8. The deploy host cannot send mail
+
+**Nothing emailed from the server arrives yet** — feedback, invites, password
+resets, upload links. Feedback shows the failure (the first real send came back
+`spawn /usr/sbin/sendmail ENOENT`); the others are best-effort and fail
+silently, with the copy-link flow carrying on as before.
+
+What was found on cs-1017245, 2026-09-25:
+
+- RHEL 9.8. No `/usr/sbin/sendmail` or `/usr/lib/sendmail`, no postfix/exim,
+  nothing listening on localhost:25 or :587. RHEL has not installed an MTA by
+  default for several releases, and our account has no root to add one.
+- No department relay under the obvious names: `smtp.cs.byu.edu` and
+  `smtp.byu.edu` do not resolve. `mail.cs.byu.edu` is a Google web alias
+  (ghs.google.com), not a mail server — ports 25/587 closed. `mail.byu.edu`
+  resolves but 25/587 are closed from here.
+- cs.byu.edu mail is Google Workspace (MX `aspmx.l.google.com`); byu.edu mail is
+  Office 365 (MX `byu-edu.mail.protection.outlook.com`).
+- Outbound is open to `smtp.gmail.com` 587/465, `smtp.mail.me.com` 587,
+  `smtp.office365.com` 587, and port 25 to both MX hosts.
+
+Installing postfix to deliver directly would not be enough even with root: the
+host is not in cs.byu.edu's SPF, so Gmail and Office 365 would junk or reject
+what it sends. It needs to hand mail to something that is allowed to send.
+
+`src/lib/email.ts` now takes either route, chosen by environment (`.env.example`
+§ Mail). Settings go in `/work/cnh5/grader/.env.local` on the server — it is
+gitignored, `deploy-remote.sh` leaves it alone, and Next loads it at start, so
+`systemctl --user restart grader.service` picks up a change.
+
+**Route A — an SMTP account, for testing now.** Any account with an app
+password; mail comes *from* that account.
+
+```
+SMTP_HOST=smtp.gmail.com        # iCloud: smtp.mail.me.com
+SMTP_PORT=587
+SMTP_USER=you@gmail.com         # From: defaults to this
+SMTP_PASS=app-password
+```
+
+Office 365 (@byu.edu) usually has SMTP AUTH disabled tenant-wide; Workspace
+admins can disable app passwords too — if login fails with an auth error,
+that is the likely reason, not the code.
+
+**Route B — the machine set up properly, for real use.** Ask CS IT for one of:
+
+1. an internal relay (smarthost) this host may send through — then either set
+   `SMTP_HOST` to it (plus `SMTP_USER`/`SMTP_PASS` if it wants a login) or have
+   them install postfix pointed at it, which the existing sendmail path uses
+   with no configuration; or
+2. Google Workspace's SMTP relay (`smtp-relay.gmail.com`) allowed for this
+   host's IP, which is what a cs.byu.edu address needs to be delivered cleanly.
+
+Either way, ask for a sending address such as `grader@cs.byu.edu` and set
+`MAIL_FROM` to it. Note that a relay which authenticates by IP needs
+`SMTP_USER` left unset; port 587 still requires STARTTLS
+(`requireTLS` in `email.ts`), so a relay that only speaks plain text on 25
+would need `SMTP_PORT=25` and that line relaxed.
+
+**How to tell it works.** Open *Send feedback to students*: a red "Can't send
+mail" banner means neither route is configured. Otherwise send a test — test
+mode sends to your own account (`FEEDBACK_EMAIL_STUDENTS` unset), and the
+progress list shows the provider's error for any failure. Close this item once
+one real feedback email has arrived from the server.
+
 ---
 
 ## Note

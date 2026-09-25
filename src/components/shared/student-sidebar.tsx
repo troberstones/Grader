@@ -2,12 +2,13 @@
 
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
-import { CheckCircle2, Clock, Circle, Users } from "lucide-react";
+import { CheckCircle2, Clock, Circle, Mail, MailWarning, Users } from "lucide-react";
 import { cn, formatScore } from "@/lib/utils";
 import { isReviewRoute } from "@/lib/grading-routes";
 import { useGrading } from "./grading-context";
 import { useIsReviewing } from "./session-mode";
-import type { GradeStatus } from "@/types/grading";
+import type { GradeStatus, GradingStudent } from "@/types/grading";
+import { fullDateTime } from "@/lib/feedback/format";
 
 /**
  * Shared student sidebar that lives in the grading layout.
@@ -96,6 +97,7 @@ export function StudentSidebar() {
                   <div className="text-xs text-muted-foreground">{student.netId}</div>
                 )}
               </div>
+              {detailed && student.feedbackMail && <FeedbackMailIcon mail={student.feedbackMail} />}
               {detailed && score !== null && score !== undefined && (
                 <span className="text-xs tabular-nums shrink-0 text-muted-foreground">
                   {formatScore(score)}
@@ -115,4 +117,24 @@ function StatusIcon({ status }: { status: GradeStatus }) {
   if (status === "in_progress")
     return <Clock className="h-4 w-4 text-yellow-500 shrink-0" />;
   return <Circle className="h-4 w-4 text-muted-foreground shrink-0" />;
+}
+
+/**
+ * Feedback-email state, grade sheet only (`detailed`): like the score beside
+ * it, who has been sent what is not for a projected review screen.
+ */
+function FeedbackMailIcon({ mail }: { mail: NonNullable<GradingStudent["feedbackMail"]> }) {
+  const when = fullDateTime(mail.sentAt);
+  if (mail.changed) {
+    return (
+      <span title={`Grade changed since feedback was emailed ${when}`} className="shrink-0">
+        <MailWarning className="h-3.5 w-3.5 text-yellow-500" />
+      </span>
+    );
+  }
+  return (
+    <span title={`Feedback emailed ${when}`} className="shrink-0">
+      <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+    </span>
+  );
 }

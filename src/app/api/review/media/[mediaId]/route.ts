@@ -5,6 +5,7 @@ import { reviewMedia } from "@/db/schema";
 import { serveFile } from "@grader/art-review/server";
 import { apiRequireCapability } from "@/lib/auth/api";
 import { reviewMediaResource } from "@/lib/auth/resource-lookup";
+import { feedbackTokenAllows } from "@/lib/feedback/links";
 
 /**
  * Range-served derivatives.
@@ -37,10 +38,10 @@ async function handle(request: Request, params: Promise<{ mediaId: string }>) {
 
   const resource = await reviewMediaResource(id);
   const auth = await apiRequireCapability("roster.view", resource);
-  if (!auth.user) return auth.response;
-
   const rows = await db.select().from(reviewMedia).where(eq(reviewMedia.id, id));
   const media = rows[0];
+  // No session: a student's feedback link may still cover their own work.
+  if (!auth.user && !(media && (await feedbackTokenAllows(request, media.submissionId)))) return auth.response;
   if (!media) return new Response("Not found", { status: 404 });
 
   const root = process.cwd();

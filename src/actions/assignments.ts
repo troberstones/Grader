@@ -5,6 +5,8 @@ import { assignments, courses, courseMembers, rubrics, rubricCriteria, rubricLev
 import { eq, desc, and, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireCapability } from "@/lib/auth/require";
+import { feedbackTestMode } from "@/lib/feedback/config";
+import { feedbackHistory } from "@/lib/feedback/history";
 import type { Term } from "@/lib/terms";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -51,6 +53,13 @@ export async function getAssignmentsForCourse(courseId: number) {
     .where(and(eq(assignments.courseId, courseId), eq(assignments.archived, 0)))
     .orderBy(desc(assignments.createdAt));
 
+  // How many students' feedback has been emailed, per assignment — for the
+  // assignment list's "n emailed" line. Only test sends count in test mode,
+  // only real ones otherwise (src/lib/feedback/config.ts).
+  const history = await feedbackHistory(rows.map((a) => a.id), feedbackTestMode());
+  const emailedCount = (assignmentId: number) =>
+    [...history].filter(([key, h]) => key.startsWith(`${assignmentId}:`) && h.lastSent).length;
+
   // Attach grade stats
   const withStats = await Promise.all(
     rows.map(async (a) => {
@@ -61,7 +70,7 @@ export async function getAssignmentsForCourse(courseId: number) {
       const total = gradeRows.length;
       const graded = gradeRows.filter((g) => g.status === "graded").length;
       const inProgress = gradeRows.filter((g) => g.status === "in_progress").length;
-      return { ...a, stats: { total, graded, inProgress } };
+      return { ...a, stats: { total, graded, inProgress, emailed: emailedCount(a.id) } };
     })
   );
 
