@@ -58,7 +58,7 @@ function readViewPref(raw: string | null): RubricGradingViewKey | null {
  * one that reaches the nudge positions between bands.
  */
 export function RubricGradingPanel({ grading, dense = false }: Props) {
-  const { assignment, criteria, feedback, setFeedback, saving, handleSave } = grading;
+  const { assignment, criteria, feedback, setFeedback, saving, saveFailed, handleSave } = grading;
 
   // Deliberately deferred to an effect rather than a lazy useState
   // initializer: this component renders during SSR, where localStorage
@@ -157,7 +157,22 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
           </div>
 
           <div className="flex items-center gap-3">
-            {saving && <span className="text-xs text-muted-foreground animate-pulse">Saving…</span>}
+            {saveFailed ? (
+              // Persistent — not a toast — because a toast is gone by the
+              // time anyone notices the edit never actually saved.
+              <span className="text-xs text-destructive flex items-center gap-1.5">
+                Unsaved changes
+                <button
+                  type="button"
+                  onClick={() => handleSave(false)}
+                  className="underline font-medium hover:no-underline"
+                >
+                  Retry
+                </button>
+              </span>
+            ) : (
+              saving && <span className="text-xs text-muted-foreground animate-pulse">Saving…</span>
+            )}
             <Button
               onClick={() => handleSave(true)}
               disabled={saving || !complete}

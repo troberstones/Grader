@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { ClipboardList, Image as ImageIcon, PanelRight } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useGrading } from "./grading-context";
 import { useIsReviewing } from "./session-mode";
@@ -26,9 +27,10 @@ import { cn } from "@/lib/utils";
 export function ViewSwitch() {
   const pathname = usePathname();
   const router = useRouter();
-  const { selectedStudentId } = useGrading();
+  const { selectedStudentId, flushHandlerRef } = useGrading();
   const { canDock, rubricDocked, setRubricDocked } = useViewLayout();
   const reviewing = useIsReviewing();
+  const [switching, setSwitching] = useState(false);
 
   const assignmentId = pathname.match(/^\/assignments\/(\d+)(\/|$)/)?.[1];
   const onArtwork = isReviewRoute(pathname);
@@ -40,6 +42,22 @@ export function ViewSwitch() {
       : `/assignments/${assignmentId}/review${student}`;
   };
 
+  // Flushes the rubric's pending autosave before leaving it — bypassing this
+  // (a direct router.push) is how an edit made seconds ago on the grade sheet
+  // never made it into the save that was still sitting on its 1.5s debounce.
+  // A failed flush keeps the view where it is instead of carrying the grader
+  // off to artwork with unsaved work behind them.
+  async function go(mode: "rubric" | "artwork") {
+    setSwitching(true);
+    const ok = await flushHandlerRef.current();
+    setSwitching(false);
+    if (!ok) {
+      toast.error("Couldn't save your changes — try again before switching views");
+      return;
+    }
+    router.push(href(mode));
+  }
+
   // "t" flips between the two. It used to live in the grade sheet and only
   // pushed one way, which meant the key did nothing once you were on the
   // artwork — the same half-wiring as the button.
@@ -47,15 +65,18 @@ export function ViewSwitch() {
     if (!assignmentId || reviewing) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "t" || e.metaKey || e.ctrlKey || e.altKey) return;
+      // The art reviewer's own "t" is its Text tool (ArtReviewer.tsx) — this
+      // shortcut only ever flips rubric → artwork, never the other way.
+      if (onArtwork) return;
       const el = e.target as HTMLElement;
       if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
       e.preventDefault();
-      router.push(href(onArtwork ? "rubric" : "artwork"));
+      void go("artwork");
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assignmentId, onArtwork, selectedStudentId, reviewing, router]);
+  }, [assignmentId, onArtwork, selectedStudentId, reviewing, flushHandlerRef]);
 
   if (!assignmentId) return null;
 
@@ -70,7 +91,8 @@ export function ViewSwitch() {
       <div className="flex items-center rounded-md border p-0.5" role="group">
         <SegmentButton
           active={!onArtwork}
-          onClick={() => router.push(href("rubric"))}
+          disabled={switching}
+          onClick={() => void go("rubric")}
           title="Rubric — score this student (t)"
         >
           <ClipboardList className="h-3.5 w-3.5" />
@@ -78,7 +100,8 @@ export function ViewSwitch() {
         </SegmentButton>
         <SegmentButton
           active={onArtwork}
-          onClick={() => router.push(href("artwork"))}
+          disabled={switching}
+          onClick={() => void go("artwork")}
           title="Artwork — review the submission (t)"
         >
           <ImageIcon className="h-3.5 w-3.5" />
@@ -108,11 +131,13 @@ export function ViewSwitch() {
 
 function SegmentButton({
   active,
+  disabled,
   onClick,
   title,
   children,
 }: {
   active: boolean;
+  disabled?: boolean;
   onClick: () => void;
   title: string;
   children: React.ReactNode;
@@ -121,10 +146,11 @@ function SegmentButton({
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       title={title}
       aria-pressed={active}
       className={cn(
-        "flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors",
+        "flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors disabled:opacity-50",
         active
           ? "bg-primary/10 text-primary"
           : "text-muted-foreground hover:text-foreground hover:bg-accent",
