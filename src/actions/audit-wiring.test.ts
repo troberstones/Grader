@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { desc, eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { assignments, auditLog, courses, rubricCriteria, rubricLevels, rubrics, students, users } from "@/db/schema";
+import { assignments, auditLog, courseMembers, courses, rubricCriteria, rubricLevels, rubrics, students, users } from "@/db/schema";
 import { createSession } from "@/lib/auth/session";
 import { hashPassword } from "@/lib/auth/password";
 import { forceSignOut, setUserRole, setUserStatus } from "@/actions/auth";
+import { removeCourseMember, updateCourseMemberRole } from "@/actions/course-members";
 import { clearGrade, saveShareGrade } from "@/actions/grades";
 import { deleteRubric } from "@/actions/rubrics";
 import { deleteCourse } from "@/actions/courses";
@@ -119,6 +120,38 @@ describe("audit log wiring", () => {
     await deleteCourse(course.id);
 
     const row = await latestAuditRow("course.delete");
+    expect(row?.targetId).toBe(course.id);
+  });
+
+  it("records updateCourseMemberRole", async () => {
+    const admin = await seedSignedInAdmin();
+    const [course] = await db
+      .insert(courses)
+      .values({ name: "Roles Course", code: "ROLE 100", year: 2026, term: "fall" })
+      .returning();
+    const target = await seedTargetUser("role-member-target@example.test");
+    await db.insert(courseMembers).values({ courseId: course.id, userId: target.id, role: "observer" });
+
+    await updateCourseMemberRole(course.id, target.id, "ta");
+
+    const row = await latestAuditRow("course_member.role_change");
+    expect(row?.actorId).toBe(admin.id);
+    expect(row?.targetType).toBe("course");
+    expect(row?.targetId).toBe(course.id);
+  });
+
+  it("records removeCourseMember", async () => {
+    await seedSignedInAdmin();
+    const [course] = await db
+      .insert(courses)
+      .values({ name: "Membership Course", code: "MEM 100", year: 2026, term: "fall" })
+      .returning();
+    const target = await seedTargetUser("remove-member-target@example.test");
+    await db.insert(courseMembers).values({ courseId: course.id, userId: target.id, role: "observer" });
+
+    await removeCourseMember(course.id, target.id);
+
+    const row = await latestAuditRow("course_member.remove");
     expect(row?.targetId).toBe(course.id);
   });
 });

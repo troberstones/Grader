@@ -93,7 +93,30 @@ const TLS_HANDSHAKE = 0x16;
 const PROTOCOL_TIMEOUT_MS = 30_000;
 
 const app = next({ dev, hostname, port });
-const handle = app.getRequestHandler();
+const rawHandle = app.getRequestHandler();
+
+/**
+ * Next only sets `x-forwarded-for` when the header is absent from the
+ * incoming request — it never overwrites a value the client already sent.
+ * That means anyone can hand it an arbitrary value, and auth.ts's per-IP
+ * login throttle (and the audit log's `ip` column) trusts whatever's there.
+ * Rotate the header, defeat the per-IP limit entirely.
+ *
+ * This process isn't behind a real reverse proxy — server.mjs *is* the edge,
+ * per the file header above — so the only trustworthy address is the TCP
+ * socket's. Overwrite the header with that before Next ever sees the
+ * request. TRUST_PROXY=1 opts back out, for the day this does move behind
+ * something that sets the header correctly itself.
+ */
+const TRUST_PROXY = process.env.TRUST_PROXY === "1";
+
+function handle(req, res, parsedUrl) {
+  if (!TRUST_PROXY) {
+    req.headers["x-forwarded-for"] = req.socket.remoteAddress ?? "";
+    delete req.headers["x-real-ip"];
+  }
+  return rawHandle(req, res, parsedUrl);
+}
 
 /** An https server for the multiplexer to hand sockets to, or null with why. */
 function tlsServer() {

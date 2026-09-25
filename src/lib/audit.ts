@@ -12,6 +12,8 @@ export type AuditAction =
   | "user.force_sign_out"
   | "user.invite"
   | "user.password_reset_issued"
+  | "user.password_change"
+  | "user.archive_access_change"
   | "course.delete"
   | "assignment.delete"
   | "rubric.delete"
@@ -19,14 +21,26 @@ export type AuditAction =
   | "upload_link.revoke"
   | "upload_link.use"
   | "submission.batch_import"
-  | "feedback.send";
+  | "feedback.send"
+  | "auth.sign_in"
+  | "auth.sign_in_failed"
+  | "auth.sign_out"
+  | "auth.lockout"
+  | "session.revoke"
+  | "course_member.add"
+  | "course_member.remove"
+  | "course_member.role_change";
 
 /**
  * Record who did what. Append-only, best-effort: a write failure here must
  * never fail the action it's recording, so this never throws.
+ *
+ * `actor.id` is nullable for a sign-in failure against an email that matches
+ * no account — there is no user row to point at, but the attempted address
+ * still belongs in `actorEmail` for the log to be useful.
  */
 export async function writeAudit(
-  actor: { id: number; email: string },
+  actor: { id: number | null; email: string },
   entry: { action: AuditAction; targetType?: string; targetId?: number; detail?: Record<string, unknown> },
 ): Promise<void> {
   try {

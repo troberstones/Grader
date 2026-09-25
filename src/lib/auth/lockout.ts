@@ -2,6 +2,7 @@ import { eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { users } from "@/db/schema";
+import { writeAudit } from "@/lib/audit";
 import { expiryFromNow, isExpired } from "./tokens";
 
 /**
@@ -58,7 +59,7 @@ export async function recordFailedLogin(userId: number): Promise<void> {
     .where(eq(users.id, userId));
 
   const [row] = await db
-    .select({ failedLoginAttempts: users.failedLoginAttempts })
+    .select({ failedLoginAttempts: users.failedLoginAttempts, email: users.email })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
@@ -68,6 +69,15 @@ export async function recordFailedLogin(userId: number): Promise<void> {
       .update(users)
       .set({ lockedUntil: expiryFromNow(LOCKOUT_DURATION_MS) })
       .where(eq(users.id, userId));
+    // Logged once, at the moment the account crosses the threshold — not on
+    // every subsequent rejected attempt while it stays locked, which would
+    // just be the same fact recorded again for as long as the lockout lasts.
+    if (row) {
+      await writeAudit(
+        { id: userId, email: row.email },
+        { action: "auth.lockout", targetType: "user", targetId: userId, detail: { attempts: row.failedLoginAttempts } },
+      );
+    }
   }
 }
 

@@ -18,8 +18,18 @@ const ACTION_LABELS: Record<string, string> = {
   "user.force_sign_out": "Forced sign-out",
   "user.invite": "User invited",
   "user.password_reset_issued": "Password reset issued",
+  "user.password_change": "Password changed",
+  "user.archive_access_change": "Archive access changed",
   "course.delete": "Course deleted",
   "rubric.delete": "Rubric deleted",
+  "auth.sign_in": "Signed in",
+  "auth.sign_in_failed": "Sign-in failed",
+  "auth.sign_out": "Signed out",
+  "auth.lockout": "Account locked",
+  "session.revoke": "Sessions revoked",
+  "course_member.add": "Course member added",
+  "course_member.remove": "Course member removed",
+  "course_member.role_change": "Course member role changed",
 };
 
 function describeTarget(row: AuditLogRow): string {

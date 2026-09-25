@@ -4,7 +4,7 @@
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { sessions, users } from "@/db/schema";
@@ -162,9 +162,37 @@ export async function destroySession(): Promise<void> {
   jar.delete(SESSION_COOKIE);
 }
 
-/** Drop every session for a user: disabling an account, or a forced logout. */
-export async function destroyAllSessions(userId: number): Promise<void> {
-  await db.delete(sessions).where(eq(sessions.userId, userId));
+/**
+ * Drop every session for a user: disabling an account, or a forced logout.
+ *
+ * Returns how many rows were removed, so a caller that just changed this
+ * user's credentials (accepting an invite or a password-reset link) can log
+ * whether a stolen or forgotten-open session was actually cut off.
+ */
+export async function destroyAllSessions(userId: number): Promise<number> {
+  const result = await db.delete(sessions).where(eq(sessions.userId, userId));
+  return result.changes ?? 0;
+}
+
+/**
+ * Drop every session for a user except the one making this request.
+ *
+ * Used when a signed-in user changes their own password: the request doing
+ * the changing must keep working (there is no new session to hand it), but a
+ * token copied or stolen earlier must not survive the change. Falls back to
+ * destroying everything if there is somehow no current cookie to spare.
+ */
+export async function destroyOtherSessions(userId: number): Promise<number> {
+  const jar = await cookies();
+  const token = jar.get(SESSION_COOKIE)?.value;
+  const keepHash = token ? hashToken(token) : null;
+
+  const result = await db
+    .delete(sessions)
+    .where(
+      keepHash ? and(eq(sessions.userId, userId), ne(sessions.tokenHash, keepHash)) : eq(sessions.userId, userId),
+    );
+  return result.changes ?? 0;
 }
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────
