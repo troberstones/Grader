@@ -58,6 +58,12 @@ export interface ArtReviewerProps {
    * feeds it back in via `initial`.
    */
   onGuidesChange?: (guides: GuideKind) => void;
+  /**
+   * View-only: no drawing, erasing, undo or clearing, and no ink rail —
+   * annotations are shown exactly as stored. For a student looking at their own
+   * feedback. The adapter should refuse writes as well; this is the UI half.
+   */
+  readOnly?: boolean;
 }
 
 const LASER_LIFETIME_MS = 1200;
@@ -83,18 +89,28 @@ export function ArtReviewer({
   onPositionChange,
   onItemsChanged,
   onGuidesChange,
+  readOnly = false,
 }: ArtReviewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
 
-  const [tools, setTools] = useState<ToolState>({
-    tool: "pen",
+  // Read-only pins the tool to "select", which is the pan tool: every path
+  // that could start a stroke, erase or place text branches off before then.
+  const [tools, setToolsState] = useState<ToolState>({
+    tool: readOnly ? "select" : "pen",
     color: "#ef4444",
     width: 4,
   });
+  const setTools = useCallback<typeof setToolsState>(
+    (next) => {
+      if (!readOnly) setToolsState(next);
+    },
+    [readOnly],
+  );
   const [showHelp, setShowHelp] = useState(false);
-  const [audioOwner, setAudioOwner] = useState(false);
+  // One viewer on their own device is the whole room, so it plays the audio.
+  const [audioOwner, setAudioOwner] = useState(readOnly);
   const [textPrompt, setTextPrompt] = useState<{ x: number; y: number; value: string } | null>(null);
   const [playlistBusy, setPlaylistBusy] = useState(false);
   const [stageDragOver, setStageDragOver] = useState(false);
@@ -948,7 +964,7 @@ export function ArtReviewer({
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === "z") {
         e.preventDefault();
-        void (e.shiftKey ? annotations.redo() : annotations.undo());
+        if (!readOnly) void (e.shiftKey ? annotations.redo() : annotations.undo());
         return;
       }
       if (mod) return;
@@ -1060,6 +1076,7 @@ export function ArtReviewer({
           break;
 
         case "m":
+          if (readOnly) return;
           session.isMaster ? session.release() : session.claim();
           return;
       }
@@ -1085,6 +1102,7 @@ export function ArtReviewer({
     };
   }, [
     state, dispatch, viewer, annotations, frameCount, items.length, jumpAnnotation, setZoom, session,
+    readOnly, setTools,
   ]);
 
   const manifest = source instanceof LayeredSource ? source.manifest() : null;
@@ -1149,7 +1167,7 @@ export function ArtReviewer({
           which student — so one row is the normal case. It still wraps rather
           than clipping: a hidden "Follow view" is worse than a shorter stage. */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0, flexWrap: "wrap" }}>
-        <Presence session={session} />
+        {!readOnly && <Presence session={session} />}
         {/* Beside "Follow view" on purpose: both answer "what does this screen
             do in the room", as opposed to what the clip does. */}
         <label
@@ -1190,13 +1208,13 @@ export function ArtReviewer({
             overflows the header no matter how willing the header is to wrap. */}
         <div style={{ minWidth: 0, overflowX: "auto" }}>{headerSlot}</div>
         {/* The keyboard shortcut is no use on the device this is for. */}
-        <button
+        {!readOnly && <button
           onClick={() => setShowLog((v) => !v)}
           style={{ ...textButton(showLog), flexShrink: 0 }}
           title="Input log — every pointer event and what it did  D"
         >
           ⌁
-        </button>
+        </button>}
         <button
           onClick={() => setShowHelp(true)}
           style={{ ...textButton(), flexShrink: 0 }}
@@ -1404,7 +1422,7 @@ export function ArtReviewer({
       </div>
       </div>
 
-      <InkRail
+      {!readOnly && <InkRail
         tools={tools}
         canUndo={annotations.canUndo}
         canRedo={annotations.canRedo}
@@ -1415,7 +1433,7 @@ export function ArtReviewer({
         onUndo={() => void annotations.undo()}
         onRedo={() => void annotations.redo()}
         onClear={() => void annotations.clearFrame(state.frame)}
-      />
+      />}
 
       {showHelp && <HelpSheet onClose={() => setShowHelp(false)} />}
     </div>

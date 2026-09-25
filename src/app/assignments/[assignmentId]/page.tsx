@@ -6,6 +6,7 @@ import { Header } from "@/components/layout/header";
 import { LinkButton } from "@/components/ui/link-button";
 import { GradeSheetClient } from "./grade-sheet-client";
 import { SendUploadLinkDialog } from "./send-upload-link-dialog";
+import { SendFeedbackButton } from "./send-feedback-button";
 import { UploadZipButton } from "./upload-zip-button";
 import { Calendar, BookOpen, Pencil } from "lucide-react";
 
@@ -49,7 +50,8 @@ export default async function AssignmentGradeSheetPage({
           </span>
         }
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <SendFeedbackButton assignmentId={assignment.id} />
             <SendUploadLinkDialog assignmentId={assignment.id} courseId={assignment.courseId} />
             <UploadZipButton assignmentId={assignment.id} />
             <LinkButton href={`/assignments/${assignment.id}/edit`} variant="outline">

@@ -6,15 +6,17 @@ import { submissions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { apiRequireCapability } from "@/lib/auth/api";
 import { submissionResource } from "@/lib/auth/resource-lookup";
+import { feedbackTokenAllows } from "@/lib/feedback/links";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ submissionId: string }> }
 ) {
   const { submissionId } = await params;
   const resource = await submissionResource(Number(submissionId));
   const auth = await apiRequireCapability("roster.view", resource);
-  if (!auth.user) return auth.response;
+  // No session: a student's feedback link may still cover their own work.
+  if (!auth.user && !(await feedbackTokenAllows(request, Number(submissionId)))) return auth.response;
 
   const rows = await db
     .select()

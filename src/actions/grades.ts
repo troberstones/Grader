@@ -19,6 +19,8 @@ import { assignmentResource } from "@/lib/auth/resource-lookup";
 import { computeScore, criterionPoints, toNormalRubric, toSelections } from "@/lib/rubric";
 import type { DbCriterionRow } from "@/lib/rubric";
 import { writeAudit } from "@/lib/audit";
+import { feedbackTestMode } from "@/lib/feedback/config";
+import { feedbackHistory } from "@/lib/feedback/history";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,6 +49,12 @@ export type StudentWithGrade = {
   netId: string | null;
   email: string | null;
   grade: StudentGrade | null;
+  /**
+   * The last feedback email that went out for this assignment (see
+   * src/actions/feedback.ts), with the grade fingerprint at the time so the
+   * sidebar can tell when the grade has changed since.
+   */
+  emailedFeedback: { sentAt: string; fingerprint: string | null } | null;
 };
 
 /** The row shape of `grades`, handed back verbatim on a stale-write conflict. */
@@ -96,8 +104,11 @@ export async function getGradeSheet(assignmentId: number): Promise<StudentWithGr
       ).then((results) => results.flat())
     : [];
 
+  const history = await feedbackHistory([assignmentId], feedbackTestMode());
+
   return enrolled.map((student) => {
     const grade = gradeRows.find((g) => g.studentId === student.id) ?? null;
+    const lastSent = history.get(`${assignmentId}:${student.id}`)?.lastSent ?? null;
     const entries = grade
       ? allEntries.filter((e) => e.gradeId === grade.id).map((e) => ({
           criteriaId: e.criteriaId,
@@ -120,6 +131,7 @@ export async function getGradeSheet(assignmentId: number): Promise<StudentWithGr
             entries,
           }
         : null,
+      emailedFeedback: lastSent ? { sentAt: lastSent.sentAt, fingerprint: lastSent.fingerprint } : null,
     };
   });
 }

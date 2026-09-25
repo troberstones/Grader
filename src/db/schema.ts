@@ -388,3 +388,58 @@ export const reviewPrefs = sqliteTable("review_prefs", {
 }, (table) => [
   uniqueIndex("review_prefs_context_idx").on(table.contextId),
 ]);
+
+// ─── Feedback to students ───────────────────────────────────────────────
+// See src/actions/feedback.ts. One row per attempt to email one student their
+// feedback, successful or not — the professor's record of what went out, to
+// whom, and when.
+//
+// `gradeFingerprint` is the grade as it stood when this was sent (see
+// src/lib/feedback/fingerprint.ts). Comparing it to the current grade is how
+// "Graded" skips a student who already has their feedback, unless the grade
+// has changed since.
+//
+// `testMode` rows were redirected to the sending instructor instead of the
+// student (FEEDBACK_EMAIL_STUDENTS unset). They are kept apart from real sends
+// in every query, so testing never makes a student look already emailed.
+export const feedbackSends = sqliteTable("feedback_sends", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  assignmentId: integer("assignment_id").notNull().references(() => assignments.id, { onDelete: "cascade" }),
+  studentId: integer("student_id").notNull().references(() => students.id, { onDelete: "cascade" }),
+  sentBy: integer("sent_by").references(() => users.id),
+  // The address actually handed to the mail transport — the student's, or the
+  // instructor's own in test mode.
+  recipient: text("recipient").notNull(),
+  testMode: integer("test_mode").notNull().default(0),
+  includeRubric: integer("include_rubric").notNull().default(0),
+  includeAnnotations: integer("include_annotations").notNull().default(0),
+  includeLink: integer("include_link").notNull().default(0),
+  letterGrade: text("letter_grade"),
+  frameCount: integer("frame_count").notNull().default(0),
+  gradeFingerprint: text("grade_fingerprint"),
+  status: text("status").notNull(), // 'sent' | 'failed'
+  error: text("error"),
+  sentAt: text("sent_at").notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index("feedback_sends_assignment_idx").on(table.assignmentId, table.studentId),
+]);
+
+// Read-only links to a student's own feedback — rubric, letter grade, and
+// their work with annotations in the reviewer. Same token handling as
+// `upload_links`: only the SHA-256 is stored, and reissuing revokes the old
+// link. Expires at the end of the course's term (src/lib/terms.ts).
+export const feedbackLinks = sqliteTable("feedback_links", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  assignmentId: integer("assignment_id").notNull().references(() => assignments.id, { onDelete: "cascade" }),
+  studentId: integer("student_id").notNull().references(() => students.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(),
+  createdBy: integer("created_by").references(() => users.id),
+  expiresAt: text("expires_at").notNull(),
+  revokedAt: text("revoked_at"),
+  lastViewedAt: text("last_viewed_at"),
+  viewCount: integer("view_count").notNull().default(0),
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  uniqueIndex("feedback_links_token_idx").on(table.tokenHash),
+  index("feedback_links_assignment_idx").on(table.assignmentId, table.studentId),
+]);

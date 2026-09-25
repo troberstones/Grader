@@ -16,4 +16,9 @@ export interface GradingStudent {
     status: GradeStatus;
     totalScore: number | null;
   } | null;
+  /**
+   * Feedback email state for the sidebar: when it was last emailed, and
+   * whether the grade has changed since. Absent when never emailed.
+   */
+  feedbackMail?: { sentAt: string; changed: boolean } | null;
 }
