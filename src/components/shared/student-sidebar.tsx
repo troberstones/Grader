@@ -9,14 +9,16 @@ import { useGrading } from "./grading-context";
 import { useIsReviewing } from "./session-mode";
 import type { GradeStatus, GradingStudent } from "@/types/grading";
 import { fullDateTime } from "@/lib/feedback/format";
+import { letterFor } from "@/lib/rubric";
 
 /**
  * Shared student sidebar that lives in the grading layout.
  * Persists (including scroll position) across grade ↔ review navigation.
  *
- * On the grade sheet each row carries the net ID and the score, because that is
- * the view where you are looking things up. On the review route it is names
- * only, which buys back both the second line of every row and 48px of width for
+ * On the grade sheet each row carries the net ID and the score with its letter
+ * grade, because that is the view where you are looking things up. On the
+ * review route it is names only, which buys back both the second line of every
+ * row and 48px of width for
  * the artwork — and keeps a column of everyone's marks off a screen that may be
  * mirrored to a projector. See docs/security.md.
  *
@@ -26,7 +28,7 @@ import { fullDateTime } from "@/lib/feedback/format";
  * students — and in a session that cannot grade, they are progress against work
  * you are not here to do.
  */
-export function StudentSidebar() {
+export function StudentSidebar({ pointsPossible }: { pointsPossible: number }) {
   const { students, selectedStudentId, selectStudent, scrollRef } = useGrading();
   const reviewing = useIsReviewing();
   const onReviewRoute = isReviewRoute(usePathname());
@@ -101,6 +103,11 @@ export function StudentSidebar() {
               {detailed && score !== null && score !== undefined && (
                 <span className="text-xs tabular-nums shrink-0 text-muted-foreground">
                   {formatScore(score)}
+                  {pointsPossible > 0 && (
+                    <span className="ml-1.5 inline-block w-5 font-medium text-foreground">
+                      {letterFor((score / pointsPossible) * 100)}
+                    </span>
+                  )}
                 </span>
               )}
             </button>
