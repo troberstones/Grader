@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/link-button";
 import { Grid3X3, Trash2, Copy, Download, Upload } from "lucide-react";
 import { deleteRubric, duplicateRubric, createShareRubric } from "@/actions/rubrics";
+import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog";
 import { toast } from "sonner";
 import { convertLegacyRubric } from "@/lib/rubric";
 import type { AuthoredRubric, LegacyRubric } from "@/lib/rubric";
@@ -20,8 +22,10 @@ interface RubricItem {
 }
 
 export function RubricLibrary({ rubrics }: { rubrics: RubricItem[] }) {
+  const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<RubricItem | null>(null);
 
   async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -63,11 +67,6 @@ export function RubricLibrary({ rubrics }: { rubrics: RubricItem[] }) {
     toast.success(`Duplicated: ${name}`);
   }
 
-  async function handleDelete(id: number, name: string) {
-    if (!confirm(`Delete rubric "${name}"? This cannot be undone.`)) return;
-    await deleteRubric(id);
-    toast.success("Rubric deleted");
-  }
 
   async function handleExport(id: number, name: string) {
     const res = await fetch(`/api/rubrics/${id}/export`);
@@ -127,7 +126,7 @@ export function RubricLibrary({ rubrics }: { rubrics: RubricItem[] }) {
                     variant="ghost"
                     size="sm"
                     className="text-destructive"
-                    onClick={() => handleDelete(rubric.id, rubric.name)}
+                    onClick={() => setDeleteTarget(rubric)}
                   >
                     <Trash2 className="mr-1 h-3 w-3" />
                     Delete
@@ -137,6 +136,19 @@ export function RubricLibrary({ rubrics }: { rubrics: RubricItem[] }) {
             </Card>
           ))}
         </div>
+      )}
+      {deleteTarget && (
+        <DeleteConfirmDialog
+          open={!!deleteTarget}
+          onOpenChange={(open) => {
+            if (!open) setDeleteTarget(null);
+          }}
+          itemName={deleteTarget.name}
+          itemKind="rubric"
+          // Rubrics have no archive concept — omitting onArchive hides that button.
+          onDelete={() => deleteRubric(deleteTarget.id)}
+          onDeleted={() => router.refresh()}
+        />
       )}
     </div>
   );

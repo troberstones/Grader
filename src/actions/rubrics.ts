@@ -1,13 +1,46 @@
 "use server";
 
 import { db } from "@/db";
-import { rubrics, rubricCriteria, rubricLevels, gradeEntries } from "@/db/schema";
+import { rubrics, rubricCriteria, rubricLevels, gradeEntries, assignments } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { RubricJSON, RubricCriterion, RubricSettings } from "@/types/rubric";
 import { requireCapability } from "@/lib/auth/require";
+import type { SessionUser } from "@/lib/auth/session";
 import { validateRubric, isShareModel, type AuthoredRubric } from "@/lib/rubric";
 import { writeAudit } from "@/lib/audit";
+
+// ─── Authorization ──────────────────────────────────────────────────────────
+
+/**
+ * Rubrics are a global library (see roles.ts: `course.edit` on the global
+ * resource is granted to any instructor/assistant), which is right for a
+ * rubric nobody has attached to anything yet — but wrong the moment it's in
+ * use, since editing it then changes grading for a course the caller may
+ * have no part in. Without a schema change (no `course_id` on `rubrics`),
+ * "in use" is derived from `assignments.rubric_id`: if any assignment uses
+ * this rubric, the caller needs `course.edit` on every one of those
+ * assignments' courses, not just the global capability. An unused rubric
+ * keeps the old, library-wide behavior. Admins bypass this the same way they
+ * bypass every other capability check, via can() in roles.ts.
+ */
+async function requireRubricEditAccess(rubricId: number): Promise<SessionUser> {
+  const usingAssignments = await db
+    .select({ courseId: assignments.courseId })
+    .from(assignments)
+    .where(eq(assignments.rubricId, rubricId));
+
+  if (usingAssignments.length === 0) {
+    return requireCapability("course.edit");
+  }
+
+  const courseIds = [...new Set(usingAssignments.map((a) => a.courseId))];
+  let actor: SessionUser | null = null;
+  for (const courseId of courseIds) {
+    actor = await requireCapability("course.edit", { kind: "course", courseId });
+  }
+  return actor as SessionUser;
+}
 
 export async function getRubrics() {
   await requireCapability("course.view");
@@ -143,7 +176,7 @@ export async function createShareRubric(data: AuthoredRubric): Promise<{ id: num
  * case — is handled exactly right by this.
  */
 export async function updateShareRubric(id: number, data: AuthoredRubric): Promise<void> {
-  await requireCapability("course.edit");
+  await requireRubricEditAccess(id);
   const result = validateRubric(data);
   if (!result.ok || !result.rubric) {
     throw new Error(result.errors.map((e) => `${e.where}: ${e.message}`).join("; "));
@@ -211,17 +244,55 @@ export async function updateShareRubric(id: number, data: AuthoredRubric): Promi
   revalidatePath(`/rubrics/${id}`);
 }
 
-export async function deleteRubric(id: number) {
-  const actor = await requireCapability("course.edit");
+export type DeleteRubricOutcome = { ok: true } | { ok: false; reason: "in_use" | "not_found" | "referenced"; message: string };
+
+/**
+ * Deletes a rubric, refusing when any assignment still uses it (owner's
+ * decision: rubrics in use can't be deleted, only unassigned first). Unlike
+ * the old delete-criteria-then-criteria-then-rubric sequence, this is a
+ * single statement inside a transaction: rubric_criteria.rubric_id and
+ * rubric_levels.criteria_id both cascade (see drizzle/0000_loud_hitman.sql),
+ * so deleting the rubrics row is enough — there's no partial-delete state to
+ * leave behind if it fails partway.
+ *
+ * `grade_entries.criteria_id` does NOT cascade, so a criterion that still has
+ * grade history from a *previous* rubric assignment (the assignment was
+ * later repointed to a different rubric) would make the cascade fail at the
+ * DB level even though no assignment currently references this rubric. That
+ * edge case isn't covered by the owner's "in use" wording, so it's handled
+ * conservatively here: caught and reported as a refusal rather than an
+ * unhandled throw.
+ */
+export async function deleteRubric(id: number): Promise<DeleteRubricOutcome> {
+  const actor = await requireRubricEditAccess(id);
   const [rubric] = await db.select({ name: rubrics.name }).from(rubrics).where(eq(rubrics.id, id));
-  const criteria = await db.select().from(rubricCriteria).where(eq(rubricCriteria.rubricId, id));
-  for (const c of criteria) {
-    await db.delete(rubricLevels).where(eq(rubricLevels.criteriaId, c.id));
+  if (!rubric) return { ok: false, reason: "not_found", message: "Rubric not found." };
+
+  const usingAssignments = await db.select({ name: assignments.name }).from(assignments).where(eq(assignments.rubricId, id));
+  if (usingAssignments.length > 0) {
+    const names = usingAssignments.map((a) => a.name).join(", ");
+    return {
+      ok: false,
+      reason: "in_use",
+      message: `This rubric is used by ${usingAssignments.length} assignment${usingAssignments.length === 1 ? "" : "s"} (${names}) — rubrics in use can't be deleted.`,
+    };
   }
-  await db.delete(rubricCriteria).where(eq(rubricCriteria.rubricId, id));
-  await db.delete(rubrics).where(eq(rubrics.id, id));
-  await writeAudit(actor, { action: "rubric.delete", targetType: "rubric", targetId: id, detail: { name: rubric?.name } });
+
+  try {
+    db.transaction((tx) => {
+      tx.delete(rubrics).where(eq(rubrics.id, id)).run();
+    });
+  } catch {
+    return {
+      ok: false,
+      reason: "referenced",
+      message: "This rubric can't be deleted because grade history still refers to it.",
+    };
+  }
+
+  await writeAudit(actor, { action: "rubric.delete", targetType: "rubric", targetId: id, detail: { name: rubric.name } });
   revalidatePath("/rubrics");
+  return { ok: true };
 }
 
 /**

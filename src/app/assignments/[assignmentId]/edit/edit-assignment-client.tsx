@@ -11,8 +11,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { updateAssignment } from "@/actions/assignments";
+import { updateAssignment, deleteAssignment, archiveAssignment } from "@/actions/assignments";
+import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog";
 import { toast } from "sonner";
+import { Trash2 } from "lucide-react";
 import type { getAssignment, getAllAssignments } from "@/actions/assignments";
 import type { getCourses } from "@/actions/courses";
 import type { getRubrics } from "@/actions/rubrics";
@@ -32,6 +34,7 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
   const router = useRouter();
   const searchParams = useSearchParams();
   const [saving, setSaving] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const [name, setName] = useState(assignment.name);
   const [description, setDescription] = useState(assignment.description ?? "");
@@ -240,6 +243,24 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
           </CardContent>
         </Card>
 
+        {/* Danger zone */}
+        <Card className="border-destructive/30">
+          <CardHeader>
+            <CardTitle className="text-base text-destructive">Danger Zone</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-sm text-muted-foreground">
+                Permanently delete this assignment and its submissions, grades, and annotations.
+              </p>
+              <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete Assignment
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
         <div className="flex justify-between gap-3">
           <LinkButton href={`/assignments/${assignment.id}`} variant="outline">
             Cancel
@@ -249,6 +270,17 @@ export function EditAssignmentClient({ assignment, courses, rubrics }: EditAssig
           </Button>
         </div>
       </div>
+
+      <DeleteConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        itemName={assignment.name}
+        itemKind="assignment"
+        onDelete={() => deleteAssignment(assignment.id)}
+        onArchive={() => archiveAssignment(assignment.id)}
+        onDeleted={() => router.push(`/courses/${assignment.course.id}`)}
+        onArchived={() => router.push(`/courses/${assignment.course.id}`)}
+      />
     </PageContainer>
   );
 }

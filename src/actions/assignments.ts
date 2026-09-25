@@ -1,11 +1,46 @@
 "use server";
 
 import { db } from "@/db";
-import { assignments, courses, courseMembers, rubrics, rubricCriteria, rubricLevels, grades } from "@/db/schema";
-import { eq, desc, and, inArray } from "drizzle-orm";
+import {
+  assignments,
+  courses,
+  courseMembers,
+  rubrics,
+  rubricCriteria,
+  rubricLevels,
+  grades,
+  gradeEntries,
+  submissions,
+  annotations,
+  reviewStrokes,
+} from "@/db/schema";
+import { eq, desc, and, inArray, isNotNull, ne, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireCapability } from "@/lib/auth/require";
+import { writeAudit } from "@/lib/audit";
+import { removeAssignmentStorage } from "@/lib/file-storage";
 import type { Term } from "@/lib/terms";
+
+// ─── Deletion guards ────────────────────────────────────────────────────────
+
+/** `{ ok: true }` on success, or a refusal with a message safe to show the caller. */
+export type DeleteOutcome = { ok: true } | { ok: false; reason: "has_grades" | "not_found"; message: string };
+
+/**
+ * Distinct students, across the given assignments, with a grade that means
+ * more than "row exists": a status other than "ungraded", or at least one
+ * grade_entries row. This is the bar deleteAssignment()/deleteCourse() use to
+ * refuse a destructive delete — see the owner's decision in the task brief.
+ */
+export async function gradedStudentCount(assignmentIds: number[]): Promise<number> {
+  if (assignmentIds.length === 0) return 0;
+  const rows = await db
+    .selectDistinct({ studentId: grades.studentId })
+    .from(grades)
+    .leftJoin(gradeEntries, eq(gradeEntries.gradeId, grades.id))
+    .where(and(inArray(grades.assignmentId, assignmentIds), or(ne(grades.status, "ungraded"), isNotNull(gradeEntries.id))));
+  return rows.length;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -247,13 +282,63 @@ export async function updateAssignment(
   revalidatePath(`/assignments/${id}`);
 }
 
-export async function deleteAssignment(id: number) {
-  const row = await db.select({ courseId: assignments.courseId }).from(assignments).where(eq(assignments.id, id));
-  if (!row[0]) return;
-  await requireCapability("course.edit", { kind: "assignment", assignmentId: id, courseId: row[0].courseId });
-  await db.delete(assignments).where(eq(assignments.id, id));
+/**
+ * Deletes an assignment and everything FK-scoped to it, but only once it's
+ * ungraded — see gradedStudentCount() above. Refuses (rather than throwing)
+ * when there are grades to protect, so the UI can show the reason instead of
+ * a generic error toast.
+ *
+ * FK-safe order, all in one transaction: annotations (their annotation_history
+ * cascades), review_strokes (no FK — itemId is a "sub:{id}" convention, not a
+ * real constraint, but still worth cleaning up), grades (cascades
+ * grade_entries), submissions (cascades review_media), then the assignment row
+ * itself (cascades upload_links). Files on disk are removed after the
+ * transaction commits, best-effort.
+ */
+export async function deleteAssignment(id: number): Promise<DeleteOutcome> {
+  const row = await db
+    .select({ courseId: assignments.courseId, name: assignments.name })
+    .from(assignments)
+    .where(eq(assignments.id, id));
+  if (!row[0]) return { ok: false, reason: "not_found", message: "Assignment not found." };
+
+  const actor = await requireCapability("course.edit", { kind: "assignment", assignmentId: id, courseId: row[0].courseId });
+
+  const graded = await gradedStudentCount([id]);
+  if (graded > 0) {
+    return {
+      ok: false,
+      reason: "has_grades",
+      message: `${graded} student${graded === 1 ? " has" : "s have"} grades on this assignment — archive it instead.`,
+    };
+  }
+
+  db.transaction((tx) => {
+    const submissionIds = tx
+      .select({ id: submissions.id })
+      .from(submissions)
+      .where(eq(submissions.assignmentId, id))
+      .all()
+      .map((s) => s.id);
+
+    if (submissionIds.length > 0) {
+      tx.delete(annotations).where(inArray(annotations.submissionId, submissionIds)).run();
+      tx.delete(reviewStrokes)
+        .where(inArray(reviewStrokes.itemId, submissionIds.map((sid) => `sub:${sid}`)))
+        .run();
+    }
+
+    tx.delete(grades).where(eq(grades.assignmentId, id)).run();
+    tx.delete(submissions).where(eq(submissions.assignmentId, id)).run();
+    tx.delete(assignments).where(eq(assignments.id, id)).run();
+  });
+
+  await removeAssignmentStorage(id);
+  await writeAudit(actor, { action: "assignment.delete", targetType: "assignment", targetId: id, detail: { name: row[0].name } });
+
   revalidatePath(`/courses/${row[0].courseId}`);
   revalidatePath("/assignments");
+  return { ok: true };
 }
 
 export async function archiveAssignment(id: number) {

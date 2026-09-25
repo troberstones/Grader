@@ -1,13 +1,25 @@
 "use server";
 
 import { db } from "@/db";
-import { courses, courseMembers, assignments, courseEnrollments, users } from "@/db/schema";
+import {
+  courses,
+  courseMembers,
+  assignments,
+  courseEnrollments,
+  users,
+  grades,
+  submissions,
+  annotations,
+  reviewStrokes,
+} from "@/db/schema";
 import { eq, desc, and, or, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireCapability } from "@/lib/auth/require";
 import { isTerm, termSortKey, type Term } from "@/lib/terms";
 import { cloneRubric } from "./rubrics";
+import { gradedStudentCount, type DeleteOutcome } from "./assignments";
 import { writeAudit } from "@/lib/audit";
+import { removeAssignmentStorage } from "@/lib/file-storage";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -205,19 +217,73 @@ export async function updateCourse(
   revalidatePath(`/courses/${id}`);
 }
 
-export async function deleteCourse(id: number) {
+/**
+ * Deletes a course and everything under it, refusing when any assignment in
+ * it has grades worth protecting (see gradedStudentCount() in
+ * src/actions/assignments.ts) — the caller should offer archiveCourse()
+ * instead in that case.
+ *
+ * Everything DB-side happens in one transaction, per assignment, in the same
+ * FK-safe order deleteAssignment() uses (annotations, review_strokes, grades,
+ * submissions, then the assignment row), followed by the course-level rows
+ * (enrollments, members, the course itself). Files on disk are removed after
+ * the transaction commits, best-effort — see removeAssignmentStorage().
+ */
+export async function deleteCourse(id: number): Promise<DeleteOutcome> {
   const actor = await requireCapability("course.edit", { kind: "course", courseId: id });
   const [course] = await db.select({ name: courses.name, code: courses.code }).from(courses).where(eq(courses.id, id));
-  await db.delete(courseEnrollments).where(eq(courseEnrollments.courseId, id));
-  await db.delete(assignments).where(eq(assignments.courseId, id));
-  await db.delete(courses).where(eq(courses.id, id));
+  if (!course) return { ok: false, reason: "not_found", message: "Course not found." };
+
+  const courseAssignments = await db.select({ id: assignments.id }).from(assignments).where(eq(assignments.courseId, id));
+  const assignmentIds = courseAssignments.map((a) => a.id);
+
+  const graded = await gradedStudentCount(assignmentIds);
+  if (graded > 0) {
+    return {
+      ok: false,
+      reason: "has_grades",
+      message: `${graded} student${graded === 1 ? " has" : "s have"} grades in this course — archive it instead.`,
+    };
+  }
+
+  db.transaction((tx) => {
+    for (const assignmentId of assignmentIds) {
+      const submissionIds = tx
+        .select({ id: submissions.id })
+        .from(submissions)
+        .where(eq(submissions.assignmentId, assignmentId))
+        .all()
+        .map((s) => s.id);
+
+      if (submissionIds.length > 0) {
+        tx.delete(annotations).where(inArray(annotations.submissionId, submissionIds)).run();
+        tx.delete(reviewStrokes)
+          .where(inArray(reviewStrokes.itemId, submissionIds.map((sid) => `sub:${sid}`)))
+          .run();
+      }
+
+      tx.delete(grades).where(eq(grades.assignmentId, assignmentId)).run();
+      tx.delete(submissions).where(eq(submissions.assignmentId, assignmentId)).run();
+    }
+
+    tx.delete(assignments).where(eq(assignments.courseId, id)).run();
+    tx.delete(courseEnrollments).where(eq(courseEnrollments.courseId, id)).run();
+    tx.delete(courseMembers).where(eq(courseMembers.courseId, id)).run();
+    tx.delete(courses).where(eq(courses.id, id)).run();
+  });
+
+  for (const assignmentId of assignmentIds) {
+    await removeAssignmentStorage(assignmentId);
+  }
+
   await writeAudit(actor, {
     action: "course.delete",
     targetType: "course",
     targetId: id,
-    detail: { name: course?.name, code: course?.code },
+    detail: { name: course.name, code: course.code },
   });
   revalidatePath("/courses");
+  return { ok: true };
 }
 
 export async function archiveCourse(id: number) {

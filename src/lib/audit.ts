@@ -13,6 +13,7 @@ export type AuditAction =
   | "user.invite"
   | "user.password_reset_issued"
   | "course.delete"
+  | "assignment.delete"
   | "rubric.delete"
   | "upload_link.create"
   | "upload_link.revoke"
