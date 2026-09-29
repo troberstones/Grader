@@ -26,6 +26,8 @@ export class VideoElementSource implements FrameSource {
   private nativePlayback = false;
   private rvfcHandle: number | null = null;
   private lastSeekFrame = -1;
+  /** Frame whose pixels the element actually holds (currentTime runs ahead mid-seek). */
+  private shownFrame = 0;
   private seekPending = false;
   private queuedSeek: number | null = null;
 
@@ -71,6 +73,7 @@ export class VideoElementSource implements FrameSource {
 
     v.addEventListener("seeked", () => {
       this.seekPending = false;
+      this.shownFrame = this.currentFrame();
       this.version++;
       this.emit();
       if (this.queuedSeek !== null) {
@@ -199,8 +202,15 @@ export class VideoElementSource implements FrameSource {
       const target = Math.min(this.frameCount - 1, Math.max(0, Math.round(frame)));
       if (target !== this.lastSeekFrame) this.seekToFrame(target);
     }
+    /*
+     * Setting currentTime moves it immediately, long before the new picture is
+     * decoded. Reporting that frame would key the draw to a texture that does
+     * not exist yet — and uploading the seeking element into it gives black in
+     * Chrome. Report the frame still on screen until the seek lands.
+     */
+    if (!this.seekPending && !this.video.seeking) this.shownFrame = this.currentFrame();
     return {
-      frame: this.currentFrame(),
+      frame: this.shownFrame,
       tex: { type: "video", video: this.video, width: this.width, height: this.height },
       exact: !this.seekPending,
       version: this.version,

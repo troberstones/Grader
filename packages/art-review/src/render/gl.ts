@@ -323,6 +323,13 @@ export class GLRenderer {
       existing.lastUsed = ++this.clock;
       return existing.tex;
     }
+    // Mid-seek, or before the first frame lands, the element has no current
+    // picture, and Chrome uploads that as black. Keep whatever texture this key
+    // already holds; with none, draw nothing rather than a black flash.
+    if (src.type === "video" && (src.video.seeking || src.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA)) {
+      if (existing) existing.lastUsed = ++this.clock;
+      return existing?.tex ?? null;
+    }
 
     const tex = existing?.tex ?? gl.createTexture();
     if (!tex) return null;
