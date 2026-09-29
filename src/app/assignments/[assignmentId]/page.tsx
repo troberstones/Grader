@@ -8,6 +8,7 @@ import { GradeSheetClient } from "./grade-sheet-client";
 import { SendUploadLinkDialog } from "./send-upload-link-dialog";
 import { SendFeedbackButton } from "./send-feedback-button";
 import { UploadZipButton } from "./upload-zip-button";
+import { IngestCommentsDialog } from "./ingest-comments-dialog";
 import { Calendar, BookOpen, Pencil } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -54,6 +55,11 @@ export default async function AssignmentGradeSheetPage({
             <SendFeedbackButton assignmentId={assignment.id} />
             <SendUploadLinkDialog assignmentId={assignment.id} courseId={assignment.courseId} />
             <UploadZipButton assignmentId={assignment.id} />
+            <IngestCommentsDialog
+              assignmentId={assignment.id}
+              assignmentName={assignment.name}
+              courseId={assignment.courseId}
+            />
             <LinkButton href={`/assignments/${assignment.id}/edit`} variant="outline">
               <Pencil className="mr-2 h-4 w-4" />
               Edit

@@ -7,6 +7,7 @@ export type AuditAction =
   | "grade.save"
   | "grade.clear"
   | "grade.mark_missing"
+  | "grade.feedback_import"
   | "user.role_change"
   | "user.status_change"
   | "user.force_sign_out"

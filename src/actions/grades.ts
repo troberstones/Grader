@@ -12,6 +12,7 @@ import { writeAudit } from "@/lib/audit";
 import { nextUpdatedAt, recomputeGrade } from "@/lib/grading/recompute";
 import { feedbackTestMode } from "@/lib/feedback/config";
 import { feedbackHistory } from "@/lib/feedback/history";
+import { mergeFeedback } from "@/lib/feedback/comment-ingest";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -343,6 +344,96 @@ export async function markMissing(assignmentId: number, studentId: number): Prom
 
   revalidatePath(`/assignments/${assignmentId}`);
   return { success: true, updatedAt };
+}
+
+// ─── Import written feedback for many students at once ────────────────────────
+
+export type ImportFeedbackResult =
+  | { success: true; grades: { studentId: number; grade: StudentGrade }[] }
+  | { success: false; reason: "auth" };
+
+/**
+ * Writes critique comments (see src/lib/feedback/comment-ingest.ts) into
+ * `grades.feedback` for each listed student, creating an ungraded row for
+ * anyone not graded yet. Touches only `feedback` — scores and status are
+ * left to the rubric. Returns each student's full grade so the client can
+ * repaint its GradingContext without a reload.
+ */
+export async function importFeedback(
+  assignmentId: number,
+  items: { studentId: number; text: string }[],
+  mode: "append" | "replace",
+): Promise<ImportFeedbackResult> {
+  const resource = await assignmentResource(assignmentId);
+  let actor: SessionUser;
+  try {
+    actor = await requireCapability("grade.write", resource);
+  } catch (err) {
+    if (err instanceof AuthError) return { success: false, reason: "auth" };
+    throw err;
+  }
+  if (resource.kind !== "assignment") return { success: true, grades: [] };
+
+  const studentIds = items.map((i) => i.studentId);
+  const enrolled = new Set(
+    studentIds.length === 0
+      ? []
+      : (
+          await db
+            .select({ id: courseEnrollments.studentId })
+            .from(courseEnrollments)
+            .where(and(eq(courseEnrollments.courseId, resource.courseId), inArray(courseEnrollments.studentId, studentIds)))
+        ).map((r) => r.id),
+  );
+
+  const updated = db.transaction((tx) => {
+    const out: { studentId: number; grade: StudentGrade }[] = [];
+    for (const { studentId, text } of items) {
+      if (!enrolled.has(studentId) || !text.trim()) continue;
+      let row = tx
+        .select()
+        .from(grades)
+        .where(and(eq(grades.assignmentId, assignmentId), eq(grades.studentId, studentId)))
+        .get();
+      if (!row) {
+        row = tx.insert(grades).values({ assignmentId, studentId, status: "ungraded" }).returning().get();
+      }
+      const feedback = mergeFeedback(row.feedback, text, mode);
+      const updatedAt = nextUpdatedAt(row.updatedAt);
+      tx.update(grades).set({ feedback, updatedAt }).where(eq(grades.id, row.id)).run();
+      const entries = tx.select().from(gradeEntries).where(eq(gradeEntries.gradeId, row.id)).all();
+      out.push({
+        studentId,
+        grade: {
+          id: row.id,
+          totalScore: row.totalScore,
+          feedback,
+          status: row.status as GradeStatus,
+          gradedAt: row.gradedAt,
+          exportedAt: row.exportedAt,
+          updatedAt,
+          entries: entries.map((e) => ({
+            criteriaId: e.criteriaId,
+            levelId: e.levelId,
+            score: e.score,
+            comment: e.comment,
+            nudge: e.nudge,
+          })),
+        },
+      });
+    }
+    return out;
+  });
+
+  await writeAudit(actor, {
+    action: "grade.feedback_import",
+    targetType: "assignment",
+    targetId: assignmentId,
+    detail: { mode, studentIds: updated.map((u) => u.studentId) },
+  });
+
+  revalidatePath(`/assignments/${assignmentId}`);
+  return { success: true, grades: updated };
 }
 
 // ─── Clear a student's grade (reset to ungraded) ──────────────────────────────
