@@ -4,7 +4,7 @@ import path from "path";
 import { and, asc, eq, gt, isNull, max, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { reviewMedia, reviewPrefs, reviewStrokes, submissions } from "@/db/schema";
-import { ingestFile } from "@grader/art-review/server";
+import { ingestFile, slideOf } from "@grader/art-review/server";
 import type { FrameMarker, ReviewItem } from "@grader/art-review";
 import { requireCapability } from "@/lib/auth/require";
 import { GLOBAL } from "@/lib/auth/roles";
@@ -51,14 +51,30 @@ export async function parseContext(contextId: string): Promise<{ assignmentId: n
 
 // ── Ingest ────────────────────────────────────────────────────────────────────
 
-// Module-level so two tabs opening the same student don't transcode twice.
-const inFlight = new Map<number, Promise<void>>();
+// Ingest state lives on globalThis, not in module scope: Next.js can load
+// this module more than once — once for route handlers (the upload routes'
+// after() ingest) and once for server actions (the review page) — and each
+// copy would get its own map. That is how one upload got transcoded twice at
+// the same moment into the same proxy file, leaving it undecodable.
+type IngestState = {
+  inFlight: Map<number, Promise<void>>;
+  limiter: Semaphore;
+  attempts: Map<number, { count: number; lastAttemptAt: number }>;
+};
+const ingestState: IngestState = ((globalThis as { __graderIngest?: IngestState }).__graderIngest ??= {
+  inFlight: new Map(),
+  limiter: new Semaphore(2),
+  attempts: new Map(),
+});
+
+// So two tabs opening the same student don't transcode twice.
+const inFlight = ingestState.inFlight;
 
 // Caps how many ffmpeg processes run at once, process-wide — a review page
 // for a student with a dozen submissions used to fire a dozen transcodes in
 // parallel via Promise.all in listReviewItems(); everything still kicks off
 // together, but only this many actually run ffmpeg at a time, the rest queue.
-const transcodeLimiter = new Semaphore(2);
+const transcodeLimiter = ingestState.limiter;
 
 // Backoff for a submission whose ingest keeps failing (ffmpeg missing, disk
 // full, SIGTERM mid-deploy, etc.) — without this, every review-page open
@@ -68,7 +84,7 @@ const transcodeLimiter = new Semaphore(2);
 // deploy gives failed ingests one fresh attempt.
 const MAX_AUTO_INGEST_ATTEMPTS = 3;
 const MIN_INGEST_RETRY_INTERVAL_MS = 5 * 60 * 1000;
-const ingestAttempts = new Map<number, { count: number; lastAttemptAt: number }>();
+const ingestAttempts = ingestState.attempts;
 
 /**
  * Produce web-safe derivatives for a submission if they don't exist yet.
@@ -135,58 +151,79 @@ export async function ensureIngested(submissionId: number, opts?: { force?: bool
 
       const relative = (p: string) => path.relative(process.cwd(), p);
 
-      if (result.derivatives.length === 0) {
-        // PDFs render client-side, so there is nothing on disk to register —
-        // but the item still needs a row to carry its page count.
-        await db.insert(reviewMedia).values({
-          submissionId,
-          variant: "original",
-          idx: 0,
-          path: sub.filePath,
-          mime: sub.fileType,
-          kind: result.kind,
-          width: result.width,
-          height: result.height,
-          frameCount: result.frameCount,
-          fps: result.fps,
-          duration: result.duration,
-          status: "ready",
-          warnings: result.warnings.join("; ") || null,
-        });
-      } else {
-        for (const d of result.derivatives) {
-          await db.insert(reviewMedia).values({
+      const warnings = result.warnings.join("; ") || null;
+      const rows =
+        result.derivatives.length === 0
+          ? // PDFs render client-side, so there is nothing on disk to register —
+            // but the item still needs a row to carry its page count.
+            [{ variant: "original", idx: 0, path: sub.filePath, mime: sub.fileType } as const]
+          : result.derivatives.map((d) => ({ ...d, path: relative(d.path) }));
+
+      db.transaction((tx) => {
+        // The in-memory guard above covers one server process; this covers
+        // anything it misses. Whoever registers first wins, and a late
+        // duplicate run adds nothing — above all, it must not remap the
+        // strokes a second time.
+        const already = tx
+          .select({ id: reviewMedia.id })
+          .from(reviewMedia)
+          .where(and(eq(reviewMedia.submissionId, submissionId), eq(reviewMedia.status, "ready")))
+          .limit(1)
+          .all();
+        if (already.length > 0) return;
+
+        for (const d of rows) {
+          tx.insert(reviewMedia).values({
             submissionId,
             variant: d.variant,
             idx: d.idx,
-            path: relative(d.path),
+            path: d.path,
             mime: d.mime,
             kind: result.kind,
-            width: d.width ?? result.width,
-            height: d.height ?? result.height,
-            frameCount: d.frameCount ?? result.frameCount,
-            fps: d.fps ?? result.fps,
-            duration: d.duration ?? result.duration,
-            colorPrimaries: d.colorPrimaries,
-            colorTransfer: d.colorTransfer,
+            width: ("width" in d ? d.width : undefined) ?? result.width,
+            height: ("height" in d ? d.height : undefined) ?? result.height,
+            frameCount: ("frameCount" in d ? d.frameCount : undefined) ?? result.frameCount,
+            fps: ("fps" in d ? d.fps : undefined) ?? result.fps,
+            duration: ("duration" in d ? d.duration : undefined) ?? result.duration,
+            colorPrimaries: "colorPrimaries" in d ? d.colorPrimaries : undefined,
+            colorTransfer: "colorTransfer" in d ? d.colorTransfer : undefined,
             status: "ready",
-            warnings: result.warnings.join("; ") || null,
-          });
+            warnings,
+          }).run();
         }
-      }
 
-      // Backfill the columns the old review page reads, now that they are known
-      // authoritatively rather than guessed by the browser after playback.
-      if (result.fps || result.frameCount) {
-        await db
-          .update(submissions)
-          .set({
-            fps: result.fps ?? undefined,
-            frameCount: result.frameCount ?? undefined,
-            duration: result.duration ?? undefined,
-          })
-          .where(eq(submissions.id, submissionId));
-      }
+        if (result.slideStarts) {
+          // A video that turned out to be a slideshow: any strokes already on
+          // it were drawn against an earlier video ingest (re-ingest only
+          // runs when no ready media exists), so their frame numbers are
+          // video frames. Move each onto the slide that frame showed.
+          const starts = result.slideStarts;
+          const strokes = tx
+            .select({ id: reviewStrokes.id, frameIn: reviewStrokes.frameIn, frameOut: reviewStrokes.frameOut })
+            .from(reviewStrokes)
+            .where(eq(reviewStrokes.itemId, `sub:${submissionId}`))
+            .all();
+          for (const st of strokes) {
+            tx.update(reviewStrokes)
+              .set({ frameIn: slideOf(st.frameIn, starts), frameOut: slideOf(st.frameOut, starts) })
+              .where(eq(reviewStrokes.id, st.id))
+              .run();
+          }
+        } else if (result.fps || result.frameCount) {
+          // Backfill the columns the old review page reads, now that they are
+          // known authoritatively rather than guessed by the browser after
+          // playback. Skipped for a slideshow, whose submission row should keep
+          // describing the video file it actually is.
+          tx.update(submissions)
+            .set({
+              fps: result.fps ?? undefined,
+              frameCount: result.frameCount ?? undefined,
+              duration: result.duration ?? undefined,
+            })
+            .where(eq(submissions.id, submissionId))
+            .run();
+        }
+      });
 
       // A clean run means whatever backoff state was tracked no longer
       // applies — the next failure (if any) starts its own fresh budget.

@@ -1,10 +1,11 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { floatsToRgbe, RGBE_TRANSFER } from "../core/rgbe";
 import type { DecodedExr } from "./exr";
 import { assertWithinImageLimits } from "./image-limits";
+import { SLIDESHOW, detectSlideshow, extractSlides } from "./slideshow";
 
 const run = promisify(execFile);
 
@@ -200,6 +201,29 @@ async function exists(p: string): Promise<boolean> {
 }
 
 /**
+ * A sibling temp path for `out`, keeping its extension so ffmpeg still picks
+ * the right muxer. Every derivative is written here and renamed into place:
+ * two ingests of the same file racing each other (an upload's background
+ * ingest and a review page opened at the same moment) used to write into
+ * one path at once and leave an interleaved, undecodable file behind.
+ */
+function tempFor(out: string): string {
+  const ext = path.extname(out);
+  return `${out.slice(0, -ext.length)}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}${ext}`;
+}
+
+async function writeAtomically(out: string, write: (tmp: string) => Promise<unknown>): Promise<void> {
+  const tmp = tempFor(out);
+  try {
+    await write(tmp);
+    await rename(tmp, out);
+  } catch (e) {
+    await rm(tmp, { force: true });
+    throw e;
+  }
+}
+
+/**
  * Transcode to a scrub-friendly H.264 proxy.
  *
  * A short, fixed keyframe interval (~1s) means decoding frame 87 walks back
@@ -243,10 +267,9 @@ export async function makeVideoProxy(
   }
   if (info.hasAudio) args.push("-map", "0:a:0?", "-c:a", "aac", "-b:a", "160k");
   else args.push("-an");
-  args.push(out);
 
   opts.onProgress?.("Generating preview", 0);
-  await runFfmpeg(ffmpeg, args, info.duration, opts.onProgress, "Generating preview");
+  await writeAtomically(out, (tmp) => runFfmpeg(ffmpeg, [...args, tmp], info.duration, opts.onProgress, "Generating preview"));
   return proxyDerivative(out, info, maxWidth);
 }
 
@@ -281,13 +304,15 @@ export async function makePoster(
   }
   opts.onProgress?.("Generating thumbnail");
   try {
-    await run(ffmpeg, [
-      "-y", "-i", input,
-      "-frames:v", "1",
-      "-vf", "scale='min(640,iw)':-2",
-      "-q:v", "4",
-      out,
-    ]);
+    await writeAtomically(out, (tmp) =>
+      run(ffmpeg, [
+        "-y", "-i", input,
+        "-frames:v", "1",
+        "-vf", "scale='min(640,iw)':-2",
+        "-q:v", "4",
+        tmp,
+      ]),
+    );
     return { variant: "poster", idx: 0, path: out, mime: "image/jpeg" };
   } catch {
     return null;
@@ -569,6 +594,12 @@ export interface IngestResult {
   fps: number | null;
   duration: number | null;
   warnings: string[];
+  /**
+   * Set when a video was ingested as a slideshow: the source frame where each
+   * slide starts, so annotations drawn on an earlier video ingest can be
+   * moved onto the right slide (see slideOf in ./slideshow).
+   */
+  slideStarts?: number[];
 }
 
 export async function ingestFile(
@@ -588,6 +619,25 @@ export async function ingestFile(
   if (kind === "video") {
     opts.onProgress?.("Reading video");
     const info = await probe(input, opts.ffprobePath);
+
+    opts.onProgress?.("Checking for repeated frames");
+    const slides = await detectSlideshow(input, info, opts.ffmpegPath);
+    if (slides) {
+      const frames = await extractSlides(input, slides, info, opts);
+      const poster = await makePoster(input, opts);
+      return {
+        kind: "sequence",
+        derivatives: poster ? [...frames, poster] : frames,
+        width: frames[0].width ?? info.width,
+        height: frames[0].height ?? info.height,
+        frameCount: frames.length,
+        fps: SLIDESHOW.fps,
+        duration: frames.length / SLIDESHOW.fps,
+        warnings: [`Slideshow: ${frames.length} distinct images in ${info.frameCount} frames, shown as stills`],
+        slideStarts: slides.map((sl) => sl.start),
+      };
+    }
+
     const proxy = await makeVideoProxy(input, { ...opts, probe: info });
     const poster = await makePoster(input, opts);
     return {

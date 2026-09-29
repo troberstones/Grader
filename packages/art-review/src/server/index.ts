@@ -13,3 +13,4 @@ export {
 } from "./ingest";
 export { ingestPsd } from "./psd";
 export { pdfPageCount } from "./pdf";
+export { SLIDESHOW, detectSlideshow, slideOf } from "./slideshow";
