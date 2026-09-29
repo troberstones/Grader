@@ -11,6 +11,10 @@ import type { FeedbackModel } from "./model";
  * mail clients re-colour dark messages unpredictably, and a light one survives
  * all of them.
  *
+ * Every submitted file without annotations still gets one plain frame, near
+ * the top under "Your work", so the student has the piece itself in front of
+ * them while reading the rubric.
+ *
  * Pure: images arrive as ready-made `src` values (`cid:` for a real send,
  * `data:` for the preview dialog), so the same markup serves both.
  */
@@ -20,13 +24,17 @@ export interface EmailFrame {
   label: string;
   width: number;
   height: number;
+  /** False for a submission's plain reference frame. */
+  annotated: boolean;
 }
 
 export interface FeedbackEmailInput {
   model: FeedbackModel;
   includeRubric: boolean;
-  frames: EmailFrame[] | null;
-  /** Annotations were requested but some couldn't be included. */
+  frames: EmailFrame[];
+  /** Annotated frames were asked for; otherwise `frames` holds only plain ones. */
+  includeAnnotations: boolean;
+  /** Some images couldn't be included. */
   frameNotes: string[];
   link: { url: string; expires: Date } | null;
   instructor: { name: string; email: string };
@@ -59,7 +67,7 @@ export function feedbackSubject(model: FeedbackModel, testRecipient: FeedbackEma
 }
 
 export function renderFeedbackEmail(input: FeedbackEmailInput): { subject: string; html: string; text: string } {
-  const { model, includeRubric, frames, frameNotes, link, instructor, testRecipient } = input;
+  const { model, includeRubric, frames, includeAnnotations, frameNotes, link, instructor, testRecipient } = input;
   const subject = feedbackSubject(model, testRecipient);
 
   const blocks: string[] = [];
@@ -98,6 +106,14 @@ export function renderFeedbackEmail(input: FeedbackEmailInput): { subject: strin
       </td></tr>`);
   }
 
+  const plain = frames.filter((f) => !f.annotated);
+  const annotated = frames.filter((f) => f.annotated);
+
+  if (plain.length > 0) {
+    blocks.push(sectionHeading("Your work"));
+    for (const fr of plain) blocks.push(frameBlock(fr));
+  }
+
   if (includeRubric && model.criteria.length > 0) {
     blocks.push(sectionHeading("Rubric"));
     for (const c of model.criteria) blocks.push(criterionBlock(c));
@@ -111,23 +127,15 @@ export function renderFeedbackEmail(input: FeedbackEmailInput): { subject: strin
       </td></tr>`);
   }
 
-  if (frames) {
+  if (includeAnnotations) {
     blocks.push(sectionHeading("Annotated frames"));
-    if (frames.length === 0) {
+    if (annotated.length === 0) {
       blocks.push(`<tr><td style="padding:0 24px 8px 24px;font-size:14px;color:${MUTED};">There are no annotations on this submission.</td></tr>`);
     }
-    for (const fr of frames) {
-      const w = Math.min(592, fr.width);
-      const h = Math.round((fr.height / fr.width) * w);
-      blocks.push(`
-        <tr><td style="padding:0 24px 18px 24px;">
-          <img src="${esc(fr.src)}" width="${w}" height="${h}" alt="${esc(fr.label)}" style="display:block;width:100%;max-width:${w}px;height:auto;border-radius:6px;border:1px solid ${RULE};">
-          <div style="font-size:12px;color:${MUTED};margin-top:6px;">${esc(fr.label)}</div>
-        </td></tr>`);
-    }
-    for (const note of frameNotes) {
-      blocks.push(`<tr><td style="padding:0 24px 8px 24px;font-size:12px;color:${MUTED};">${esc(note)}</td></tr>`);
-    }
+    for (const fr of annotated) blocks.push(frameBlock(fr));
+  }
+  for (const note of frameNotes) {
+    blocks.push(`<tr><td style="padding:0 24px 8px 24px;font-size:12px;color:${MUTED};">${esc(note)}</td></tr>`);
   }
 
   blocks.push(`
@@ -150,6 +158,16 @@ ${blocks.join("\n")}
 
 function sectionHeading(title: string): string {
   return `<tr><td style="padding:22px 24px 10px 24px;font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:${MUTED};">${esc(title)}</td></tr>`;
+}
+
+function frameBlock(fr: EmailFrame): string {
+  const w = Math.min(592, fr.width);
+  const h = Math.round((fr.height / fr.width) * w);
+  return `
+    <tr><td style="padding:0 24px 18px 24px;">
+      <img src="${esc(fr.src)}" width="${w}" height="${h}" alt="${esc(fr.label)}" style="display:block;width:100%;max-width:${w}px;height:auto;border-radius:6px;border:1px solid ${RULE};">
+      <div style="font-size:12px;color:${MUTED};margin-top:6px;">${esc(fr.label)}</div>
+    </td></tr>`;
 }
 
 function criterionBlock(c: FeedbackModel["criteria"][number]): string {
@@ -185,7 +203,7 @@ function criterionBlock(c: FeedbackModel["criteria"][number]): string {
 }
 
 function renderText(input: FeedbackEmailInput): string {
-  const { model, includeRubric, frames, frameNotes, link, instructor, testRecipient } = input;
+  const { model, includeRubric, frames, includeAnnotations, frameNotes, link, instructor, testRecipient } = input;
   const lines: string[] = [];
   if (testRecipient) {
     lines.push(`[TEST SEND — would have gone to ${testRecipient.name} ${testRecipient.email ? `<${testRecipient.email}>` : "(no email on file)"}]`, "");
@@ -208,11 +226,16 @@ function renderText(input: FeedbackEmailInput): string {
     lines.push("");
   }
   if (includeRubric && model.feedback) lines.push("COMMENTS", model.feedback, "");
-  if (frames) {
-    lines.push(frames.length ? `${frames.length} annotated frame${frames.length === 1 ? " is" : "s are"} included as images in the HTML version of this email.` : "There are no annotations on this submission.");
-    for (const note of frameNotes) lines.push(note);
-    lines.push("");
+  const plain = frames.filter((f) => !f.annotated).length;
+  const annotated = frames.length - plain;
+  if (plain > 0) {
+    lines.push(`${plain === 1 ? "An image" : `${plain} images`} of your work ${plain === 1 ? "is" : "are"} included in the HTML version of this email.`);
   }
+  if (includeAnnotations) {
+    lines.push(annotated ? `${annotated} annotated frame${annotated === 1 ? " is" : "s are"} included as images in the HTML version of this email.` : "There are no annotations on this submission.");
+  }
+  for (const note of frameNotes) lines.push(note);
+  if (plain > 0 || includeAnnotations || frameNotes.length > 0) lines.push("");
   lines.push(`Sent by ${instructor.name} from Grader. Reply to this email to reach them directly.`);
   return lines.join("\n");
 }

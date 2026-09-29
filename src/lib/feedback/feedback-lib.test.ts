@@ -106,7 +106,11 @@ describe("feedback email", () => {
   const input = {
     model,
     includeRubric: true,
-    frames: [{ src: "cid:frame-1@grader", label: "render.mp4 · frame 3", width: 1600, height: 900 }],
+    frames: [
+      { src: "cid:frame-1@grader", label: "render.mp4 · frame 3", width: 1600, height: 900, annotated: true },
+      { src: "cid:frame-2@grader", label: "still.png", width: 1600, height: 900, annotated: false },
+    ],
+    includeAnnotations: true,
     frameNotes: [],
     link: null,
     instructor: { name: "Prof", email: "prof@example.test" },
@@ -121,6 +125,14 @@ describe("feedback email", () => {
     expect(html).toContain('src="cid:frame-1@grader"');
     expect(html).toContain("✓ Good");
     expect(text).toContain("Lighting: Good (B+)");
+  });
+
+  it("shows plain frames of unannotated work under their own heading, even without annotations", () => {
+    const { html, text } = renderFeedbackEmail({ ...input, includeAnnotations: false, frames: input.frames.slice(1) });
+    expect(html).toContain("Your work");
+    expect(html).toContain('src="cid:frame-2@grader"');
+    expect(html).not.toContain("Annotated frames");
+    expect(text).toContain("An image of your work is included");
   });
 
   it("leaves the rubric out when not asked for", () => {

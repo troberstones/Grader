@@ -2,7 +2,7 @@
 
 /**
  * Emailing students their feedback: the graded rubric (as letter grades), the
- * annotated frames, and optionally a read-only link to see it all in the
+ * annotated frames (plus a plain frame of any file without annotations), and optionally a read-only link to see it all in the
  * reviewer.
  *
  * The dialog sends one student per call rather than the whole class in one
@@ -24,7 +24,7 @@ import { mailTransportProblem, sendRichMail } from "@/lib/email";
 import { appBaseUrl, feedbackTestMode } from "@/lib/feedback/config";
 import { renderFeedbackEmail, type EmailFrame } from "@/lib/feedback/email-html";
 import { gradeFingerprint } from "@/lib/feedback/fingerprint";
-import { renderAnnotatedFrames, type FramesResult } from "@/lib/feedback/frames";
+import { renderFeedbackFrames } from "@/lib/feedback/frames";
 import { feedbackHistory, type LastFailure, type LastSent, type LinkState } from "@/lib/feedback/history";
 import { issueFeedbackLink } from "@/lib/feedback/links";
 import { loadFeedbackModel } from "@/lib/feedback/model";
@@ -135,11 +135,10 @@ async function build(
   if (!model) throw new Error("Student or assignment not found.");
   const testMode = feedbackTestMode();
 
-  let frames: FramesResult | null = null;
-  if (options.annotations) frames = await renderAnnotatedFrames(assignmentId, studentId);
-
-  const frameNotes: string[] = [];
-  if (frames?.warnings.length) frameNotes.push(...frames.warnings);
+  // Always rendered: even without annotations, each submitted file gets one
+  // plain frame so the email shows the work the rubric is about.
+  const frames = await renderFeedbackFrames(assignmentId, studentId, { annotations: options.annotations });
+  const frameNotes = frames.warnings;
 
   const base = appBaseUrl();
   let link: { url: string; expires: Date } | null = null;
@@ -154,19 +153,19 @@ async function build(
     }
   }
 
-  const emailFrames: EmailFrame[] | null = frames
-    ? frames.frames.map((f) => ({
-        src: mode === "send" ? `cid:${f.cid}` : `data:${f.contentType};base64,${f.content.toString("base64")}`,
-        label: f.label,
-        width: f.width,
-        height: f.height,
-      }))
-    : null;
+  const emailFrames: EmailFrame[] = frames.frames.map((f) => ({
+    src: mode === "send" ? `cid:${f.cid}` : `data:${f.contentType};base64,${f.content.toString("base64")}`,
+    label: f.label,
+    width: f.width,
+    height: f.height,
+    annotated: f.annotated,
+  }));
 
   const rendered = renderFeedbackEmail({
     model,
     includeRubric: options.rubric,
     frames: emailFrames,
+    includeAnnotations: options.annotations,
     frameNotes,
     link,
     instructor: { name: sender.name, email: sender.email },
@@ -181,7 +180,10 @@ export interface FeedbackPreview {
   html: string;
   to: string;
   warnings: string[];
+  /** Annotated frames. */
   frameCount: number;
+  /** Plain frames of submissions with nothing drawn on them. */
+  plainCount: number;
   dotOnlyFrames: number;
   attachmentBytes: number;
 }
@@ -197,10 +199,11 @@ export async function previewFeedback(
     subject: rendered.subject,
     html: rendered.html,
     to: testMode ? user.email : (model.student.email ?? "(no email on file)"),
-    warnings: frames?.warnings ?? [],
-    frameCount: frames?.frames.length ?? 0,
-    dotOnlyFrames: frames?.dotOnlyFrames ?? 0,
-    attachmentBytes: frames?.frames.reduce((n, f) => n + f.content.length, 0) ?? 0,
+    warnings: frames.warnings,
+    frameCount: frames.frames.filter((f) => f.annotated).length,
+    plainCount: frames.frames.filter((f) => !f.annotated).length,
+    dotOnlyFrames: frames.dotOnlyFrames,
+    attachmentBytes: frames.frames.reduce((n, f) => n + f.content.length, 0),
   };
 }
 
@@ -264,10 +267,10 @@ export async function sendFeedbackToStudent(
     subject: rendered.subject,
     html: rendered.html,
     text: rendered.text,
-    images: frames?.frames,
+    images: frames.frames,
   });
 
-  const frameCount = frames?.frames.length ?? 0;
+  const frameCount = frames.frames.filter((f) => f.annotated).length;
   const [row] = await db
     .insert(feedbackSends)
     .values({
@@ -302,7 +305,7 @@ export async function sendFeedbackToStudent(
     name,
     result: "sent",
     to,
-    warnings: frames?.warnings ?? [],
+    warnings: frames.warnings,
     lastSent: {
       sentAt: row.sentAt,
       fingerprint: row.gradeFingerprint,

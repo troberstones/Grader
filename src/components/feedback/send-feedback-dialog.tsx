@@ -207,7 +207,7 @@ export function SendFeedbackDialog({ assignmentId, trigger = "button", onSent }:
                 checked={options.annotations}
                 onChange={(v) => setOptions((o) => ({ ...o, annotations: v }))}
                 label="Annotated frames"
-                hint="Every frame you drew on, as images in the email. Frames with only a stray dot are left out."
+                hint="Every frame you drew on, as images in the email. Frames with only a stray dot are left out. Files you didn't draw on always get one plain frame."
               />
               <Choice
                 checked={options.link}
@@ -462,14 +462,15 @@ function PreviewPane({
         </select>
       </div>
       {preview.loading || !d ? (
-        <p className="py-16 text-center text-sm text-muted-foreground animate-pulse">Rendering annotated frames…</p>
+        <p className="py-16 text-center text-sm text-muted-foreground animate-pulse">Rendering images…</p>
       ) : (
         <>
           <div className="space-y-0.5 text-xs text-muted-foreground">
             <div><span className="text-foreground">To:</span> {d.to}</div>
             <div><span className="text-foreground">Subject:</span> {d.subject}</div>
             <div>
-              {d.frameCount} frame{d.frameCount === 1 ? "" : "s"}
+              {d.frameCount} annotated frame{d.frameCount === 1 ? "" : "s"}
+              {d.plainCount > 0 && ` · ${d.plainCount} plain frame${d.plainCount === 1 ? "" : "s"} of unannotated work`}
               {d.attachmentBytes > 0 &&
                 ` · ${
                   d.attachmentBytes < 1024 * 1024

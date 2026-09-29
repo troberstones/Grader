@@ -11,13 +11,18 @@ import { isDot, strokesToSvg } from "./stroke-svg";
 const run = promisify(execFile);
 
 /**
- * Annotated frames for one student's submissions, rendered to JPEG for email.
+ * The images in a feedback email: annotated frames, plus one plain frame of
+ * each submitted file that has none, rendered to JPEG.
  *
  * Rendered here on the server from the stored strokes, not captured from the
  * reviewer: sending to a whole class must not depend on someone having opened
  * each student's work in a browser first. The artwork is the web-safe
  * derivative the reviewer itself shows (review_media), untouched by any view
  * adjustments — no zoom, exposure, flips or guides.
+ *
+ * The plain frames are there so every email has the work itself to look at
+ * alongside the rubric, even when nothing was drawn on it (or annotations
+ * weren't asked for).
  */
 
 export interface RenderedFrame {
@@ -25,6 +30,8 @@ export interface RenderedFrame {
   filename: string;
   /** "render.mp4 · frame 142 · 00:05:22" */
   label: string;
+  /** False for a submission's plain reference frame. */
+  annotated: boolean;
   content: Buffer;
   contentType: "image/jpeg";
   width: number;
@@ -59,10 +66,10 @@ const COMPRESSION_STEPS: { width: number; quality: number }[] = [
 
 type MediaRow = typeof reviewMedia.$inferSelect;
 
-export async function renderAnnotatedFrames(
+export async function renderFeedbackFrames(
   assignmentId: number,
   studentId: number,
-  opts: { budgetBytes?: number } = {},
+  opts: { annotations: boolean; budgetBytes?: number },
 ): Promise<FramesResult> {
   const sharp = (await import("sharp")).default;
   const warnings: string[] = [];
@@ -76,15 +83,16 @@ export async function renderAnnotatedFrames(
 
   // Each master is the composited frame at the largest size we would send,
   // kept lossless so every compression step starts from the same pixels.
-  const masters: { label: string; slug: string; png: Buffer }[] = [];
+  const masters: { label: string; slug: string; annotated: boolean; png: Buffer }[] = [];
 
   for (const sub of subs) {
-    const rows = await db
-      .select()
-      .from(reviewStrokes)
-      .where(and(eq(reviewStrokes.itemId, `sub:${sub.id}`), isNull(reviewStrokes.deletedAt)))
-      .orderBy(asc(reviewStrokes.seq));
-    if (rows.length === 0) continue;
+    const rows = opts.annotations
+      ? await db
+          .select()
+          .from(reviewStrokes)
+          .where(and(eq(reviewStrokes.itemId, `sub:${sub.id}`), isNull(reviewStrokes.deletedAt)))
+          .orderBy(asc(reviewStrokes.seq))
+      : [];
 
     const media = await db
       .select()
@@ -92,7 +100,7 @@ export async function renderAnnotatedFrames(
       .where(eq(reviewMedia.submissionId, sub.id))
       .orderBy(asc(reviewMedia.idx));
     if (media.some((m) => m.status === "failed")) {
-      warnings.push(`${sub.fileName}: the file could not be processed, so its annotations were left out`);
+      if (rows.length > 0) warnings.push(`${sub.fileName}: the file could not be processed, so its annotations were left out`);
       continue;
     }
 
@@ -100,13 +108,15 @@ export async function renderAnnotatedFrames(
     const composite = media.find((m) => m.variant === "composite");
     const frameRows = media.filter((m) => m.variant === "frame");
     const original = media.find((m) => m.variant === "original");
-    const primary = proxy ?? composite ?? frameRows[0] ?? original;
-    if (!primary) continue;
+    // No derivatives means the file was never opened in the reviewer, so
+    // nothing can be drawn on it either — the upload itself stands in, as it
+    // does for the reviewer (review-items.ts).
+    const primary = proxy ?? composite ?? frameRows[0] ?? original ?? uploadAsMedia(sub);
 
     if (primary.kind === "pages") {
       // pdf.js renders pages in the browser; nothing on this server can
       // rasterise a PDF page to draw on.
-      warnings.push(`${sub.fileName}: annotations on PDF pages aren't included in email yet`);
+      if (rows.length > 0) warnings.push(`${sub.fileName}: annotations on PDF pages aren't included in email yet`);
       continue;
     }
 
@@ -136,10 +146,16 @@ export async function renderAnnotatedFrames(
     const fps = primary.fps ?? sub.fps ?? null;
     const isVideo = primary.kind === "video";
     const isSequence = frameRows.length > 0;
+    const single = !isVideo && !isSequence;
+    const where = (frame: number) =>
+      single ? "" : ` · frame ${frame}${isVideo && fps ? ` · ${timecode(frame, fps)}` : ""}`;
 
-    for (const frame of keyFrames) {
-      const visible = strokes.filter((s) => s.frameIn <= frame && frame <= s.frameOut);
+    // Nothing drawn on it: one plain frame from the middle, which for a
+    // render is less likely than the first to be a fade from black.
+    const annotated = keyFrames.length > 0;
+    const plan = annotated ? keyFrames : [middleFrame(primary, frameRows.length, fps)];
 
+    for (const frame of plan) {
       let base: Buffer;
       try {
         if (isVideo) {
@@ -161,22 +177,21 @@ export async function renderAnnotatedFrames(
         .resize({ width: top, withoutEnlargement: true })
         .png({ compressionLevel: 1 })
         .toBuffer({ resolveWithObject: true });
-      const { width: outW, height: outH } = resized.info;
 
-      const svg = strokesToSvg(visible, W, H, outW, outH);
-      const layers: { input: Buffer; blend?: "multiply" }[] = [];
-      if (svg.highlight) layers.push({ input: Buffer.from(svg.highlight), blend: "multiply" });
-      if (svg.normal) layers.push({ input: Buffer.from(svg.normal) });
+      let png = resized.data;
+      if (annotated) {
+        const visible = strokes.filter((s) => s.frameIn <= frame && frame <= s.frameOut);
+        const svg = strokesToSvg(visible, W, H, resized.info.width, resized.info.height);
+        const layers: { input: Buffer; blend?: "multiply" }[] = [];
+        if (svg.highlight) layers.push({ input: Buffer.from(svg.highlight), blend: "multiply" });
+        if (svg.normal) layers.push({ input: Buffer.from(svg.normal) });
+        png = await sharp(resized.data).composite(layers).png({ compressionLevel: 1 }).toBuffer();
+      }
 
-      const png = await sharp(resized.data).composite(layers).png({ compressionLevel: 1 }).toBuffer();
-
-      const single = !isVideo && !isSequence;
-      const where = single
-        ? ""
-        : ` · frame ${frame}${isVideo && fps ? ` · ${timecode(frame, fps)}` : ""}`;
       masters.push({
-        label: `${sub.fileName}${where}`,
+        label: annotated ? `${sub.fileName}${where(frame)}` : sub.fileName,
         slug: `${sub.id}-${frame}`,
+        annotated,
         png,
       });
     }
@@ -195,6 +210,7 @@ export async function renderAnnotatedFrames(
         cid: `frame-${m.slug}@grader`,
         filename: `frame-${m.slug}.jpg`,
         label: m.label,
+        annotated: m.annotated,
         content: out.data,
         contentType: "image/jpeg",
         width: out.info.width,
@@ -205,19 +221,51 @@ export async function renderAnnotatedFrames(
     if (total <= budget) break;
   }
 
-  // Still over at the smallest step: drop frames from the end rather than
-  // send something the student's mail server will bounce.
+  // Still over at the smallest step: drop frames rather than send something
+  // the student's mail server will bounce — plain frames first, since the
+  // annotations are what the email is for, then from the end.
   let total = encoded.reduce((sum, f) => sum + f.content.length, 0);
   let dropped = 0;
   while (total > budget && encoded.length > 0) {
-    total -= encoded.pop()!.content.length;
+    let i = encoded.findLastIndex((f) => !f.annotated);
+    if (i < 0) i = encoded.length - 1;
+    total -= encoded.splice(i, 1)[0].content.length;
     dropped++;
   }
   if (dropped > 0) {
-    warnings.push(`${dropped} annotated frame${dropped === 1 ? "" : "s"} didn't fit in one email and were left out`);
+    warnings.push(`${dropped} image${dropped === 1 ? "" : "s"} didn't fit in one email and were left out`);
   }
 
   return { frames: encoded, warnings, dotOnlyFrames };
+}
+
+function uploadAsMedia(sub: typeof submissions.$inferSelect): MediaRow {
+  return {
+    id: 0,
+    submissionId: sub.id,
+    variant: "original",
+    idx: 0,
+    path: sub.filePath,
+    mime: sub.fileType,
+    kind: sub.fileType === "application/pdf" ? "pages" : sub.mediaType === "video" ? "video" : "still",
+    width: null,
+    height: null,
+    fps: sub.fps,
+    frameCount: sub.frameCount,
+    duration: sub.duration,
+    colorPrimaries: null,
+    colorTransfer: null,
+    status: "ready",
+    warnings: null,
+    createdAt: sub.submittedAt,
+  };
+}
+
+function middleFrame(primary: MediaRow, sequenceLength: number, fps: number | null): number {
+  if (sequenceLength > 0) return Math.floor(sequenceLength / 2);
+  if (primary.kind !== "video") return 0;
+  const count = primary.frameCount ?? (primary.duration && fps ? Math.round(primary.duration * fps) : 0);
+  return Math.max(0, Math.floor(count / 2));
 }
 
 /** Same format as the reviewer's timeline (Timeline.tsx), so the numbers match what the professor saw. */
