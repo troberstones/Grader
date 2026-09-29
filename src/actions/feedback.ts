@@ -138,7 +138,7 @@ async function build(
   // Always rendered: even without annotations, each submitted file gets one
   // plain frame so the email shows the work the rubric is about.
   const frames = await renderFeedbackFrames(assignmentId, studentId, { annotations: options.annotations });
-  const frameNotes = frames.warnings;
+  const frameNotes = frames.studentNotes;
 
   const base = appBaseUrl();
   let link: { url: string; expires: Date } | null = null;

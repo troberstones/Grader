@@ -40,8 +40,14 @@ export interface RenderedFrame {
 
 export interface FramesResult {
   frames: RenderedFrame[];
-  /** Things the professor should know were left out, e.g. PDF pages. */
+  /** Things the professor should know were left out, e.g. PDF pages. Never emailed. */
   warnings: string[];
+  /**
+   * The subset of `warnings` fit to show the student, in plain words. Read
+   * errors (ffmpeg's stderr, file paths) stay out of this — they mean
+   * nothing to a student and leak server details.
+   */
+  studentNotes: string[];
   /** Frames skipped because their only marks were dots. */
   dotOnlyFrames: number;
 }
@@ -73,6 +79,7 @@ export async function renderFeedbackFrames(
 ): Promise<FramesResult> {
   const sharp = (await import("sharp")).default;
   const warnings: string[] = [];
+  const studentNotes: string[] = [];
   let dotOnlyFrames = 0;
 
   const subs = await db
@@ -116,7 +123,11 @@ export async function renderFeedbackFrames(
     if (primary.kind === "pages") {
       // pdf.js renders pages in the browser; nothing on this server can
       // rasterise a PDF page to draw on.
-      if (rows.length > 0) warnings.push(`${sub.fileName}: annotations on PDF pages aren't included in email yet`);
+      if (rows.length > 0) {
+        const note = `${sub.fileName}: annotations on PDF pages aren't included in email yet`;
+        warnings.push(note);
+        studentNotes.push(note);
+      }
       continue;
     }
 
@@ -167,7 +178,8 @@ export async function renderFeedbackFrames(
           base = await loadStill(primary);
         }
       } catch (err) {
-        warnings.push(`${sub.fileName}: couldn't read frame ${frame} (${err instanceof Error ? err.message : String(err)})`);
+        console.warn(`[feedback] ${sub.fileName}: couldn't read frame ${frame}`, err);
+        warnings.push(`${sub.fileName}: couldn't read frame ${frame} (${briefError(err)})`);
         continue;
       }
 
@@ -233,10 +245,23 @@ export async function renderFeedbackFrames(
     dropped++;
   }
   if (dropped > 0) {
-    warnings.push(`${dropped} image${dropped === 1 ? "" : "s"} didn't fit in one email and were left out`);
+    const note = `${dropped} image${dropped === 1 ? "" : "s"} didn't fit in one email and were left out`;
+    warnings.push(note);
+    studentNotes.push(note);
   }
 
-  return { frames: encoded, warnings, dotOnlyFrames };
+  return { frames: encoded, warnings, studentNotes, dotOnlyFrames };
+}
+
+/**
+ * One line of an error for the professor's warning list. ffmpeg failures
+ * carry the whole command and pages of decoder stderr; the full error goes
+ * to the server log instead.
+ */
+function briefError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const line = msg.startsWith("Command failed:") ? "the video file is damaged or can't be decoded" : msg.split("\n")[0];
+  return line.length > 160 ? `${line.slice(0, 157)}…` : line;
 }
 
 function uploadAsMedia(sub: typeof submissions.$inferSelect): MediaRow {
