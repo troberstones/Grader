@@ -82,6 +82,19 @@ export class VideoElementSource implements FrameSource {
         this.seekToFrame(next);
       }
     });
+    /*
+     * Safari takes `preload="metadata"` literally: it stops at HAVE_METADATA
+     * and decodes no picture until something plays or seeks, so `loadeddata`
+     * never fires, ready() never settles, peek() never seeks — and the view
+     * stays black. Chrome decodes the first frame regardless. A seek is what
+     * makes Safari fetch and decode, so issue one as soon as the metadata is
+     * in; `loadeddata` and `seeked` follow from it.
+     */
+    v.addEventListener("loadedmetadata", () => {
+      if (v.readyState < HTMLMediaElement.HAVE_CURRENT_DATA && !this.seekPending) {
+        this.seekToFrame(Math.max(0, this.lastSeekFrame));
+      }
+    });
     v.addEventListener("error", () => {
       this.error = v.error ? `video error ${v.error.code}` : "video failed to load";
       this.emit();
