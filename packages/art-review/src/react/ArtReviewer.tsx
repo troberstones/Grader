@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { hexToRgba, Smoother, simplify } from "../core/strokes";
 import { nextMarker, prevMarker } from "../core/fold";
+import { FRESH_VIEW, resumeFrame } from "../core/reducer";
 import { RGBE_TRANSFER } from "../core/rgbe";
 import { QUALITY_STEPS, type VideoQuality } from "../core/budget";
 import { DecodedVideoSource } from "../sources/decoded-video";
 import type { FrameSource } from "../sources/types";
-import type { Author, LoopMode, Stroke, StrokeTool, ViewerState } from "../core/types";
+import type { Author, FitMode, LoopMode, Stroke, StrokeTool, ViewerState } from "../core/types";
 import { GLRenderer, type ViewParams } from "../render/gl";
 import {
   clearOverlay,
@@ -20,6 +21,7 @@ import {
 } from "../render/overlay";
 import { LayeredSource } from "../sources/layered";
 import { setStoredCacheLimit, sharedLedger, storedCacheLimit } from "../sources/ledger";
+import { setStoredLinkView } from "../sources/playback-prefs";
 import { VideoElementSource } from "../sources/video-element";
 import type { ReviewChannel, ReviewDataAdapter } from "../adapter/types";
 import type { ReviewItem } from "../core/types";
@@ -33,7 +35,7 @@ import { InkRail, TransportBar, ViewBar, type ToolState } from "./components/Too
 import { readDroppedFiles, readPastedFiles } from "./dropFiles";
 import { isButtonTarget, isTypingTarget } from "./keymap";
 import { C, iconButton, label, noSelect, select as selectStyle, selectableText, textButton } from "./styles";
-import { useAnnotations } from "./useAnnotations";
+import { useAnnotations, type AnnotationApi } from "./useAnnotations";
 import { useSession } from "./useSession";
 import { useViewer } from "./useViewer";
 
@@ -67,6 +69,22 @@ export interface ArtReviewerProps {
 }
 
 const LASER_LIFETIME_MS = 1200;
+
+/** The stage is one pane, or two side by side while comparing. */
+type PaneId = "main" | "compare";
+
+type Framing = { zoom?: number; panX?: number; panY?: number; fit?: FitMode };
+
+/** Everything a pointer handler needs to know about the pane it landed on. */
+interface PaneCtx {
+  notes: AnnotationApi;
+  frame: number;
+  frameCount: number;
+  container: () => HTMLDivElement | null;
+  params: () => ViewParams;
+  view: { zoom: number; panX: number; panY: number };
+  setView: (v: Framing) => void;
+}
 /**
  * The artwork is the point, so the stage has a floor — but a low one.
  *
@@ -96,6 +114,7 @@ export function ArtReviewer({
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const compareContainerRef = useRef<HTMLDivElement>(null);
   const compareCanvasRef = useRef<HTMLCanvasElement>(null);
+  const compareOverlayRef = useRef<HTMLCanvasElement>(null);
   /** The item in the second pane, by id so it survives the playlist changing. */
   const [compareId, setCompareId] = useState<string | null>(null);
 
@@ -115,7 +134,9 @@ export function ArtReviewer({
   const [showHelp, setShowHelp] = useState(false);
   // One viewer on their own device is the whole room, so it plays the audio.
   const [audioOwner, setAudioOwner] = useState(readOnly);
-  const [textPrompt, setTextPrompt] = useState<{ x: number; y: number; value: string } | null>(null);
+  const [textPrompt, setTextPrompt] = useState<{ x: number; y: number; value: string; pane: PaneId } | null>(null);
+  // Undo, redo and clear act on whichever pane was drawn on last.
+  const [inkPane, setInkPane] = useState<PaneId>("main");
   const [playlistBusy, setPlaylistBusy] = useState(false);
   // playlistBusy, readable from a listener before the next render lands.
   const addingRef = useRef(false);
@@ -199,10 +220,22 @@ export function ArtReviewer({
     session.subscribe,
   );
 
+  // The compare pane's file has notes of its own. Called with null while there
+  // is no such pane, which holds nothing and asks the server for nothing.
+  const compareItemId = compareId && items.some((i) => i.id === compareId) ? compareId : null;
+  const compareNotes = useAnnotations(
+    adapter,
+    compareItemId,
+    author,
+    session.send,
+    session.subscribe,
+  );
+
   // Live drawing state, kept in refs so the render loop reads it without
   // re-subscribing every stroke point.
   const drawingRef = useRef<{
     id: string;
+    pane: PaneId;
     /** Which pointer owns this stroke; another one lifting must not end it. */
     pointerId: number;
     pointerType: string;
@@ -213,16 +246,16 @@ export function ArtReviewer({
   } | null>(null);
   const smoother = useRef(new Smoother(0.5));
   const lasersRef = useRef<{ x: number; y: number; color: number; at: number; client: string }[]>([]);
-  const panStateRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const panStateRef = useRef<{ pane: PaneId; x: number; y: number; panX: number; panY: number } | null>(null);
   const pointersRef = useRef(new Map<number, { x: number; y: number }>());
-  const pinchRef = useRef<{ dist: number; zoom: number; cx: number; cy: number; panX: number; panY: number } | null>(null);
+  const pinchRef = useRef<{ pane: PaneId; dist: number; zoom: number; cx: number; cy: number; panX: number; panY: number } | null>(null);
   const spaceRef = useRef(false);
   /**
    * Where the stylus is, in media space, and whether it is touching. Apple
    * Pencil reports hover on the hardware that supports it; on everything else
    * this simply never populates until the tip lands.
    */
-  const hoverRef = useRef<{ x: number; y: number; down: boolean } | null>(null);
+  const hoverRef = useRef<{ pane: PaneId; x: number; y: number; down: boolean } | null>(null);
   /** finishStroke is defined below onPointerDown; a ref sidesteps the ordering. */
   const finishStrokeRef = useRef<(() => void) | null>(null);
   const onPointerUpRef = useRef<((e: React.PointerEvent) => void) | null>(null);
@@ -310,7 +343,8 @@ export function ArtReviewer({
     if (!showLog) return;
     const seen = (e: PointerEvent) => {
       if (e.pointerType !== "pen") return;
-      if (e.target === overlayRef.current) return; // already logged in full
+      // Already logged in full.
+      if (e.target === overlayRef.current || e.target === compareOverlayRef.current) return;
       const el = e.target as HTMLElement | null;
       const what = el?.tagName?.toLowerCase() ?? "?";
       const phase: InputEntry["phase"] =
@@ -371,9 +405,10 @@ export function ArtReviewer({
   const inkColor = useMemo(() => hexToRgba(tools.color), [tools.color]);
 
   // ── Overlay drawing ─────────────────────────────────────────────────────────
-  const drawOverlay = useCallback(
-    (params: ViewParams, frame: number) => {
-      const canvas = overlayRef.current;
+  const paintOverlay = useCallback(
+    (pane: PaneId, params: ViewParams, frame: number) => {
+      const canvas = (pane === "main" ? overlayRef : compareOverlayRef).current;
+      const notes = pane === "main" ? annotations : compareNotes;
       if (!canvas) return;
       if (canvas.width !== params.canvasWidth) canvas.width = params.canvasWidth;
       if (canvas.height !== params.canvasHeight) canvas.height = params.canvasHeight;
@@ -383,14 +418,14 @@ export function ArtReviewer({
       clearOverlay(ctx, params);
       drawGuides(ctx, guidesRef.current, params);
 
-      const committed = annotations.visibleOn(frame);
+      const committed = notes.visibleOn(frame);
       drawStrokes(ctx, committed, params, {
-        hiddenAuthors: annotations.hiddenAuthors,
+        hiddenAuthors: notes.hiddenAuthors,
         ghostMs: 0,
       });
 
       // Remote in-progress ink — the room watches the line being drawn.
-      for (const ink of annotations.liveInk) {
+      for (const ink of notes.liveInk) {
         drawLiveInk(
           ctx,
           { tool: ink.tool, color: ink.color, width: ink.width, points: ink.points },
@@ -400,7 +435,7 @@ export function ArtReviewer({
 
       // The local stroke in flight.
       const local = drawingRef.current;
-      if (local && local.points.length >= 2) {
+      if (local && local.pane === pane && local.points.length >= 2) {
         drawLiveInk(
           ctx,
           {
@@ -415,10 +450,12 @@ export function ArtReviewer({
       }
 
       const hover = hoverRef.current;
-      if (hover && tools.tool !== "select") {
+      if (hover && hover.pane === pane && tools.tool !== "select") {
         drawBrushCursor(ctx, hover, tools.width, inkColor, params);
       }
 
+      // The laser points at the room's picture, which is the main pane.
+      if (pane !== "main") return;
       const now = Date.now();
       lasersRef.current = lasersRef.current.filter((l) => now - l.at < LASER_LIFETIME_MS);
       if (lasersRef.current.length) {
@@ -429,7 +466,15 @@ export function ArtReviewer({
         );
       }
     },
-    [annotations, tools.width, tools.tool, inkColor],
+    [annotations, compareNotes, tools.width, tools.tool, inkColor],
+  );
+  const drawOverlay = useCallback(
+    (params: ViewParams, frame: number) => paintOverlay("main", params, frame),
+    [paintOverlay],
+  );
+  const drawCompareOverlay = useCallback(
+    (params: ViewParams, frame: number) => paintOverlay("compare", params, frame),
+    [paintOverlay],
   );
 
   const viewer = useViewer({
@@ -442,7 +487,8 @@ export function ArtReviewer({
     initial,
     pdfWorkerUrl,
     annotatedFrames: annotations.annotatedFrames,
-    compareItemId: compareId,
+    compareItemId,
+    drawCompareOverlay,
     compareCanvasRef,
     compareContainerRef,
   });
@@ -492,13 +538,59 @@ export function ArtReviewer({
   const swapCompare = useCallback(() => {
     const index = compareItem ? items.indexOf(compareItem) : -1;
     if (index === -1) return;
-    const { zoom, panX, panY, fit } = state;
+    const { zoom, panX, panY, fit, linkView } = state;
     dispatch({ a: "goto", item: index });
-    // Both panes were already sharing this framing; trading places keeps it.
-    dispatch({ a: "view", zoom, panX, panY, fit });
+    // Linked, both panes were already sharing this framing and trading places
+    // keeps it. Unlinked, each file's own framing travels with it.
+    if (linkView) dispatch({ a: "view", zoom, panX, panY, fit });
   }, [compareItem, items, state, dispatch]);
 
-  const comparePanRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const setLinkView = useCallback(
+    (on: boolean) => {
+      setStoredLinkView(on);
+      // Unlinking must not make the picture jump: the pane carries on from the
+      // framing it was sharing a moment ago.
+      if (!on && compareItem) {
+        const { zoom, panX, panY, fit } = state;
+        dispatch({ a: "viewOf", item: compareItem.id, zoom, panX, panY, fit });
+      }
+      dispatch({ a: "opts", patch: { linkView: on } });
+    },
+    [compareItem, state, dispatch],
+  );
+
+  const compareFrame = compareItem ? resumeFrame(state, items, items.indexOf(compareItem)) : 0;
+  const frameCount = item?.frameCount ?? 1;
+  const mainPane: PaneCtx = {
+    notes: annotations,
+    frame: state.frame,
+    frameCount,
+    container: () => containerRef.current,
+    params: viewer.viewParams,
+    view: state,
+    setView: (v) => dispatch({ a: "view", ...v }),
+  };
+  const ownView = compareItem !== null && !state.linkView;
+  const panes: Record<PaneId, PaneCtx> = {
+    main: mainPane,
+    compare: {
+      notes: compareNotes,
+      frame: compareFrame,
+      frameCount: compareItem?.frameCount ?? 1,
+      container: () => compareContainerRef.current,
+      params: () => viewer.compareViewParams() ?? viewer.viewParams(),
+      view: ownView ? state.remembered[compareItem.id] ?? FRESH_VIEW : state,
+      setView: ownView
+        ? (v) => dispatch({ a: "viewOf", item: compareItem.id, ...v })
+        : mainPane.setView,
+    },
+  };
+  // Handlers read the panes at event time; rebuilding every one of them each
+  // time the playhead moves would be the alternative.
+  const panesRef = useRef(panes);
+  panesRef.current = panes;
+  const activePane: PaneId = compareItem ? inkPane : "main";
+  const activeNotes = panes[activePane].notes;
 
   // ── Paste ───────────────────────────────────────────────────────────────────
   // A screenshot on the clipboard becomes another piece for this student, the
@@ -531,7 +623,6 @@ export function ArtReviewer({
     revealFromRef.current = null;
     if (canControl) dispatch({ a: "goto", item: items.length - 1, frame: 0 });
   }, [items.length, canControl, dispatch]);
-  const frameCount = item?.frameCount ?? 1;
 
   // Remote strokes and live ink land outside the render loop, and the loop only
   // paints when something marks the frame dirty. On a paused screen — which is
@@ -543,7 +634,11 @@ export function ArtReviewer({
     // reference every render, which would invalidate on every render instead
     // of only when one of the values below actually changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer.invalidate, annotations.strokes, annotations.liveInk, annotations.hiddenAuthors]);
+  }, [
+    viewer.invalidate,
+    annotations.strokes, annotations.liveInk, annotations.hiddenAuthors,
+    compareNotes.strokes, compareNotes.liveInk, compareNotes.hiddenAuthors,
+  ]);
 
   // Laser events from peers.
   useEffect(() => {
@@ -585,9 +680,10 @@ export function ArtReviewer({
 
   // ── Coordinate helpers ──────────────────────────────────────────────────────
   const toMediaNorm = useCallback(
-    (clientX: number, clientY: number): { x: number; y: number } => {
-      const el = containerRef.current;
-      const params = viewer.viewParams();
+    (clientX: number, clientY: number, pane: PaneId = "main"): { x: number; y: number } => {
+      const ctx = panesRef.current[pane];
+      const el = ctx.container();
+      const params = ctx.params();
       if (!el) return { x: 0, y: 0 };
       const r = el.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
@@ -598,25 +694,32 @@ export function ArtReviewer({
       );
       return { x: p.x / params.mediaWidth, y: p.y / params.mediaHeight };
     },
-    [viewer],
+    [],
   );
+
+  /** Which pane an event belongs to, from the overlay or container it fired on. */
+  const paneOf = (e: { currentTarget: EventTarget | null }): PaneId =>
+    e.currentTarget !== null &&
+    (e.currentTarget === compareOverlayRef.current || e.currentTarget === compareContainerRef.current)
+      ? "compare"
+      : "main";
 
   /**
    * A note belongs to the frame it was drawn on. `frameOut` stays in the shape
    * because the codec and the table both carry it, but nothing spans any more.
    */
-  const holdRange = useCallback(
-    (frame: number): [number, number] => (frameCount <= 1 ? [0, 0] : [frame, frame]),
-    [frameCount],
-  );
+  const holdRange = (frame: number, count: number): [number, number] =>
+    count <= 1 ? [0, 0] : [frame, frame];
 
   toMediaNormRef.current = toMediaNorm;
 
   // ── Pointer handling ────────────────────────────────────────────────────────
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      const el = overlayRef.current;
-      if (!el) return;
+      const el = e.currentTarget as HTMLElement;
+      const paneId = paneOf(e);
+      const pane = panesRef.current[paneId];
+      const view = pane.view;
       // Tell the browser this gesture is ours.
       if (e.pointerType !== "touch" && e.cancelable) e.preventDefault();
       try {
@@ -639,16 +742,17 @@ export function ArtReviewer({
         if (pointersRef.current.size === 2) {
           const [a, b] = [...pointersRef.current.values()];
           pinchRef.current = {
+            pane: paneId,
             dist: Math.hypot(a.x - b.x, a.y - b.y),
-            zoom: state.zoom,
+            zoom: view.zoom,
             cx: (a.x + b.x) / 2,
             cy: (a.y + b.y) / 2,
-            panX: state.panX,
-            panY: state.panY,
+            panX: view.panX,
+            panY: view.panY,
           };
           panStateRef.current = null;
         } else if (pointersRef.current.size === 1) {
-          panStateRef.current = { x: e.clientX, y: e.clientY, panX: state.panX, panY: state.panY };
+          panStateRef.current = { pane: paneId, x: e.clientX, y: e.clientY, panX: view.panX, panY: view.panY };
         }
         return;
       }
@@ -670,7 +774,9 @@ export function ArtReviewer({
       }
       pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-      // Laser: transient, broadcast, never stored.
+      // Laser: transient, broadcast, never stored. Main pane only — it is the
+      // one picture every screen in the room is showing.
+      if (e.altKey && paneId !== "main") return;
       if (e.altKey) {
         const p = toMediaNorm(e.clientX, e.clientY);
         lasersRef.current = [
@@ -685,7 +791,7 @@ export function ArtReviewer({
       // Pan: space-drag, middle button, or the select tool. Mouse only — a
       // stylus does not pan even when the select tool is active.
       if (e.pointerType !== "pen" && (spaceRef.current || e.button === 1 || tools.tool === "select")) {
-        panStateRef.current = { x: e.clientX, y: e.clientY, panX: state.panX, panY: state.panY };
+        panStateRef.current = { pane: paneId, x: e.clientX, y: e.clientY, panX: view.panX, panY: view.panY };
         logInput("down", e, "pan (mouse)");
         return;
       }
@@ -698,16 +804,17 @@ export function ArtReviewer({
         return;
       }
 
-      const p = toMediaNorm(e.clientX, e.clientY);
+      const p = toMediaNorm(e.clientX, e.clientY, paneId);
+      setInkPane(paneId);
 
       if (tools.tool === "erase") {
-        void annotations.eraseAt(state.frame, p.x, p.y, 0.02);
+        void pane.notes.eraseAt(pane.frame, p.x, p.y, 0.02);
         logInput("down", e, "erase");
         return;
       }
 
       if (tools.tool === "text") {
-        setTextPrompt({ x: p.x, y: p.y, value: "" });
+        setTextPrompt({ x: p.x, y: p.y, value: "", pane: paneId });
         logInput("down", e, "text");
         return;
       }
@@ -716,6 +823,7 @@ export function ArtReviewer({
       const [sx, sy] = smoother.current.push(p.x, p.y);
       drawingRef.current = {
         id: `${author.id}-${Date.now().toString(36)}`,
+        pane: paneId,
         pointerId: e.pointerId,
         pointerType: e.pointerType,
         points: [sx, sy],
@@ -723,11 +831,11 @@ export function ArtReviewer({
         sent: 0,
         tool: tools.tool as StrokeTool,
       };
-      hoverRef.current = { x: p.x, y: p.y, down: true };
+      hoverRef.current = { pane: paneId, x: p.x, y: p.y, down: true };
       logInput("down", e, `START ${tools.tool}`);
       viewer.invalidate();
     },
-    [state, tools.tool, toMediaNorm, annotations, author, session, channel.clientId, viewer, logInput],
+    [tools.tool, toMediaNorm, author, session, channel.clientId, viewer, logInput],
   );
 
   const onPointerMove = useCallback(
@@ -740,17 +848,18 @@ export function ArtReviewer({
       // hovering pen takes the "nothing in flight" path and would otherwise
       // never move.
       if (e.pointerType === "pen") {
-        const h = toMediaNorm(e.clientX, e.clientY);
-        hoverRef.current = { x: h.x, y: h.y, down: e.buttons !== 0 };
+        const hoverPane = drawingRef.current?.pane ?? paneOf(e);
+        const h = toMediaNorm(e.clientX, e.clientY, hoverPane);
+        hoverRef.current = { pane: hoverPane, x: h.x, y: h.y, down: e.buttons !== 0 };
         viewer.invalidate();
 
         // If capture slipped away mid-stroke, take it back. Losing it is how a
         // letter goes missing: the remaining moves are delivered somewhere
         // else, and the first sign is the cursor freezing where the stroke
         // began.
-        const el = overlayRef.current;
+        const el = e.currentTarget as HTMLElement;
         const d = drawingRef.current;
-        if (el && d && d.pointerId === e.pointerId && !el.hasPointerCapture(e.pointerId)) {
+        if (d && d.pointerId === e.pointerId && !el.hasPointerCapture(e.pointerId)) {
           try {
             el.setPointerCapture(e.pointerId);
             logInput("move", e, "recaptured — capture had slipped");
@@ -772,7 +881,7 @@ export function ArtReviewer({
         const cx = (a.x + b.x) / 2;
         const cy = (a.y + b.y) / 2;
         const k = dist / Math.max(1, pinch.dist);
-        const el = containerRef.current;
+        const el = panesRef.current[pinch.pane].container();
         if (el) {
           const r = el.getBoundingClientRect();
           const cc = { x: r.width / 2, y: r.height / 2 };
@@ -780,7 +889,7 @@ export function ArtReviewer({
           const oy = pinch.cy - r.top;
           const panX = ox - cc.x - (ox - cc.x - pinch.panX) * k + (cx - pinch.cx);
           const panY = oy - cc.y - (oy - cc.y - pinch.panY) * k + (cy - pinch.cy);
-          dispatch({ a: "view", zoom: pinch.zoom * k, panX, panY });
+          panesRef.current[pinch.pane].setView({ zoom: pinch.zoom * k, panX, panY });
         }
         logInput("move", e, "pinch");
         return;
@@ -789,8 +898,7 @@ export function ArtReviewer({
       // Pan
       const pan = panStateRef.current;
       if (navigates && pan) {
-        dispatch({
-          a: "view",
+        panesRef.current[pan.pane].setView({
           panX: pan.panX + (e.clientX - pan.x),
           panY: pan.panY + (e.clientY - pan.y),
         });
@@ -799,6 +907,7 @@ export function ArtReviewer({
       }
 
       // Laser drag
+      if (e.altKey && !drawingRef.current && paneOf(e) !== "main") return;
       if (e.altKey && !drawingRef.current) {
         const p = toMediaNorm(e.clientX, e.clientY);
         lasersRef.current = [
@@ -838,7 +947,7 @@ export function ArtReviewer({
         }
       }
 
-      const raw = toMediaNorm(e.clientX, e.clientY);
+      const raw = toMediaNorm(e.clientX, e.clientY, d.pane);
       // Freehand accumulates; shapes only ever need start and current point.
       if (d.tool === "pen" || d.tool === "highlight") {
         const [sx, sy] = smoother.current.push(raw.x, raw.y);
@@ -854,7 +963,7 @@ export function ArtReviewer({
       // Stream the tail of the stroke so followers watch it appear live.
       const tail = d.points.slice(d.sent);
       if (tail.length >= 2) {
-        annotations.streamInk({
+        panesRef.current[d.pane].notes.streamInk({
           id: d.id,
           tool: d.tool,
           color: inkColor,
@@ -865,7 +974,7 @@ export function ArtReviewer({
       }
       viewer.invalidate();
     },
-    [dispatch, toMediaNorm, annotations, inkColor, tools.width, author.color, session, channel.clientId, viewer, logInput],
+    [toMediaNorm, inkColor, tools.width, author.color, session, channel.clientId, viewer, logInput],
   );
 
   const finishStroke = useCallback(async () => {
@@ -876,7 +985,8 @@ export function ArtReviewer({
       return;
     }
 
-    annotations.endInk(d.id);
+    const pane = panesRef.current[d.pane];
+    pane.notes.endInk(d.id);
 
     // A tap with a shape tool is an accident, not a zero-size rectangle.
     if (d.tool !== "pen" && d.tool !== "highlight" && d.points.length >= 4) {
@@ -891,9 +1001,9 @@ export function ArtReviewer({
 
     const points =
       d.tool === "pen" || d.tool === "highlight" ? simplify(d.points, 0.0012) : d.points;
-    const [frameIn, frameOut] = holdRange(state.frame);
+    const [frameIn, frameOut] = holdRange(pane.frame, pane.frameCount);
 
-    const res = await annotations.commit({
+    const res = await pane.notes.commit({
       tool: d.tool,
       color: inkColor,
       width: tools.width,
@@ -901,7 +1011,11 @@ export function ArtReviewer({
       frameOut,
       points,
       pressure: d.pressure.length === d.points.length / 2 ? d.pressure : undefined,
-      layers: state.composite ? undefined : Object.keys(state.layers).filter((k) => state.layers[k]),
+      // The compare pane always shows the flattened file.
+      layers:
+        d.pane !== "main" || state.composite
+          ? undefined
+          : Object.keys(state.layers).filter((k) => state.layers[k]),
     } as Omit<Stroke, "localId" | "authorId">);
     logNote(
       "up",
@@ -910,7 +1024,7 @@ export function ArtReviewer({
         : `NOT SAVED · ${res.why}`,
     );
     viewer.invalidate();
-  }, [annotations, holdRange, state, inkColor, tools.width, viewer, logNote]);
+  }, [state, inkColor, tools.width, viewer, logNote]);
 
   finishStrokeRef.current = () => void finishStroke();
 
@@ -937,9 +1051,11 @@ export function ArtReviewer({
         // Lifting one of two fingers: keep panning from the one still down,
         // re-anchored, rather than stopping dead until both are lifted.
         const rest = [...pointersRef.current.values()];
+        const paneId = paneOf(e);
+        const view = panesRef.current[paneId].view;
         panStateRef.current =
           rest.length === 1
-            ? { x: rest[0].x, y: rest[0].y, panX: state.panX, panY: state.panY }
+            ? { pane: paneId, x: rest[0].x, y: rest[0].y, panX: view.panX, panY: view.panY }
             : null;
         return; // a finger never ends a stroke
       }
@@ -956,7 +1072,7 @@ export function ArtReviewer({
       panStateRef.current = null;
       void finishStroke();
     },
-    [finishStroke, state.panX, state.panY, logInput],
+    [finishStroke, logInput],
   );
 
   /**
@@ -992,12 +1108,14 @@ export function ArtReviewer({
    * turn Scribble off in Settings.
    */
   useEffect(() => {
-    const el = overlayRef.current;
-    if (!el) return;
+    const overlays = [overlayRef.current, compareOverlayRef.current].filter((el) => el !== null);
     const swallow = (e: TouchEvent) => e.preventDefault();
-    el.addEventListener("touchmove", swallow, { passive: false });
-    return () => el.removeEventListener("touchmove", swallow);
-  }, []);
+    for (const el of overlays) el.addEventListener("touchmove", swallow, { passive: false });
+    return () => {
+      for (const el of overlays) el.removeEventListener("touchmove", swallow);
+    };
+    // The compare overlay comes and goes with its pane.
+  }, [compareItemId]);
 
   /** The cursor belongs to the stage; it does not linger once the pen leaves. */
   const onPointerLeave = useCallback(
@@ -1011,11 +1129,13 @@ export function ArtReviewer({
 
   // Wheel: pinch-zoom around the cursor, two-finger scroll pans.
   useEffect(() => {
-    // Either pane: they share one zoom and pan, so the gesture means the same
-    // thing over both, anchored on whichever the cursor is in.
-    const panes = [containerRef.current, compareContainerRef.current].filter((el) => el !== null);
+    // Either pane, anchored on whichever the cursor is in. Linked, they share
+    // one zoom and pan and the gesture moves both; unlinked, only its own.
+    const els = [containerRef.current, compareContainerRef.current].filter((el) => el !== null);
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      const pane = panesRef.current[paneOf(e)];
+      const view = pane.view;
       const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
       if (e.ctrlKey || e.metaKey) {
         const k = Math.exp(-e.deltaY * 0.01);
@@ -1023,26 +1143,21 @@ export function ArtReviewer({
         const oy = e.clientY - r.top;
         const ccx = r.width / 2;
         const ccy = r.height / 2;
-        const st = viewer.state;
-        dispatch({
-          a: "view",
-          zoom: st.zoom * k,
-          panX: ox - ccx - (ox - ccx - st.panX) * k,
-          panY: oy - ccy - (oy - ccy - st.panY) * k,
+        pane.setView({
+          zoom: view.zoom * k,
+          panX: ox - ccx - (ox - ccx - view.panX) * k,
+          panY: oy - ccy - (oy - ccy - view.panY) * k,
         });
       } else {
-        dispatch({
-          a: "view",
-          panX: viewer.state.panX - e.deltaX,
-          panY: viewer.state.panY - e.deltaY,
-        });
+        pane.setView({ panX: view.panX - e.deltaX, panY: view.panY - e.deltaY });
       }
     };
-    for (const el of panes) el.addEventListener("wheel", onWheel, { passive: false });
+    for (const el of els) el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
-      for (const el of panes) el.removeEventListener("wheel", onWheel);
+      for (const el of els) el.removeEventListener("wheel", onWheel);
     };
-  }, [dispatch, viewer]);
+    // The compare container comes and goes with its pane.
+  }, [compareItemId]);
 
   // ── Zoom helpers ────────────────────────────────────────────────────────────
   const setZoom = useCallback(
@@ -1082,7 +1197,7 @@ export function ArtReviewer({
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === "z") {
         e.preventDefault();
-        if (!readOnly) void (e.shiftKey ? annotations.redo() : annotations.undo());
+        if (!readOnly) void (e.shiftKey ? activeNotes.redo() : activeNotes.undo());
         return;
       }
       if (mod) return;
@@ -1226,7 +1341,7 @@ export function ArtReviewer({
       window.removeEventListener("keyup", up);
     };
   }, [
-    state, dispatch, viewer, annotations, frameCount, items.length, jumpAnnotation, setZoom, session,
+    state, dispatch, viewer, activeNotes, frameCount, items.length, jumpAnnotation, setZoom, session,
     readOnly, setTools, toggleCompare,
   ]);
 
@@ -1494,10 +1609,11 @@ export function ArtReviewer({
             <TextEntry
               onCancel={() => setTextPrompt(null)}
               onCommit={async (value) => {
-                const [frameIn, frameOut] = holdRange(state.frame);
+                const pane = panes[textPrompt.pane];
+                const [frameIn, frameOut] = holdRange(pane.frame, pane.frameCount);
                 setTextPrompt(null);
                 if (!value.trim()) return;
-                await annotations.commit({
+                await pane.notes.commit({
                   tool: "text",
                   color: inkColor,
                   width: tools.width,
@@ -1515,24 +1631,6 @@ export function ArtReviewer({
         {compareItem && (
           <div
             ref={compareContainerRef}
-            // Drag pans. There is no drawing here to mistake it for: notes go
-            // on the main pane, and swapping makes this file the main one.
-            onPointerDown={(e) => {
-              e.currentTarget.setPointerCapture(e.pointerId);
-              comparePanRef.current = { x: e.clientX, y: e.clientY, panX: state.panX, panY: state.panY };
-            }}
-            onPointerMove={(e) => {
-              const pan = comparePanRef.current;
-              if (!pan) return;
-              dispatch({
-                a: "view",
-                panX: pan.panX + (e.clientX - pan.x),
-                panY: pan.panY + (e.clientY - pan.y),
-              });
-            }}
-            onPointerUp={() => (comparePanRef.current = null)}
-            onPointerCancel={() => (comparePanRef.current = null)}
-            onContextMenu={(e) => e.preventDefault()}
             style={{
               position: "relative",
               flex: 1,
@@ -1541,21 +1639,41 @@ export function ArtReviewer({
               borderRadius: 8,
               overflow: "hidden",
               touchAction: "none",
-              cursor: "grab",
             }}
           >
             <canvas
               ref={compareCanvasRef}
               style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
             />
+            {/* The same handlers as the main overlay: they work out which pane
+                they are on from the canvas the event fired on. */}
+            <canvas
+              ref={compareOverlayRef}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerCancel}
+              onLostPointerCapture={onLostCapture}
+              onPointerLeave={onPointerLeave}
+              onPointerOut={onPointerLeave}
+              onContextMenu={(e) => e.preventDefault()}
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                cursor,
+                touchAction: "none",
+              }}
+            />
             <div
-              // The controls are not part of the pan surface.
-              onPointerDown={(e) => e.stopPropagation()}
               style={{
                 position: "absolute",
                 top: 8,
                 left: 8,
-                right: 8,
+                // Only as wide as its controls: the rest of this strip is
+                // picture, and has to stay drawable.
+                maxWidth: "calc(100% - 16px)",
                 display: "flex",
                 alignItems: "center",
                 gap: 4,
@@ -1579,7 +1697,7 @@ export function ArtReviewer({
                 onClick={swapCompare}
                 disabled={!canControl}
                 style={{ ...iconButton(false, !canControl), background: C.high, flexShrink: 0 }}
-                title="Swap sides — notes are drawn on the left"
+                title="Swap sides"
               >
                 ⇄
               </button>
@@ -1590,6 +1708,33 @@ export function ArtReviewer({
               >
                 ✕
               </button>
+              {/* Here rather than in the header, which has no room left to give
+                  without wrapping onto a second row and taking it off the stage. */}
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
+                  height: 28,
+                  padding: "0 8px",
+                  borderRadius: 6,
+                  background: "rgba(0,0,0,0.6)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+                title={
+                  "On: both panes share one zoom and pan, and switching between files of the " +
+                  "same shape keeps the framing. Off: each file keeps its own."
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={state.linkView}
+                  onChange={(e) => setLinkView(e.target.checked)}
+                  style={{ accentColor: C.primary }}
+                />
+                <span style={label}>Sync pan/zoom</span>
+              </label>
             </div>
             {compareItem.unavailable && (
               <Centered>
@@ -1598,6 +1743,7 @@ export function ArtReviewer({
                 </span>
               </Centered>
             )}
+            {compareNotes.error && <Notice tone="error">{compareNotes.error}</Notice>}
           </div>
         )}
 
@@ -1665,15 +1811,15 @@ export function ArtReviewer({
 
       {!readOnly && <InkRail
         tools={tools}
-        canUndo={annotations.canUndo}
-        canRedo={annotations.canRedo}
-        saving={annotations.saving}
+        canUndo={activeNotes.canUndo}
+        canRedo={activeNotes.canRedo}
+        saving={annotations.saving || compareNotes.saving}
         onTool={(t: ToolState["tool"]) => setTools((s) => ({ ...s, tool: t }))}
         onColorPick={(c: string) => setTools((s) => ({ ...s, color: c }))}
         onWidth={(w: number) => setTools((s) => ({ ...s, width: w }))}
-        onUndo={() => void annotations.undo()}
-        onRedo={() => void annotations.redo()}
-        onClear={() => void annotations.clearFrame(state.frame)}
+        onUndo={() => void activeNotes.undo()}
+        onRedo={() => void activeNotes.redo()}
+        onClear={() => void activeNotes.clearFrame(panes[activePane].frame)}
       />}
 
       {showHelp && <HelpSheet onClose={() => setShowHelp(false)} />}

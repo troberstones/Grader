@@ -8,6 +8,7 @@ import type { VideoQuality } from "../core/budget";
 
 const QUALITY_KEY = "art-review.videoQuality";
 const SHARPEN_KEY = "art-review.sharpenOnPause";
+const LINK_VIEW_KEY = "art-review.linkView";
 
 export function storedVideoQuality(): VideoQuality {
   try {
@@ -41,6 +42,23 @@ export function storedSharpenOnPause(): boolean {
 export function setStoredSharpenOnPause(on: boolean): void {
   try {
     localStorage.setItem(SHARPEN_KEY, on ? "1" : "0");
+  } catch {
+    // As above.
+  }
+}
+
+/** On by default: comparing two files means looking at the same part of both. */
+export function storedLinkView(): boolean {
+  try {
+    return localStorage.getItem(LINK_VIEW_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export function setStoredLinkView(on: boolean): void {
+  try {
+    localStorage.setItem(LINK_VIEW_KEY, on ? "1" : "0");
   } catch {
     // As above.
   }

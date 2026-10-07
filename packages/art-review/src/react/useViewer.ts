@@ -6,7 +6,7 @@ import { isBroadcast, shouldApply } from "../core/actions";
 import { detectBudget, type Budget, type VideoQuality } from "../core/budget";
 import { needsResync, projectFrame, type TransportSnapshot } from "../core/clock";
 import { fold, step } from "../core/fold";
-import { initialStateFor, reduceViewer, resumeFrame } from "../core/reducer";
+import { FRESH_VIEW, initialStateFor, reduceViewer, resumeFrame } from "../core/reducer";
 import { DEFAULT_VIEWER_STATE, type ReviewItem, type ViewerState } from "../core/types";
 import { GLRenderer, type ViewParams } from "../render/gl";
 import { createSource, DecodedVideoSource, VideoElementSource } from "../sources";
@@ -16,6 +16,7 @@ import { sharedLedger, storedCacheLimit } from "../sources/ledger";
 import {
   setStoredSharpenOnPause,
   setStoredVideoQuality,
+  storedLinkView,
   storedSharpenOnPause,
   storedVideoQuality,
 } from "../sources/playback-prefs";
@@ -38,6 +39,8 @@ export interface ViewerApi {
   glReady: boolean;
   glError: string | null;
   viewParams: () => ViewParams;
+  /** The compare pane's view, or null when there is no such pane. */
+  compareViewParams: () => ViewParams | null;
   /** Force a redraw when something outside viewer state changed. */
   invalidate: () => void;
   fallbackNotice: string | null;
@@ -67,10 +70,12 @@ export interface UseViewerOptions {
   onFrameChange?: (frame: number) => void;
   /**
    * A second pane showing another item beside the first: same frame, same
-   * zoom and pan, same colour and flips. Picture only — notes are drawn and
-   * shown on the main pane. Local to this screen; never broadcast.
+   * colour and flips, and the same zoom and pan while the view is linked.
+   * Local to this screen; never broadcast.
    */
   compareItemId?: string | null;
+  /** `drawOverlay` for the compare pane, with that item's notes. */
+  drawCompareOverlay?: (params: ViewParams, frame: number) => void;
   compareCanvasRef?: React.RefObject<HTMLCanvasElement | null>;
   compareContainerRef?: React.RefObject<HTMLDivElement | null>;
 }
@@ -110,7 +115,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   );
 
   const [state, setState] = useState<ViewerState>(() =>
-    initialStateFor(items, initial, DEFAULT_VIEWER_STATE),
+    initialStateFor(items, { linkView: storedLinkView(), ...initial }, DEFAULT_VIEWER_STATE),
   );
   const [glReady, setGlReady] = useState(false);
   const [glError, setGlError] = useState<string | null>(null);
@@ -139,6 +144,8 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   annotatedRef.current = annotatedFrames;
   const drawOverlayRef = useRef(drawOverlay);
   drawOverlayRef.current = drawOverlay;
+  const drawCompareOverlayRef = useRef(opts.drawCompareOverlay);
+  drawCompareOverlayRef.current = opts.drawCompareOverlay;
 
   const rendererRef = useRef<GLRenderer | null>(null);
   const compareRendererRef = useRef<GLRenderer | null>(null);
@@ -520,8 +527,13 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
     const el = compareContainerRef?.current;
     if (!it || !el) return null;
     const dpr = window.devicePixelRatio || 1;
+    const st = stateRef.current;
+    // Unlinked, the pane frames its item the way that item was last left —
+    // which is also where a swap will find it.
+    const own = st.linkView ? null : st.remembered[it.id] ?? FRESH_VIEW;
     return {
       ...viewParams(),
+      ...(own ? { zoom: own.zoom, panX: own.panX * dpr, panY: own.panY * dpr } : null),
       canvasWidth: Math.max(1, Math.round(el.clientWidth * dpr)),
       canvasHeight: Math.max(1, Math.round(el.clientHeight * dpr)),
       mediaWidth: it.width,
@@ -779,6 +791,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
         } else if (ref) {
           cmpRenderer.draw(`frame:${cmpIt.id}:${ref.frame}`, ref.tex, ref.version, rect);
         }
+        drawCompareOverlayRef.current?.(cmpParams, cmpFrame);
       }
     };
 
@@ -821,6 +834,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
     glReady,
     glError,
     viewParams,
+    compareViewParams,
     invalidate,
     fallbackNotice,
     compareItem,

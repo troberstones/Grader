@@ -67,6 +67,12 @@ export type Action =
   | { a: "flip"; h?: boolean; v?: boolean }
   | { a: "rotate"; deg: Rotation }
   | { a: "view"; zoom?: number; panX?: number; panY?: number; fit?: FitMode }
+  /**
+   * `view`, aimed at a file other than the open one — the compare pane's own
+   * zoom and pan when the two are not linked. It lands in that file's view
+   * memory, so swapping the panes finds it exactly where it was left. Local.
+   */
+  | { a: "viewOf"; item: string; zoom?: number; panX?: number; panY?: number; fit?: FitMode }
   | { a: "color"; patch: Partial<ColorState> }
   | { a: "guides"; mode: GuideKind }
   /**
@@ -84,7 +90,7 @@ export type Action =
     }
   | {
       a: "opts";
-      patch: Partial<Pick<ViewerState, "pauseOnAnnotated" | "ghostMs" | "onionSkin">>;
+      patch: Partial<Pick<ViewerState, "pauseOnAnnotated" | "ghostMs" | "onionSkin" | "linkView">>;
     }
   // ── annotation ──────────────────────────────────────────────────────────────
   | { a: "stroke"; s: WireStroke }

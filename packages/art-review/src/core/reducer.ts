@@ -58,6 +58,29 @@ export function resumeFrame(state: ViewerState, items: ReviewItem[], index: numb
   return clamp(frame, 0, Math.max(1, to.frameCount) - 1);
 }
 
+/** A file nobody has looked at yet. */
+export const FRESH_VIEW: ItemView = {
+  frame: 0,
+  zoom: 1,
+  panX: 0,
+  panY: 0,
+  fit: "fit",
+  layers: {},
+  soloLayer: null,
+  composite: true,
+};
+
+type Framing = Pick<ItemView, "zoom" | "panX" | "panY" | "fit">;
+
+function framed(prev: Framing, next: Partial<Framing>): Framing {
+  return {
+    zoom: next.zoom !== undefined ? clamp(next.zoom, ZOOM_MIN, ZOOM_MAX) : prev.zoom,
+    panX: next.panX ?? prev.panX,
+    panY: next.panY ?? prev.panY,
+    fit: next.fit ?? (next.zoom !== undefined || next.panX !== undefined ? "free" : prev.fit),
+  };
+}
+
 function viewOf(s: ViewerState): ItemView {
   return {
     frame: s.frame,
@@ -120,7 +143,7 @@ export function reduceViewer(
         soloLayer: back?.soloLayer ?? null,
         composite: back?.composite ?? true,
       };
-      if (from && to && sameShape(from, to)) {
+      if (state.linkView && from && to && sameShape(from, to)) {
         // Same shape, same framing: zoom into a detail and flip between two
         // versions of it. Zoom is relative to fit and pan is in screen pixels,
         // so this lines up at any resolution — but "100%" is only still 100%
@@ -178,13 +201,15 @@ export function reduceViewer(
       return { ...state, rotate: action.deg };
 
     case "view":
+      return { ...state, ...framed(state, action) };
+
+    case "viewOf": {
+      const prev = state.remembered[action.item] ?? FRESH_VIEW;
       return {
         ...state,
-        zoom: action.zoom !== undefined ? clamp(action.zoom, ZOOM_MIN, ZOOM_MAX) : state.zoom,
-        panX: action.panX ?? state.panX,
-        panY: action.panY ?? state.panY,
-        fit: action.fit ?? (action.zoom !== undefined || action.panX !== undefined ? "free" : state.fit),
+        remembered: { ...state.remembered, [action.item]: { ...prev, ...framed(prev, action) } },
       };
+    }
 
     case "color":
       return { ...state, color: { ...state.color, ...action.patch } };

@@ -126,6 +126,12 @@ export interface ViewerState {
   playhead: number;
   /** Per-item view memory, keyed by item id. Local — never broadcast. */
   remembered: Record<string, ItemView>;
+  /**
+   * One zoom and pan for every file: the compare pane mirrors the main one,
+   * and switching between files of the same shape keeps the framing. Off, each
+   * file has its own. This screen's preference — never broadcast.
+   */
+  linkView: boolean;
   playing: boolean;
   rate: number;
   loop: LoopMode;
@@ -168,6 +174,7 @@ export const DEFAULT_VIEWER_STATE: ViewerState = {
   frame: 0,
   playhead: 0,
   remembered: {},
+  linkView: true,
   playing: false,
   rate: 1,
   loop: "loop",

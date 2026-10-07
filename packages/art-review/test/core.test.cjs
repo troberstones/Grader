@@ -299,6 +299,36 @@ test("reducer: files of the same shape share zoom and pan", () => {
   assert.equal(go({ ...s, fit: "actual" }, 2).fit, "free");
 });
 
+test("reducer: unlinked, every file keeps its own zoom and pan", () => {
+  const s = { ...DEFAULT_VIEWER_STATE, linkView: false, zoom: 4, panX: 120, fit: "free" };
+  const next = go(s, 2);
+  assert.equal(next.zoom, 1, "same shape, but not sharing");
+  assert.equal(next.panX, 0);
+  assert.equal(go(next, 0).zoom, 4, "and the first file still has its own");
+});
+
+test("reducer: viewOf frames a file that is not the open one", () => {
+  const s = { ...DEFAULT_VIEWER_STATE, linkView: false, zoom: 2 };
+  const aimed = reduceViewer(s, { a: "viewOf", item: "c", zoom: 5, panX: 30, panY: -8 }, CMP);
+  assert.equal(aimed.zoom, 2, "the open file is untouched");
+  assert.deepEqual(
+    { zoom: aimed.remembered.c.zoom, panX: aimed.remembered.c.panX, fit: aimed.remembered.c.fit },
+    { zoom: 5, panX: 30, fit: "free" },
+  );
+  // Which is exactly where a swap finds it.
+  const swapped = go(aimed, 2);
+  assert.equal(swapped.zoom, 5);
+  assert.equal(swapped.panX, 30);
+  assert.equal(swapped.panY, -8);
+  assert.equal(reduceViewer(s, { a: "viewOf", item: "c", zoom: 1000 }, CMP).remembered.c.zoom, 32);
+});
+
+test("sync: the compare pane's framing and the link switch stay on this screen", () => {
+  assert.equal(isBroadcast("viewOf", { isMaster: true }), false);
+  assert.equal(isBroadcast("opts", { isMaster: true }), false);
+  assert.equal(shouldApply("viewOf", { role: "follower", followView: true }), false);
+});
+
 test("reducer: layer overrides come back with their file", () => {
   const s = { ...DEFAULT_VIEWER_STATE, itemIndex: 1, layers: { l1: false }, soloLayer: "l2", composite: false };
   const away = go(s, 0);
