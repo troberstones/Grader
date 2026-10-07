@@ -33,6 +33,18 @@ Derivatives land in `storage/review/` and are reused forever after.
 **Formats** — step through the four files with the file chips at the top, or
 PgUp/PgDn. Video, PSD, PDF and JPEG should each open without a reload.
 
+**Switching files keeps your place** — go to frame 5 of a video, zoom into a
+corner, PgDn to another file and PgUp back: same frame, same zoom, same pan.
+Two videos share the playhead (frame 5 of one opens frame 5 of the other), and
+two files of the same shape share zoom and pan, so flipping between two versions
+of a render is an A/B. Pages and stills keep their own place instead.
+
+**Compare** — `C`, or the Compare button beside the file switcher, opens a
+second file beside the first: same frame, same zoom and pan, same colour and
+flips. Pick the file from the pane's own dropdown; `⇄` swaps sides. Notes are
+drawn and shown on the left pane only — swap to mark up the other file. The
+pane is local to this screen and is not broadcast to followers.
+
 **Timeline** — scrub the video. Ticks are annotated frames. The grey fill shows
 how much of the clip is cached.
 

@@ -6,7 +6,7 @@ import { isBroadcast, shouldApply } from "../core/actions";
 import { detectBudget, type Budget, type VideoQuality } from "../core/budget";
 import { needsResync, projectFrame, type TransportSnapshot } from "../core/clock";
 import { fold, step } from "../core/fold";
-import { initialStateFor, reduceViewer } from "../core/reducer";
+import { initialStateFor, reduceViewer, resumeFrame } from "../core/reducer";
 import { DEFAULT_VIEWER_STATE, type ReviewItem, type ViewerState } from "../core/types";
 import { GLRenderer, type ViewParams } from "../render/gl";
 import { createSource, DecodedVideoSource, VideoElementSource } from "../sources";
@@ -41,6 +41,8 @@ export interface ViewerApi {
   /** Force a redraw when something outside viewer state changed. */
   invalidate: () => void;
   fallbackNotice: string | null;
+  /** The item in the compare pane, or null when there is no such pane. */
+  compareItem: ReviewItem | null;
   /** Resolution video is cached at. Changing it re-decodes open videos. */
   videoQuality: VideoQuality;
   setVideoQuality: (q: VideoQuality) => void;
@@ -63,7 +65,25 @@ export interface UseViewerOptions {
   /** Frames carrying annotations, for pause-on-annotated. */
   annotatedFrames: number[];
   onFrameChange?: (frame: number) => void;
+  /**
+   * A second pane showing another item beside the first: same frame, same
+   * zoom and pan, same colour and flips. Picture only — notes are drawn and
+   * shown on the main pane. Local to this screen; never broadcast.
+   */
+  compareItemId?: string | null;
+  compareCanvasRef?: React.RefObject<HTMLCanvasElement | null>;
+  compareContainerRef?: React.RefObject<HTMLDivElement | null>;
 }
+
+/** A native-resolution frame for a paused, downscaled video, and the one being waited on. */
+interface SharpSlot {
+  /** Keyed "itemId:frame" so a stale answer is ignored. */
+  have: { key: string; tex: TexSource } | null;
+  want: string | null;
+  timer: ReturnType<typeof setTimeout> | undefined;
+}
+
+const emptySharpSlot = (): SharpSlot => ({ have: null, want: null, timer: undefined });
 
 type BudgetKeys = { workstation: 1; laptopLarge: 1; laptopSmall: 1; tablet: 1; conservative: 1 };
 
@@ -79,6 +99,9 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
     pdfWorkerUrl = "/pdf.worker.min.mjs",
     annotatedFrames,
     onFrameChange,
+    compareItemId = null,
+    compareCanvasRef,
+    compareContainerRef,
   } = opts;
 
   const budget: Budget = useMemo(
@@ -97,11 +120,10 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   const [sharpenOnPause, setSharpenState] = useState(storedSharpenOnPause);
   const sharpenRef = useRef(sharpenOnPause);
   sharpenRef.current = sharpenOnPause;
-  // The latest native-resolution frame for a paused video, and which one the
-  // loop is waiting on. Keyed "itemId:frame" so a stale answer is ignored.
-  const sharpRef = useRef<{ key: string; tex: TexSource } | null>(null);
-  const sharpWantRef = useRef<string | null>(null);
-  const sharpTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // One per pane: a compare pane left soft beside a sharpened main pane would
+  // read as a difference between the two files.
+  const sharpRef = useRef<SharpSlot>(emptySharpSlot());
+  const compareSharpRef = useRef<SharpSlot>(emptySharpSlot());
 
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -119,6 +141,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   drawOverlayRef.current = drawOverlay;
 
   const rendererRef = useRef<GLRenderer | null>(null);
+  const compareRendererRef = useRef<GLRenderer | null>(null);
   const sourcesRef = useRef(new Map<string, FrameSource>());
   const rafRef = useRef<number | null>(null);
   const dirtyRef = useRef(true);
@@ -131,6 +154,9 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
   const lastAnnotatedStop = useRef(-1);
 
   const item = items[state.itemIndex] ?? null;
+  const compareItem = (compareItemId && items.find((i) => i.id === compareItemId)) || null;
+  const compareRef = useRef(compareItem);
+  compareRef.current = compareItem;
 
   const sourceCtx: SourceContext = useMemo(
     () => ({
@@ -209,8 +235,12 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
       rendererRef.current?.purge(`frame:${id}:`);
       rendererRef.current?.purge(`sharp:${id}:`);
     }
-    sharpRef.current = null;
-    sharpWantRef.current = null;
+    for (const slot of [sharpRef.current, compareSharpRef.current]) {
+      slot.have = null;
+      slot.want = null;
+    }
+    compareRendererRef.current?.purge("frame:");
+    compareRendererRef.current?.purge("sharp:");
   }, [videoQuality]);
 
   useEffect(() => {
@@ -218,6 +248,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
     // it again would only produce a second, less informative error.
     if (!item || item.unavailable) return;
     getSource(item);
+    if (compareItem && !compareItem.unavailable) getSource(compareItem);
     invalidate();
 
     // Warm the next few items so navigation is instant — but only stills and
@@ -233,6 +264,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
     // Drop sources well outside the prefetch window.
     for (const [id, src] of [...sourcesRef.current]) {
       const idx = itemsRef.current.findIndex((i) => i.id === id);
+      if (idx !== -1 && id === compareItem?.id) continue;
       if (idx === -1 || Math.abs(idx - state.itemIndex) > ahead + 1) {
         src.dispose();
         sourcesRef.current.delete(id);
@@ -241,7 +273,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
         rendererRef.current?.purge(`layer:`);
       }
     }
-  }, [item, state.itemIndex, getSource, budget.prefetchItems, invalidate]);
+  }, [item, compareItem, state.itemIndex, getSource, budget.prefetchItems, invalidate]);
 
   useEffect(() => {
     const map = sourcesRef.current;
@@ -277,6 +309,34 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
     };
   }, [glCanvasRef, budget.vram, invalidate]);
 
+  // The compare pane has its own canvas, so its own context and texture cache.
+  // It only ever shows one frame of one item, hence the small share of VRAM.
+  const comparing = compareItem !== null;
+  useEffect(() => {
+    const canvas = compareCanvasRef?.current;
+    if (!comparing || !canvas) return;
+    const r = new GLRenderer(canvas);
+    r.vramBudget = budget.vram / 4;
+    if (!r.init(invalidate)) return;
+    compareRendererRef.current = r;
+    invalidate();
+    return () => {
+      r.dispose();
+      compareRendererRef.current = null;
+    };
+  }, [comparing, compareCanvasRef, budget.vram, invalidate]);
+
+  // A different item in the pane: the old one's textures are dead weight.
+  useEffect(() => {
+    const slot = compareSharpRef.current;
+    return () => {
+      compareRendererRef.current?.purge("frame:");
+      compareRendererRef.current?.purge("sharp:");
+      slot.have = null;
+      slot.want = null;
+    };
+  }, [compareItemId]);
+
   // ── Transport snapshot ──────────────────────────────────────────────────────
   const resetTransport = useCallback(
     (playing: boolean, frame: number, rate: number) => {
@@ -289,6 +349,35 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
     },
     [session.clock],
   );
+
+  /**
+   * The master's state, whole. Every other action is a delta, so one dropped
+   * message strands a follower on the wrong flip or channel until that field
+   * happens to change again. Sent on a heartbeat and to anyone who joins.
+   */
+  const sendSnapshot = useCallback(() => {
+    const s = sessionRef.current;
+    if (!s.isMaster) return;
+    const st = stateRef.current;
+    s.send({
+      a: "sync",
+      s: {
+        itemIndex: st.itemIndex,
+        flipH: st.flipH,
+        flipV: st.flipV,
+        rotate: st.rotate,
+        color: st.color,
+        guides: st.guides,
+        layers: st.layers,
+        soloLayer: st.soloLayer,
+        composite: st.composite,
+        zoom: st.zoom,
+        panX: st.panX,
+        panY: st.panY,
+        fit: st.fit,
+      },
+    });
+  }, []);
 
   // ── Dispatch ────────────────────────────────────────────────────────────────
   const dispatch = useCallback(
@@ -347,45 +436,22 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
             rate: next.rate,
             at: session.clock.sharedNow(),
           });
+        } else if (action.a === "goto") {
+          // Where a file reopens depends on this screen's memory of it, which a
+          // follower does not share — so send the answer, not the question,
+          // and the layer and framing state that came back with it.
+          session.send({ a: "goto", item: next.itemIndex, frame: next.frame });
+          sendSnapshot();
         } else {
           session.send(action);
         }
       }
     },
-    [invalidate, resetTransport, session],
+    [invalidate, resetTransport, session, sendSnapshot],
   );
 
   const dispatchRef = useRef(dispatch);
   dispatchRef.current = dispatch;
-
-  /**
-   * The master's state, whole. Every other action is a delta, so one dropped
-   * message strands a follower on the wrong flip or channel until that field
-   * happens to change again. Sent on a heartbeat and to anyone who joins.
-   */
-  const sendSnapshot = useCallback(() => {
-    const s = sessionRef.current;
-    if (!s.isMaster) return;
-    const st = stateRef.current;
-    s.send({
-      a: "sync",
-      s: {
-        itemIndex: st.itemIndex,
-        flipH: st.flipH,
-        flipV: st.flipV,
-        rotate: st.rotate,
-        color: st.color,
-        guides: st.guides,
-        layers: st.layers,
-        soloLayer: st.soloLayer,
-        composite: st.composite,
-        zoom: st.zoom,
-        panX: st.panX,
-        panY: st.panY,
-        fit: st.fit,
-      },
-    });
-  }, []);
 
   /**
    * Backstop only. Browsers throttle timers in a hidden tab to about once a
@@ -448,10 +514,68 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
     };
   }, [glCanvasRef, containerRef]);
 
+  /** The main pane's view, re-aimed at the compare pane's item and box. */
+  const compareViewParams = useCallback((): ViewParams | null => {
+    const it = compareRef.current;
+    const el = compareContainerRef?.current;
+    if (!it || !el) return null;
+    const dpr = window.devicePixelRatio || 1;
+    return {
+      ...viewParams(),
+      canvasWidth: Math.max(1, Math.round(el.clientWidth * dpr)),
+      canvasHeight: Math.max(1, Math.round(el.clientHeight * dpr)),
+      mediaWidth: it.width,
+      mediaHeight: it.height,
+      sourcePrimaries: it.colorSpace?.primaries,
+    };
+  }, [viewParams, compareContainerRef]);
+
   // ── Render loop ─────────────────────────────────────────────────────────────
   useEffect(() => {
     let running = true;
     let lastStatsAt = 0;
+
+    // Once the playhead has sat still briefly, ask for this frame at native
+    // resolution; the draw uses it while it still matches. The delay keeps
+    // frame-stepping and scrubbing from queueing a decode per frame.
+    const sharpened = (
+      slot: SharpSlot,
+      src: FrameSource,
+      frame: number,
+      playing: boolean,
+    ): TexSource | null => {
+      const key = `${src.item.id}:${frame}`;
+      const soft =
+        !playing &&
+        sharpenRef.current &&
+        src instanceof DecodedVideoSource &&
+        src.cacheWidth < src.width
+          ? src
+          : null;
+      if (!soft) {
+        if (slot.want) {
+          slot.want = null;
+          clearTimeout(slot.timer);
+        }
+        return null;
+      }
+      if (slot.have?.key !== key && slot.want !== key) {
+        slot.want = key;
+        clearTimeout(slot.timer);
+        slot.timer = setTimeout(() => {
+          if (slot.want !== key) return;
+          void soft
+            .fullRes(frame)
+            .then((tex) => {
+              if (!tex || slot.want !== key) return;
+              slot.have = { key, tex };
+              dirtyRef.current = true;
+            })
+            .catch(() => {});
+        }, 150);
+      }
+      return slot.have?.key === key ? slot.have.tex : null;
+    };
 
     const loop = () => {
       if (!running) return;
@@ -529,35 +653,28 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
 
       src.prefetch(frame, 30);
 
-      // ── sharpen on pause ──────────────────────────────────────────────────
-      // Once the playhead has sat still briefly, ask for this frame at native
-      // resolution; the draw below uses it while it still matches. The delay
-      // keeps frame-stepping and scrubbing from queueing a decode per frame.
-      const sharpKey = `${it.id}:${frame}`;
-      const canSharpen =
-        !st.playing &&
-        sharpenRef.current &&
-        src instanceof DecodedVideoSource &&
-        src.cacheWidth < src.width;
-      if (canSharpen) {
-        if (sharpRef.current?.key !== sharpKey && sharpWantRef.current !== sharpKey) {
-          sharpWantRef.current = sharpKey;
-          clearTimeout(sharpTimerRef.current);
-          sharpTimerRef.current = setTimeout(() => {
-            if (sharpWantRef.current !== sharpKey) return;
-            void src
-              .fullRes(frame)
-              .then((tex) => {
-                if (!tex || sharpWantRef.current !== sharpKey) return;
-                sharpRef.current = { key: sharpKey, tex };
-                dirtyRef.current = true;
-              })
-              .catch(() => {});
-          }, 150);
-        }
-      } else if (sharpWantRef.current) {
-        sharpWantRef.current = null;
-        clearTimeout(sharpTimerRef.current);
+      const sharp = sharpened(sharpRef.current, src, frame, st.playing);
+
+      // ── compare pane ──────────────────────────────────────────────────────
+      const cmpIt = compareRef.current;
+      const cmpRenderer = compareRendererRef.current;
+      const cmpSrc =
+        cmpIt && cmpRenderer && !cmpRenderer.contextLost
+          ? sourcesRef.current.get(cmpIt.id)
+          : undefined;
+      const cmpIndex = cmpIt ? itemsRef.current.indexOf(cmpIt) : -1;
+      const cmpFrame = resumeFrame(
+        st.frame === frame ? st : { ...st, frame },
+        itemsRef.current,
+        cmpIndex,
+      );
+      let cmpSharp: TexSource | null = null;
+      if (cmpSrc && cmpSrc !== src) {
+        // Seek-driven, never native playback: an element left to run on its
+        // own clock drifts from the main pane, and the point is the same frame.
+        if (cmpSrc instanceof VideoElementSource) cmpSrc.setTransport(false, st.rate, st.loop);
+        cmpSrc.prefetch(cmpFrame, 30);
+        cmpSharp = sharpened(compareSharpRef.current, cmpSrc, cmpFrame, st.playing);
       }
 
       // Detect a stage resize here rather than trusting the ResizeObserver
@@ -571,6 +688,15 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
         if (canvasEl.width !== want.canvasWidth || canvasEl.height !== want.canvasHeight) {
           dirtyRef.current = true;
         }
+      }
+      const cmpParams = cmpSrc ? compareViewParams() : null;
+      const cmpCanvas = compareCanvasRef?.current;
+      if (
+        cmpParams &&
+        cmpCanvas &&
+        (cmpCanvas.width !== cmpParams.canvasWidth || cmpCanvas.height !== cmpParams.canvasHeight)
+      ) {
+        dirtyRef.current = true;
       }
 
       // Before the early return below, not after it. Cache state carries on
@@ -588,7 +714,8 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
         // Video elements and in-flight decodes keep the frame moving even when
         // nothing in React changed.
         const ref = src.peek(frame);
-        if (!ref || ref.exact) return;
+        const cmpRef = cmpSrc ? cmpSrc.peek(cmpFrame) : null;
+        if ((!ref || ref.exact) && (!cmpRef || cmpRef.exact)) return;
       }
       dirtyRef.current = false;
 
@@ -632,9 +759,8 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
         }
 
         const ref = src.peek(frame);
-        const sharp = canSharpen && sharpRef.current?.key === sharpKey ? sharpRef.current : null;
         if (sharp) {
-          renderer.draw(`sharp:${sharpKey}`, sharp.tex, 0, { x: 0, y: 0, w: it.width, h: it.height });
+          renderer.draw(`sharp:${it.id}:${frame}`, sharp, 0, { x: 0, y: 0, w: it.width, h: it.height });
         } else if (ref) {
           renderer.draw(`frame:${it.id}:${ref.frame}`, ref.tex, ref.version, {
             x: 0, y: 0, w: it.width, h: it.height,
@@ -643,6 +769,17 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
       }
 
       drawOverlayRef.current(params, frame);
+
+      if (cmpIt && cmpSrc && cmpRenderer && cmpParams) {
+        const rect = { x: 0, y: 0, w: cmpIt.width, h: cmpIt.height };
+        cmpRenderer.beginFrame(cmpParams);
+        const ref = cmpSrc.peek(cmpFrame);
+        if (cmpSharp) {
+          cmpRenderer.draw(`sharp:${cmpIt.id}:${cmpFrame}`, cmpSharp, 0, rect);
+        } else if (ref) {
+          cmpRenderer.draw(`frame:${cmpIt.id}:${ref.frame}`, ref.tex, ref.version, rect);
+        }
+      }
     };
 
     rafRef.current = requestAnimationFrame(loop);
@@ -653,7 +790,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
     // Deliberately not depending on `session`: it is read through
     // sessionRef so the loop is created once and runs uninterrupted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewParams, onFrameChange]);
+  }, [viewParams, compareViewParams, compareCanvasRef, onFrameChange]);
 
   // Resize invalidates the fit scale.
   useEffect(() => {
@@ -686,6 +823,7 @@ export function useViewer(opts: UseViewerOptions): ViewerApi {
     viewParams,
     invalidate,
     fallbackNotice,
+    compareItem,
     videoQuality,
     setVideoQuality: (q: VideoQuality) => {
       setStoredVideoQuality(q);

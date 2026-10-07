@@ -225,7 +225,7 @@ test("reducer: goto clamps the frame to the new item", () => {
   assert.equal(next.frame, 0);
 });
 
-test("reducer: switching item resets framing but keeps review preferences", () => {
+test("reducer: a file of another shape opens fitted but keeps review preferences", () => {
   const s = {
     ...DEFAULT_VIEWER_STATE,
     zoom: 3,
@@ -240,6 +240,79 @@ test("reducer: switching item resets framing but keeps review preferences", () =
   assert.equal(next.flipH, true, "flip persists across the roster");
   assert.equal(next.loop, "bounce", "loop mode persists");
   assert.equal(next.color.saturation, 0, "colour settings persist");
+});
+
+// A second clip the same shape as "a" but shorter, and a PDF.
+const COMPARE = [
+  ...ITEMS,
+  { id: "c", label: "c", kind: "video", mime: "video/mp4", url: "", width: 1280, height: 720, frameCount: 10, fps: 24, duration: 0.41 },
+  { id: "d", label: "d", kind: "pages", mime: "application/pdf", url: "", width: 850, height: 1100, frameCount: 6, fps: null, duration: null },
+];
+const CMP = { items: COMPARE };
+const go = (s, item) => reduceViewer(s, { a: "goto", item }, CMP);
+
+test("reducer: looking at another file and coming back restores frame and framing", () => {
+  const s = { ...DEFAULT_VIEWER_STATE, frame: 5, zoom: 3, panX: 40, panY: -12, fit: "free" };
+  const away = go(s, 1);
+  assert.equal(away.frame, 0, "a still has one frame");
+  assert.equal(away.zoom, 1, "a different shape opens fitted");
+  const back = go(away, 0);
+  assert.equal(back.frame, 5);
+  assert.equal(back.zoom, 3);
+  assert.equal(back.panX, 40);
+  assert.equal(back.panY, -12);
+  assert.equal(back.fit, "free");
+});
+
+test("reducer: time-based files share the playhead", () => {
+  const s = { ...DEFAULT_VIEWER_STATE, frame: 5 };
+  assert.equal(go(s, 2).frame, 5, "frame 5 of one clip opens frame 5 of the next");
+
+  // Past the end of the short clip: show its last frame, but do not forget.
+  const long = { ...DEFAULT_VIEWER_STATE, frame: 50 };
+  const short = go(long, 2);
+  assert.equal(short.frame, 9);
+  assert.equal(go(short, 0).frame, 50);
+
+  // Moving the playhead on the short clip is a real move, and carries back.
+  const moved = reduceViewer(short, { a: "seek", frame: 3 }, CMP);
+  assert.equal(go(moved, 0).frame, 3);
+});
+
+test("reducer: pages keep their own place and leave the playhead alone", () => {
+  const s = { ...DEFAULT_VIEWER_STATE, frame: 50 };
+  const pdf = go(s, 3);
+  assert.equal(pdf.frame, 0, "frame 50 is not page 50");
+  const page = reduceViewer(pdf, { a: "seek", frame: 4 }, CMP);
+  const video = go(page, 0);
+  assert.equal(video.frame, 50, "the page number did not become a frame number");
+  assert.equal(go(video, 3).frame, 4, "and the pdf reopens on the page it was left on");
+});
+
+test("reducer: files of the same shape share zoom and pan", () => {
+  const s = { ...DEFAULT_VIEWER_STATE, zoom: 4, panX: 120, panY: 30, fit: "free" };
+  const next = go(s, 2);
+  assert.equal(next.zoom, 4);
+  assert.equal(next.panX, 120);
+  assert.equal(next.panY, 30);
+  // 100% on a 1920 clip is not 100% on a 1280 one.
+  assert.equal(go({ ...s, fit: "actual" }, 2).fit, "free");
+});
+
+test("reducer: layer overrides come back with their file", () => {
+  const s = { ...DEFAULT_VIEWER_STATE, itemIndex: 1, layers: { l1: false }, soloLayer: "l2", composite: false };
+  const away = go(s, 0);
+  assert.deepEqual(away.layers, {});
+  assert.equal(away.composite, true);
+  const back = go(away, 1);
+  assert.deepEqual(back.layers, { l1: false });
+  assert.equal(back.soloLayer, "l2");
+  assert.equal(back.composite, false);
+});
+
+test("reducer: an explicit goto frame wins over the playhead", () => {
+  const s = { ...DEFAULT_VIEWER_STATE, frame: 50 };
+  assert.equal(reduceViewer(s, { a: "goto", item: 2, frame: 2 }, CMP).frame, 2);
 });
 
 test("reducer: goto adopts the new item's authored fps", () => {

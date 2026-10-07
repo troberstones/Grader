@@ -1,6 +1,6 @@
 import type { Action } from "./actions";
 import { fold } from "./fold";
-import type { ReviewItem, ViewerState } from "./types";
+import type { ItemView, ReviewItem, ViewerState } from "./types";
 
 export interface ReduceContext {
   items: ReviewItem[];
@@ -17,6 +17,60 @@ function frameCountAt(ctx: ReduceContext, index: number): number {
   return Math.max(1, ctx.items[index]?.frameCount ?? 1);
 }
 
+/** Media whose frames are moments in time, as opposed to pages or a single image. */
+function isTimeBased(item: ReviewItem): boolean {
+  return item.frameCount > 1 && (item.kind === "video" || item.kind === "sequence");
+}
+
+/** Same aspect ratio, to within a pixel of rounding at ingest. */
+function sameShape(a: ReviewItem, b: ReviewItem): boolean {
+  return Math.abs(a.width * b.height - b.width * a.height) <= Math.max(a.width, b.width);
+}
+
+/**
+ * The shared playhead as of right now. It only moves when the user moved it:
+ * sitting on a short clip's last frame because the playhead is past its end is
+ * not a move, and must not drag the long clip back to that frame.
+ */
+function livePlayhead(state: ViewerState, from: ReviewItem | undefined): number {
+  if (from && isTimeBased(from) && state.frame !== clamp(state.playhead, 0, from.frameCount - 1)) {
+    return state.frame;
+  }
+  return state.playhead;
+}
+
+/**
+ * The frame an item opens on if switched to right now — and so also the frame
+ * a compare pane shows it at, which is what makes swapping the panes a no-op
+ * for the eye.
+ *
+ * Time-based media share the playhead: frame 5 of one render against frame 5
+ * of the next. A page number means nothing to a video and vice versa, so pages
+ * and stills keep their own place and leave the playhead alone.
+ */
+export function resumeFrame(state: ViewerState, items: ReviewItem[], index: number): number {
+  if (index === state.itemIndex) return state.frame;
+  const to = items[index];
+  if (!to) return 0;
+  const frame = isTimeBased(to)
+    ? livePlayhead(state, items[state.itemIndex])
+    : state.remembered[to.id]?.frame ?? 0;
+  return clamp(frame, 0, Math.max(1, to.frameCount) - 1);
+}
+
+function viewOf(s: ViewerState): ItemView {
+  return {
+    frame: s.frame,
+    zoom: s.zoom,
+    panX: s.panX,
+    panY: s.panY,
+    fit: s.fit,
+    layers: s.layers,
+    soloLayer: s.soloLayer,
+    composite: s.composite,
+  };
+}
+
 /**
  * Pure viewer-state reducer. Annotation, presence and ephemeral actions fall
  * through untouched — they are handled by their own stores, because they are
@@ -31,25 +85,55 @@ export function reduceViewer(
     case "goto": {
       const item = clamp(action.item, 0, Math.max(0, ctx.items.length - 1));
       const n = frameCountAt(ctx, item);
+      if (item === state.itemIndex) {
+        if (action.frame === undefined) return state;
+        return { ...state, frame: clamp(Math.round(action.frame), 0, n - 1) };
+      }
+
+      // Switching files is how two pieces get compared, so it must be a round
+      // trip: leave frame 5 zoomed into a corner, look at the other file, come
+      // back to frame 5 zoomed into that corner. Colour, loop mode, fps and
+      // flips were never reset — those are review preferences set once for a
+      // whole roster.
+      const from = ctx.items[state.itemIndex];
+      const to = ctx.items[item];
+      const remembered = from
+        ? { ...state.remembered, [from.id]: viewOf(state) }
+        : state.remembered;
+      const back = to ? remembered[to.id] : undefined;
+
+      let playhead = livePlayhead(state, from);
+      let frame = resumeFrame(state, ctx.items, item);
+      if (action.frame !== undefined) {
+        frame = clamp(Math.round(action.frame), 0, n - 1);
+        if (to && isTimeBased(to)) playhead = frame;
+      }
+
       const next: ViewerState = {
         ...state,
         itemIndex: item,
-        frame: clamp(Math.round(action.frame), 0, n - 1),
+        frame,
+        playhead,
+        remembered,
+        // Layer ids belong to one file.
+        layers: back?.layers ?? {},
+        soloLayer: back?.soloLayer ?? null,
+        composite: back?.composite ?? true,
       };
-      if (item !== state.itemIndex) {
-        // A new item resets framing and layer overrides, but deliberately keeps
-        // colour, loop mode, fps and flips — those are review preferences the
-        // user set once and expects to persist across a roster.
-        next.zoom = 1;
-        next.panX = 0;
-        next.panY = 0;
-        next.fit = "fit";
-        next.layers = {};
-        next.soloLayer = null;
-        next.composite = true;
-        const fps = ctx.items[item]?.fps;
-        if (fps && fps > 0) next.fps = fps;
+      if (from && to && sameShape(from, to)) {
+        // Same shape, same framing: zoom into a detail and flip between two
+        // versions of it. Zoom is relative to fit and pan is in screen pixels,
+        // so this lines up at any resolution — but "100%" is only still 100%
+        // when the pixel sizes match too.
+        if (state.fit === "actual" && from.width !== to.width) next.fit = "free";
+      } else {
+        next.zoom = back?.zoom ?? 1;
+        next.panX = back?.panX ?? 0;
+        next.panY = back?.panY ?? 0;
+        next.fit = back?.fit ?? "fit";
       }
+      const fps = to?.fps;
+      if (fps && fps > 0) next.fps = fps;
       return next;
     }
 
@@ -163,10 +247,12 @@ export function initialStateFor(
   const merged = { ...fallback, ...partial } as ViewerState;
   const index = clamp(merged.itemIndex ?? 0, 0, Math.max(0, items.length - 1));
   const item = items[index];
+  const frame = clamp(merged.frame ?? 0, 0, Math.max(0, (item?.frameCount ?? 1) - 1));
   return {
     ...merged,
     itemIndex: index,
-    frame: clamp(merged.frame ?? 0, 0, Math.max(0, (item?.frameCount ?? 1) - 1)),
+    frame,
+    playhead: frame,
     fps: item?.fps && item.fps > 0 ? item.fps : merged.fps,
   };
 }

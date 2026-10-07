@@ -32,7 +32,7 @@ import { Timeline } from "./components/Timeline";
 import { InkRail, TransportBar, ViewBar, type ToolState } from "./components/Toolbar";
 import { readDroppedFiles, readPastedFiles } from "./dropFiles";
 import { isButtonTarget, isTypingTarget } from "./keymap";
-import { C, label, noSelect, select as selectStyle, selectableText, textButton } from "./styles";
+import { C, iconButton, label, noSelect, select as selectStyle, selectableText, textButton } from "./styles";
 import { useAnnotations } from "./useAnnotations";
 import { useSession } from "./useSession";
 import { useViewer } from "./useViewer";
@@ -94,6 +94,10 @@ export function ArtReviewer({
   const containerRef = useRef<HTMLDivElement>(null);
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  const compareContainerRef = useRef<HTMLDivElement>(null);
+  const compareCanvasRef = useRef<HTMLCanvasElement>(null);
+  /** The item in the second pane, by id so it survives the playlist changing. */
+  const [compareId, setCompareId] = useState<string | null>(null);
 
   // Read-only pins the tool to "select", which is the pan tool: every path
   // that could start a stroke, erase or place text branches off before then.
@@ -438,9 +442,12 @@ export function ArtReviewer({
     initial,
     pdfWorkerUrl,
     annotatedFrames: annotations.annotatedFrames,
+    compareItemId: compareId,
+    compareCanvasRef,
+    compareContainerRef,
   });
 
-  const { state, dispatch, item, source, stats } = viewer;
+  const { state, dispatch, item, source, stats, compareItem } = viewer;
   guidesRef.current = state.guides;
 
   useEffect(() => setItemIndex(state.itemIndex), [state.itemIndex]);
@@ -451,6 +458,47 @@ export function ArtReviewer({
   useEffect(() => onGuidesChange?.(state.guides), [state.guides, onGuidesChange]);
 
   const canControl = session.role !== "follower";
+
+  // ── Compare ─────────────────────────────────────────────────────────────────
+  // Opening the file that is already in the other pane would show it twice.
+  // Trade places instead, which is also all that "swap" has to do.
+  const shownIdRef = useRef<string | null>(null);
+  const lastShownIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const id = item?.id ?? null;
+    const prev = shownIdRef.current;
+    if (id === prev) return;
+    shownIdRef.current = id;
+    lastShownIdRef.current = prev;
+    if (id && prev) setCompareId((cur) => (cur === id ? prev : cur));
+  }, [item?.id]);
+
+  // The file in the pane was removed.
+  useEffect(() => {
+    if (compareId && !compareItem) setCompareId(null);
+  }, [compareId, compareItem]);
+
+  const toggleCompare = useCallback(() => {
+    setCompareId((cur) => {
+      if (cur) return null;
+      // The file just looked at is the likeliest thing to hold this one up
+      // against; failing that, its neighbour.
+      const last = items.find((i) => i.id === lastShownIdRef.current && i.id !== item?.id);
+      const other = last ?? items[state.itemIndex + 1] ?? items[state.itemIndex - 1];
+      return other?.id ?? null;
+    });
+  }, [items, item?.id, state.itemIndex]);
+
+  const swapCompare = useCallback(() => {
+    const index = compareItem ? items.indexOf(compareItem) : -1;
+    if (index === -1) return;
+    const { zoom, panX, panY, fit } = state;
+    dispatch({ a: "goto", item: index });
+    // Both panes were already sharing this framing; trading places keeps it.
+    dispatch({ a: "view", zoom, panX, panY, fit });
+  }, [compareItem, items, state, dispatch]);
+
+  const comparePanRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
 
   // ── Paste ───────────────────────────────────────────────────────────────────
   // A screenshot on the clipboard becomes another piece for this student, the
@@ -963,11 +1011,12 @@ export function ArtReviewer({
 
   // Wheel: pinch-zoom around the cursor, two-finger scroll pans.
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
+    // Either pane: they share one zoom and pan, so the gesture means the same
+    // thing over both, anchored on whichever the cursor is in.
+    const panes = [containerRef.current, compareContainerRef.current].filter((el) => el !== null);
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const r = el.getBoundingClientRect();
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
       if (e.ctrlKey || e.metaKey) {
         const k = Math.exp(-e.deltaY * 0.01);
         const ox = e.clientX - r.left;
@@ -989,8 +1038,10 @@ export function ArtReviewer({
         });
       }
     };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    for (const el of panes) el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      for (const el of panes) el.removeEventListener("wheel", onWheel);
+    };
   }, [dispatch, viewer]);
 
   // ── Zoom helpers ────────────────────────────────────────────────────────────
@@ -1071,10 +1122,10 @@ export function ArtReviewer({
           jumpAnnotation(1);
           return;
         case "PageUp":
-          dispatch({ a: "goto", item: Math.max(0, state.itemIndex - 1), frame: 0 });
+          dispatch({ a: "goto", item: Math.max(0, state.itemIndex - 1) });
           return;
         case "PageDown":
-          dispatch({ a: "goto", item: Math.min(items.length - 1, state.itemIndex + 1), frame: 0 });
+          dispatch({ a: "goto", item: Math.min(items.length - 1, state.itemIndex + 1) });
           return;
         case "0":
           setZoom("fit");
@@ -1141,6 +1192,9 @@ export function ArtReviewer({
         case "d":
           setShowLog((v) => !v);
           break;
+        case "c":
+          toggleCompare();
+          return;
 
         case "m":
           if (readOnly) return;
@@ -1173,7 +1227,7 @@ export function ArtReviewer({
     };
   }, [
     state, dispatch, viewer, annotations, frameCount, items.length, jumpAnnotation, setZoom, session,
-    readOnly, setTools,
+    readOnly, setTools, toggleCompare,
   ]);
 
   const manifest = source instanceof LayeredSource ? source.manifest() : null;
@@ -1269,10 +1323,19 @@ export function ArtReviewer({
           index={state.itemIndex}
           disabled={!canControl}
           busy={playlistBusy}
-          onSelect={(i) => dispatch({ a: "goto", item: i, frame: 0 })}
+          onSelect={(i) => dispatch({ a: "goto", item: i })}
           onAdd={adapter.addItems ? handleAddFiles : undefined}
           onRemove={adapter.removeItem ? handleRemoveItem : undefined}
         />
+        {items.length > 1 && (
+          <button
+            onClick={toggleCompare}
+            style={{ ...textButton(compareItem !== null), flexShrink: 0 }}
+            title="Show a second file beside this one, on the same frame  C"
+          >
+            Compare
+          </button>
+        )}
         <div style={{ flex: 1, minWidth: 8 }} />
         {/* Shrinkable: the host's slot (assignment name, student nav) is wider
             than the panel once a sidebar is open, and an unshrinkable child
@@ -1329,6 +1392,7 @@ export function ArtReviewer({
             style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
           />
           {allLayersHidden && <Checkerboard />}
+          {compareItem && item && <PaneLabel>{item.label}</PaneLabel>}
           {adapter.addItems && stageDragOver && (
             <div
               style={{
@@ -1447,6 +1511,95 @@ export function ArtReviewer({
             />
           )}
         </div>
+
+        {compareItem && (
+          <div
+            ref={compareContainerRef}
+            // Drag pans. There is no drawing here to mistake it for: notes go
+            // on the main pane, and swapping makes this file the main one.
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              comparePanRef.current = { x: e.clientX, y: e.clientY, panX: state.panX, panY: state.panY };
+            }}
+            onPointerMove={(e) => {
+              const pan = comparePanRef.current;
+              if (!pan) return;
+              dispatch({
+                a: "view",
+                panX: pan.panX + (e.clientX - pan.x),
+                panY: pan.panY + (e.clientY - pan.y),
+              });
+            }}
+            onPointerUp={() => (comparePanRef.current = null)}
+            onPointerCancel={() => (comparePanRef.current = null)}
+            onContextMenu={(e) => e.preventDefault()}
+            style={{
+              position: "relative",
+              flex: 1,
+              minWidth: 0,
+              background: C.lowest,
+              borderRadius: 8,
+              overflow: "hidden",
+              touchAction: "none",
+              cursor: "grab",
+            }}
+          >
+            <canvas
+              ref={compareCanvasRef}
+              style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+            />
+            <div
+              // The controls are not part of the pan surface.
+              onPointerDown={(e) => e.stopPropagation()}
+              style={{
+                position: "absolute",
+                top: 8,
+                left: 8,
+                right: 8,
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              <select
+                value={compareItem.id}
+                onChange={(e) => setCompareId(e.target.value)}
+                style={{ ...selectStyle, minWidth: 0, maxWidth: 200 }}
+                title="File to compare against"
+              >
+                {items.map((it) =>
+                  it.id === item?.id ? null : (
+                    <option key={it.id} value={it.id}>
+                      {it.label}
+                    </option>
+                  ),
+                )}
+              </select>
+              <button
+                onClick={swapCompare}
+                disabled={!canControl}
+                style={{ ...iconButton(false, !canControl), background: C.high, flexShrink: 0 }}
+                title="Swap sides — notes are drawn on the left"
+              >
+                ⇄
+              </button>
+              <button
+                onClick={() => setCompareId(null)}
+                style={{ ...iconButton(), background: C.high, flexShrink: 0 }}
+                title="Close compare  C"
+              >
+                ✕
+              </button>
+            </div>
+            {compareItem.unavailable && (
+              <Centered>
+                <span style={{ color: C.muted, fontSize: 12 }}>
+                  {compareItem.label} can&rsquo;t be opened
+                </span>
+              </Centered>
+            )}
+          </div>
+        )}
 
         {manifest && (
           <LayerPanel
@@ -1707,6 +1860,34 @@ function Checkerboard() {
         backgroundColor: "#5a5a5a",
       }}
     />
+  );
+}
+
+/** Names the main pane while a second one is open beside it. */
+function PaneLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 8,
+        left: 8,
+        maxWidth: "70%",
+        height: 28,
+        display: "flex",
+        alignItems: "center",
+        padding: "0 8px",
+        borderRadius: 6,
+        background: "rgba(0,0,0,0.6)",
+        color: C.text,
+        fontSize: 12,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        pointerEvents: "none",
+      }}
+    >
+      {children}
+    </div>
   );
 }
 

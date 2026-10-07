@@ -95,6 +95,8 @@ export class GLRenderer {
 
   init(onContextLost?: () => void): boolean {
     this.onLost = onContextLost ?? null;
+    clearTimeout(pendingLoss.get(this.canvas));
+    pendingLoss.delete(this.canvas);
 
     const gl = this.canvas.getContext("webgl2", {
       alpha: true,
@@ -591,10 +593,25 @@ export class GLRenderer {
     // up. Most browsers cap live WebGL contexts in the teens and start
     // silently evicting the oldest, which is worse than this and harder to
     // diagnose.
-    gl.getExtension("WEBGL_lose_context")?.loseContext();
+    //
+    // Deferred a tick, and called off if another renderer claims the canvas
+    // first. A canvas only ever has one context, so React's development-mode
+    // mount → unmount → mount hands the second renderer the context the first
+    // just killed, and the stage stays blank for the life of the component.
+    const canvas = this.canvas;
+    pendingLoss.set(
+      canvas,
+      setTimeout(() => {
+        pendingLoss.delete(canvas);
+        gl.getExtension("WEBGL_lose_context")?.loseContext();
+      }, 0),
+    );
     this.gl = null;
   }
 }
+
+/** Canvases whose context is about to be released by a disposed renderer. */
+const pendingLoss = new WeakMap<HTMLCanvasElement, ReturnType<typeof setTimeout>>();
 
 /** Parse an Adobe .cube LUT into the layout setLut() expects. */
 export function parseCubeLut(text: string): { data: Float32Array; size: number } | null {

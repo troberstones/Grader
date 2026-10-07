@@ -28,6 +28,7 @@ export const KEYMAP: KeyBinding[] = [
   { keys: "V", label: "Value check (desaturate)", group: "View" },
   { keys: "G", label: "Cycle composition guides", group: "View" },
   { keys: "O", label: "Onion skin", group: "View" },
+  { keys: "C", label: "Compare two files side by side", group: "View" },
 
   { keys: "B", label: "Pen", group: "Annotation" },
   { keys: "H", label: "Highlighter", group: "Annotation" },

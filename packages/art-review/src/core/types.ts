@@ -103,9 +103,29 @@ export type FitMode = "fit" | "fill" | "actual" | "free";
 
 export type GuideKind = "none" | "thirds" | "golden" | "center" | "diagonals" | "grid";
 
+/** What one item looked like when it was last left, so going back restores it. */
+export interface ItemView {
+  frame: number;
+  zoom: number;
+  panX: number;
+  panY: number;
+  fit: FitMode;
+  layers: Record<string, boolean>;
+  soloLayer: string | null;
+  composite: boolean;
+}
+
 export interface ViewerState {
   itemIndex: number;
   frame: number;
+  /**
+   * The frame time-based items share, unclamped. Flipping from frame 50 of a
+   * long clip to a short one shows the short one's last frame, and flipping
+   * back has to land on 50 again — which the clamped `frame` has forgotten.
+   */
+  playhead: number;
+  /** Per-item view memory, keyed by item id. Local — never broadcast. */
+  remembered: Record<string, ItemView>;
   playing: boolean;
   rate: number;
   loop: LoopMode;
@@ -146,6 +166,8 @@ export const DEFAULT_COLOR_STATE: ColorState = {
 export const DEFAULT_VIEWER_STATE: ViewerState = {
   itemIndex: 0,
   frame: 0,
+  playhead: 0,
+  remembered: {},
   playing: false,
   rate: 1,
   loop: "loop",

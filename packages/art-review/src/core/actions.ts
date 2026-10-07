@@ -50,7 +50,12 @@ export interface SyncSnapshot {
 
 export type Action =
   // ── transport ───────────────────────────────────────────────────────────────
-  | { a: "goto"; item: number; frame: number }
+  /**
+   * `frame` omitted means "pick up where this item belongs": the shared
+   * playhead for time-based media, the page it was left on for the rest. A
+   * master always broadcasts the resolved number, so followers never guess.
+   */
+  | { a: "goto"; item: number; frame?: number }
   | { a: "seek"; frame: number }
   | { a: "play" }
   | { a: "pause" }
