@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { readPastedFiles } from "@grader/art-review";
 import { acceptExtensionsFor } from "@/lib/constants";
 import { uploadFiles } from "@/lib/media-upload";
 
@@ -74,6 +75,19 @@ export function MediaDropZone({ assignmentId, studentId, studentName, submission
 
   const uploading = status === "uploading";
 
+  // Paste works anywhere on the page, not just over the box: the student is
+  // already selected, so a screenshot on the clipboard has one place to go.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const files = readPastedFiles(e);
+      if (files.length === 0) return;
+      e.preventDefault();
+      if (!uploading) handleFiles(files);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  });
+
   return (
     <div
       style={{
@@ -144,6 +158,7 @@ export function MediaDropZone({ assignmentId, studentId, studentName, submission
             </p>
             <p style={{ color: "#adaaaa", fontSize: 13, lineHeight: 1.5 }}>
               Drag and drop {typeLabel} artwork here, or a folder of numbered frames for a sequence.
+              Or just paste a screenshot (⌘V / Ctrl+V).
             </p>
             <p style={{ color: "#7a7777", fontSize: 12, marginTop: 10 }}>
               Click to browse files, or{" "}

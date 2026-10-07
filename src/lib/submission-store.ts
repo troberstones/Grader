@@ -9,10 +9,18 @@ import { getSubmissionDir, getMediaType, getMimeType, ensureDir } from "@/lib/fi
 /**
  * Write one file into a student's submission folder and record it.
  *
- * Deduplicates by original file name: uploading a file with the same name
- * again replaces the earlier one (and drops its review derivatives), while a
- * differently named file adds another submission. That makes re-importing
- * the same batch zip safe.
+ * What happens when the student already has a file by this name is the
+ * caller's call, via `onNameClash`:
+ *
+ * - "replace" (the default) swaps the earlier file out in place and drops its
+ *   review derivatives. That is what makes re-importing the same batch zip
+ *   safe, and it is only right for a caller that is re-sending what it sent
+ *   before.
+ * - "add" keeps both, recording the newcomer as "name (2).ext". For anything
+ *   a person hands over one file at a time: two exports both called
+ *   "render.png" are two pieces, and replacing the first would also leave its
+ *   annotations sitting on a different image, because the submission row —
+ *   and so the strokes keyed to it — stays the same.
  *
  * `write` receives the absolute destination path and must create the file
  * there — a Buffer for a form upload, a stream for a zip entry.
@@ -25,9 +33,10 @@ export async function storeSubmissionFile(opts: {
   originalName: string;
   size: number;
   fallbackMime?: string;
+  onNameClash?: "replace" | "add";
   write: (absolutePath: string) => Promise<void>;
 }): Promise<number> {
-  const { assignmentId, studentId, originalName, size } = opts;
+  const { assignmentId, studentId, originalName, size, onNameClash = "replace" } = opts;
   const mediaType = getMediaType(originalName);
   if (!mediaType) throw new Error(`Unsupported file type: ${path.extname(originalName) || originalName}`);
 
@@ -40,18 +49,13 @@ export async function storeSubmissionFile(opts: {
   const relPath = path.join("storage", "submissions", String(assignmentId), String(studentId), fileName);
   const fileType = getMimeType(originalName) ?? opts.fallbackMime ?? "application/octet-stream";
 
-  const existing = await db
-    .select({ id: submissions.id, filePath: submissions.filePath })
+  const theirs = await db
+    .select({ id: submissions.id, filePath: submissions.filePath, fileName: submissions.fileName })
     .from(submissions)
-    .where(
-      and(
-        eq(submissions.assignmentId, assignmentId),
-        eq(submissions.studentId, studentId),
-        eq(submissions.fileName, originalName)
-      )
-    );
+    .where(and(eq(submissions.assignmentId, assignmentId), eq(submissions.studentId, studentId)));
+  const existing = theirs.filter((s) => s.fileName === originalName);
 
-  if (existing.length > 0) {
+  if (existing.length > 0 && onNameClash === "replace") {
     if (existing[0].filePath !== relPath) {
       await fs.unlink(path.join(process.cwd(), existing[0].filePath)).catch(() => {});
     }
@@ -80,9 +84,21 @@ export async function storeSubmissionFile(opts: {
     return existing[0].id;
   }
 
+  const recordedName = freeName(originalName, new Set(theirs.map((s) => s.fileName)));
   const [inserted] = await db
     .insert(submissions)
-    .values({ assignmentId, studentId, filePath: relPath, fileName: originalName, fileType, fileSize: size, mediaType })
+    .values({ assignmentId, studentId, filePath: relPath, fileName: recordedName, fileType, fileSize: size, mediaType })
     .returning({ id: submissions.id });
   return inserted.id;
+}
+
+/** `name` if nobody has it, otherwise the first of "name (2).ext", "name (3).ext"… that is free. */
+export function freeName(name: string, taken: Set<string>): string {
+  if (!taken.has(name)) return name;
+  const ext = path.extname(name);
+  const base = path.basename(name, ext);
+  for (let n = 2; ; n++) {
+    const candidate = `${base} (${n})${ext}`;
+    if (!taken.has(candidate)) return candidate;
+  }
 }

@@ -91,6 +91,9 @@ async function uploadSingle(assignmentId: number, studentId: number, file: File)
     originalName: file.name,
     size: file.size,
     fallbackMime: file.type,
+    // Dropped, picked or pasted by hand — a second file by the same name is a
+    // second piece, never a silent replacement of the first.
+    onNameClash: "add",
     write: async (abs) => fs.writeFile(abs, Buffer.from(await file.arrayBuffer())),
   });
 

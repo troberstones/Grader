@@ -99,7 +99,7 @@ export function Playlist({ items, index, disabled, onSelect, onAdd, onRemove, bu
             onClick={() => inputRef.current?.click()}
             disabled={dim}
             style={{ ...textButton(), flexShrink: 0, opacity: dim ? 0.5 : 1 }}
-            title="Add more artwork for this student"
+            title="Add more artwork for this student — or paste an image  Cmd/Ctrl + V"
           >
             {busy ? "Adding…" : "+ Add"}
           </button>

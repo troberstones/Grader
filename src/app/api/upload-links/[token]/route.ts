@@ -7,6 +7,7 @@ import { db } from "@/db";
 import { assignments, auditLog, courseEnrollments, submissions, reviewMedia, uploadLinks } from "@/db/schema";
 import { getSubmissionDir, getMediaType, getMimeType } from "@/lib/file-storage";
 import { MAX_FILE_SIZE } from "@/lib/constants";
+import { freeName } from "@/lib/submission-store";
 import { hashToken, isExpired } from "@/lib/auth/tokens";
 
 /**
@@ -18,6 +19,12 @@ import { hashToken, isExpired } from "@/lib/auth/tokens";
  * enrolled student it's for; that's the one thing this route trusts from the
  * client, same trust boundary as a student typing their own name on a paper
  * sign-in sheet.
+ *
+ * A file whose name the student has already used is only swapped in for the
+ * earlier one when the form says `onNameClash=replace` — which the upload
+ * page sends after asking. Told nothing, both are kept: the page's question
+ * can be skipped (a stale tab, a failed name check), and losing work to that
+ * is worse than a duplicate the instructor can remove.
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
@@ -100,13 +107,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     const relPath = path.join("storage", "submissions", String(assignmentId), String(studentId), fileName);
 
-    const existing = await db
-      .select({ id: submissions.id, filePath: submissions.filePath })
+    const theirs = await db
+      .select({ id: submissions.id, filePath: submissions.filePath, fileName: submissions.fileName })
       .from(submissions)
-      .where(and(eq(submissions.assignmentId, assignmentId), eq(submissions.studentId, studentId), eq(submissions.fileName, file.name)));
+      .where(and(eq(submissions.assignmentId, assignmentId), eq(submissions.studentId, studentId)));
+    const existing = theirs.filter((s) => s.fileName === file.name);
+    const replacing = existing.length > 0 && formData.get("onNameClash") === "replace";
 
     let submission;
-    if (existing.length > 0) {
+    if (replacing) {
       if (existing[0].filePath !== relPath) {
         const oldAbs = path.join(process.cwd(), existing[0].filePath);
         await fs.unlink(oldAbs).catch(() => {});
@@ -131,7 +140,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           assignmentId,
           studentId,
           filePath: relPath,
-          fileName: file.name,
+          fileName: freeName(file.name, new Set(theirs.map((s) => s.fileName))),
           fileType: getMimeType(file.name) ?? file.type,
           fileSize: file.size,
           mediaType,
@@ -155,7 +164,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       console.error("[audit] write failed:", err);
     }
 
-    return NextResponse.json({ submission, replaced: existing.length > 0 });
+    return NextResponse.json({ submission, replaced: replacing });
   } catch (err) {
     console.error("Upload-link upload error:", err);
     return NextResponse.json({ error: err instanceof Error ? err.message : "Upload failed" }, { status: 500 });

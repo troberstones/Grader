@@ -30,7 +30,7 @@ import { Playlist } from "./components/Playlist";
 import { Presence } from "./components/Presence";
 import { Timeline } from "./components/Timeline";
 import { InkRail, TransportBar, ViewBar, type ToolState } from "./components/Toolbar";
-import { readDroppedFiles } from "./dropFiles";
+import { readDroppedFiles, readPastedFiles } from "./dropFiles";
 import { isButtonTarget, isTypingTarget } from "./keymap";
 import { C, label, noSelect, select as selectStyle, selectableText, textButton } from "./styles";
 import { useAnnotations } from "./useAnnotations";
@@ -113,6 +113,8 @@ export function ArtReviewer({
   const [audioOwner, setAudioOwner] = useState(readOnly);
   const [textPrompt, setTextPrompt] = useState<{ x: number; y: number; value: string } | null>(null);
   const [playlistBusy, setPlaylistBusy] = useState(false);
+  // playlistBusy, readable from a listener before the next render lands.
+  const addingRef = useRef(false);
   const [stageDragOver, setStageDragOver] = useState(false);
   // Keyed by item id (not a plain boolean) so switching away from a failed
   // item mid-retry doesn't leave some other item's button looking disabled.
@@ -131,16 +133,21 @@ export function ArtReviewer({
   }, [items.length, itemIndex]);
   const currentItem = items[itemIndex] ?? null;
 
+  /** Resolves true once the files are stored — the host's refetch is still to come. */
   const handleAddFiles = useCallback(
-    async (files: File[]) => {
-      if (!adapter.addItems || files.length === 0) return;
+    async (files: File[]): Promise<boolean> => {
+      if (!adapter.addItems || files.length === 0) return false;
+      addingRef.current = true;
       setPlaylistBusy(true);
       try {
         await adapter.addItems(contextId, files);
         onItemsChanged?.();
+        return true;
       } catch (e) {
         window.alert(e instanceof Error ? e.message : "Upload failed.");
+        return false;
       } finally {
+        addingRef.current = false;
         setPlaylistBusy(false);
       }
     },
@@ -444,6 +451,38 @@ export function ArtReviewer({
   useEffect(() => onGuidesChange?.(state.guides), [state.guides, onGuidesChange]);
 
   const canControl = session.role !== "follower";
+
+  // ── Paste ───────────────────────────────────────────────────────────────────
+  // A screenshot on the clipboard becomes another piece for this student, the
+  // same as a drop on the stage — no picker in between. Listening on the
+  // window means nothing has to be focused or clicked first.
+  const revealFromRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!adapter.addItems) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const files = readPastedFiles(e);
+      if (files.length === 0) return;
+      e.preventDefault();
+      // Holding the keys down repeats the paste; one upload is plenty.
+      if (addingRef.current) return;
+      const before = items.length;
+      void handleAddFiles(files).then((added) => {
+        if (added) revealFromRef.current = before;
+      });
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [adapter, handleAddFiles, items.length]);
+
+  // A pasted piece lands at the end of the playlist. Open it once the host's
+  // refetch delivers it — with no dialog, seeing it is the only confirmation
+  // that it went to this student.
+  useEffect(() => {
+    const from = revealFromRef.current;
+    if (from === null || items.length <= from) return;
+    revealFromRef.current = null;
+    if (canControl) dispatch({ a: "goto", item: items.length - 1, frame: 0 });
+  }, [items.length, canControl, dispatch]);
   const frameCount = item?.frameCount ?? 1;
 
   // Remote strokes and live ink land outside the render loop, and the loop only

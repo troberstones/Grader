@@ -18,7 +18,7 @@ import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 import { db } from "@/db";
-import { assignments, courseEnrollments, students, uploadLinks } from "@/db/schema";
+import { assignments, courseEnrollments, students, submissions, uploadLinks } from "@/db/schema";
 import { requireCapability } from "@/lib/auth/require";
 import { expiryFromNow, generateToken, hashToken, isExpired, UPLOAD_LINK_TTL_MS } from "@/lib/auth/tokens";
 import { writeAudit } from "@/lib/audit";
@@ -278,4 +278,34 @@ export async function inspectUploadLink(token: string): Promise<UploadLinkDetail
     studentName: row.studentName,
     roster,
   };
+}
+
+/**
+ * Whether the student this link uploads for already has a file by this name —
+ * asked by the upload page before it sends anything, so it can offer "replace
+ * or keep both" without the file having to travel twice.
+ *
+ * For a shared link the student comes from the page, as it does for the
+ * upload itself, and has to be on the link's roster. That tells a holder of
+ * the link nothing the upload's own "replaced" answer didn't already.
+ */
+export async function uploadNameTaken(token: string, fileName: string, studentId: number | null): Promise<boolean> {
+  const link = await inspectUploadLink(token);
+  if (!link || !fileName) return false;
+
+  const forStudent = link.studentId ?? (link.roster.some((s) => s.id === studentId) ? studentId : null);
+  if (forStudent == null) return false;
+
+  const [row] = await db
+    .select({ id: submissions.id })
+    .from(submissions)
+    .where(
+      and(
+        eq(submissions.assignmentId, link.assignmentId),
+        eq(submissions.studentId, forStudent),
+        eq(submissions.fileName, fileName),
+      ),
+    )
+    .limit(1);
+  return !!row;
 }

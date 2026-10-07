@@ -5,6 +5,7 @@ export { useAnnotations } from "./react/useAnnotations";
 export { Timeline } from "./react/components/Timeline";
 export { Presence } from "./react/components/Presence";
 export { LayerPanel } from "./react/components/LayerPanel";
+export { readPastedFiles } from "./react/dropFiles";
 
 export * from "./core/types";
 export {

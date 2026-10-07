@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { FormError } from "@/components/auth/auth-shell";
 import { MAX_FILE_SIZE, acceptExtensionsFor } from "@/lib/constants";
+import { uploadNameTaken } from "@/actions/upload-links";
 
 interface Props {
   token: string;
@@ -19,6 +20,8 @@ interface UploadResult {
   fileSize: number;
   time: Date;
   replaced: boolean;
+  /** The student had a file by this name already and chose to keep it. */
+  keptEarlier: boolean;
 }
 
 function normalizeSubmissionType(type: string): "image" | "video" | "any" {
@@ -56,6 +59,9 @@ export function UploadForm({ token, studentName, roster, submissionType }: Props
   const [studentId, setStudentId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [pending, setPending] = useState(false);
+  const [checking, setChecking] = useState(false);
+  // The chosen file's name is already taken — waiting on replace / keep both.
+  const [clash, setClash] = useState(false);
   const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<UploadResult | null>(null);
@@ -96,14 +102,32 @@ export function UploadForm({ token, studentName, roster, submissionType }: Props
     }
     if (needsStudentPick && !studentId) return setError("Select your name.");
 
+    // Ask before anything is sent, so the answer costs one upload, not two.
+    setChecking(true);
+    let taken = false;
+    try {
+      taken = await uploadNameTaken(token, file.name, needsStudentPick ? Number(studentId) : null);
+    } catch {
+      // Unanswered, the server keeps both — nothing is lost by going ahead.
+    } finally {
+      setChecking(false);
+    }
+    if (taken) return setClash(true);
+
+    await upload(file);
+  }
+
+  async function upload(uploadedFile: File, onNameClash?: "replace" | "add") {
+    setClash(false);
+    setError(null);
+
     const formData = new FormData();
-    formData.append("file", file);
+    formData.append("file", uploadedFile);
     if (needsStudentPick) formData.append("studentId", studentId);
+    if (onNameClash) formData.append("onNameClash", onNameClash);
 
     setPending(true);
-    setProgress({ loaded: 0, total: file.size });
-
-    const uploadedFile = file;
+    setProgress({ loaded: 0, total: uploadedFile.size });
 
     try {
       const xhr = new XMLHttpRequest();
@@ -136,6 +160,7 @@ export function UploadForm({ token, studentName, roster, submissionType }: Props
         fileSize: data?.submission?.fileSize ?? uploadedFile.size,
         time: new Date(),
         replaced: Boolean(data?.replaced),
+        keptEarlier: onNameClash === "add",
       });
       setFile(null);
     } catch {
@@ -153,6 +178,7 @@ export function UploadForm({ token, studentName, roster, submissionType }: Props
         <p className="text-sm leading-relaxed text-foreground">
           Uploaded <span className="font-medium">{result.fileName}</span> ({formatBytes(result.fileSize)}) at{" "}
           {result.time.toLocaleTimeString()}.{result.replaced && " This replaced your earlier upload."}
+          {result.keptEarlier && " Your earlier upload was kept as well."}
         </p>
         <Button variant="outline" className="h-12 w-full text-base" onClick={() => setResult(null)}>
           Upload another file
@@ -171,9 +197,12 @@ export function UploadForm({ token, studentName, roster, submissionType }: Props
           <select
             id="student"
             required
-            disabled={pending}
+            disabled={pending || checking}
             value={studentId}
-            onChange={(e) => setStudentId(e.target.value)}
+            onChange={(e) => {
+              setStudentId(e.target.value);
+              setClash(false);
+            }}
             className="h-11 w-full rounded-lg border border-border bg-input px-2.5 py-1 text-base outline-none focus-visible:border-primary/50 focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-40"
           >
             <option value="" disabled>
@@ -194,15 +223,18 @@ export function UploadForm({ token, studentName, roster, submissionType }: Props
           id="file"
           type="file"
           required
-          disabled={pending}
+          disabled={pending || checking}
           accept={acceptAttr}
           onChange={(e) => {
             setFile(e.target.files?.[0] ?? null);
             setError(null);
+            setClash(false);
           }}
           className="block w-full text-sm text-foreground file:mr-3 file:h-11 file:rounded-lg file:border file:border-border file:bg-secondary file:px-4 file:text-sm file:font-medium disabled:opacity-40"
         />
-        <p className="text-xs text-muted-foreground">Uploading again with the same file name replaces your earlier submission.</p>
+        <p className="text-xs text-muted-foreground">
+          If you have already uploaded a file with the same name, you will be asked whether to replace it or keep both.
+        </p>
       </div>
 
       {pending && progress && (
@@ -227,16 +259,36 @@ export function UploadForm({ token, studentName, roster, submissionType }: Props
 
       <FormError>{error}</FormError>
 
-      <div className="space-y-2">
-        <Button type="submit" className="h-12 w-full text-base" disabled={pending}>
-          {pending ? "Uploading…" : "Upload"}
-        </Button>
-        {pending && (
-          <Button type="button" variant="outline" className="h-12 w-full text-base" onClick={handleCancel}>
-            Cancel
+      {clash && file ? (
+        <div className="space-y-3 rounded-lg border border-border bg-muted p-4" role="group" aria-labelledby="clash-question">
+          <p id="clash-question" className="text-sm leading-relaxed text-foreground" aria-live="polite">
+            You have already uploaded a file named <span className="font-medium">{file.name}</span>. Replace it with this
+            one, or keep both?
+          </p>
+          <div className="space-y-2">
+            <Button type="button" className="h-12 w-full text-base" onClick={() => upload(file, "replace")}>
+              Replace it
+            </Button>
+            <Button type="button" variant="outline" className="h-12 w-full text-base" onClick={() => upload(file, "add")}>
+              Keep both
+            </Button>
+            <Button type="button" variant="ghost" className="h-11 w-full text-sm" onClick={() => setClash(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <Button type="submit" className="h-12 w-full text-base" disabled={pending || checking}>
+            {pending ? "Uploading…" : checking ? "Checking…" : "Upload"}
           </Button>
-        )}
-      </div>
+          {pending && (
+            <Button type="button" variant="outline" className="h-12 w-full text-base" onClick={handleCancel}>
+              Cancel
+            </Button>
+          )}
+        </div>
+      )}
     </form>
   );
 }

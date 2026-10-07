@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { db } from "@/db";
-import { assignments, courseEnrollments, courseMembers, courses, students, users } from "@/db/schema";
+import { assignments, courseEnrollments, courseMembers, courses, students, submissions, users } from "@/db/schema";
 import { createSession } from "@/lib/auth/session";
 import { hashPassword } from "@/lib/auth/password";
-import { createUploadLink, sendUploadLinks } from "@/actions/upload-links";
+import { createUploadLink, sendUploadLinks, uploadNameTaken } from "@/actions/upload-links";
 
 async function seedSignedInInstructor() {
   const passwordHash = await hashPassword("password123456");
@@ -80,5 +80,54 @@ describe("sendUploadLinks — enrollment scoping", () => {
     expect(strangerSkip).toBeDefined();
     expect(strangerSkip?.name).not.toBe("Other Course Student");
     expect(strangerSkip?.reason).toBe("not found");
+  });
+});
+
+describe("uploadNameTaken", () => {
+  async function seedWithSubmission() {
+    const owner = await seedSignedInInstructor();
+    const { course, assignment } = await seedCourseAndAssignment(owner);
+    const ada = await seedStudent("Ada Lovelace");
+    const ben = await seedStudent("Ben Other");
+    await db.insert(courseEnrollments).values([
+      { courseId: course.id, studentId: ada.id },
+      { courseId: course.id, studentId: ben.id },
+    ]);
+    await db.insert(submissions).values({
+      assignmentId: assignment.id,
+      studentId: ada.id,
+      filePath: `storage/submissions/${assignment.id}/${ada.id}/render_1.png`,
+      fileName: "render.png",
+      fileType: "image/png",
+      mediaType: "image",
+    });
+    return { assignment, ada, ben };
+  }
+
+  const tokenOf = (url: string | undefined) => url!.split("/").pop()!;
+
+  it("answers for the student a per-student link is bound to, whatever the page claims", async () => {
+    const { assignment, ada, ben } = await seedWithSubmission();
+    const adaToken = tokenOf((await createUploadLink(assignment.id, ada.id)).url);
+    const benToken = tokenOf((await createUploadLink(assignment.id, ben.id)).url);
+
+    expect(await uploadNameTaken(adaToken, "render.png", null)).toBe(true);
+    expect(await uploadNameTaken(adaToken, "other.png", null)).toBe(false);
+    expect(await uploadNameTaken(benToken, "render.png", ada.id)).toBe(false);
+  });
+
+  it("answers for the picked student on a shared link, and only for someone on its roster", async () => {
+    const { assignment, ada, ben } = await seedWithSubmission();
+    const stranger = await seedStudent("Not Enrolled");
+    const token = tokenOf((await createUploadLink(assignment.id, null)).url);
+
+    expect(await uploadNameTaken(token, "render.png", ada.id)).toBe(true);
+    expect(await uploadNameTaken(token, "render.png", ben.id)).toBe(false);
+    expect(await uploadNameTaken(token, "render.png", stranger.id)).toBe(false);
+    expect(await uploadNameTaken(token, "render.png", null)).toBe(false);
+  });
+
+  it("says no for a link that doesn't exist", async () => {
+    expect(await uploadNameTaken("not-a-token", "render.png", null)).toBe(false);
   });
 });
