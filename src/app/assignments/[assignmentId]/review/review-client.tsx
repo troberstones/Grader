@@ -6,6 +6,7 @@ import {
   type GuideKind,
   type ReviewDataAdapter,
   type ReviewItem,
+  type ViewerState,
 } from "@grader/art-review";
 import { useGrading } from "@/components/shared/grading-context";
 import { StudentNavBar } from "@/components/shared/student-nav-bar";
@@ -15,6 +16,7 @@ import { MediaDropZone } from "@/components/shared/media-drop-zone";
 import { useReviewChannel } from "@/lib/review-channel";
 import { uploadFiles } from "@/lib/media-upload";
 import { useIngestProgress } from "@/lib/use-ingest-progress";
+import { useReviewViewMemory } from "@/lib/review-view-memory";
 import type { getAssignment } from "@/actions/assignments";
 import { deleteSubmission } from "@/actions/submissions";
 import {
@@ -259,6 +261,50 @@ export function ReviewClient({ assignment, author }: Props) {
     [contextId, openItem],
   );
 
+  const viewMemory = useReviewViewMemory();
+  const handleStateChange = useCallback(
+    (state: ViewerState, compareId: string | null) => {
+      if (!contextId) return;
+      const kept: Partial<ViewerState> = { ...state };
+      // Resume paused. Guides and the linked-view switch are preferences with
+      // homes of their own, shared across students rather than left with one.
+      delete kept.playing;
+      delete kept.guides;
+      delete kept.linkView;
+      viewMemory.save(contextId, {
+        itemId: items[state.itemIndex]?.id ?? null,
+        compareId,
+        state: kept,
+      });
+    },
+    [contextId, items, viewMemory],
+  );
+
+  /**
+   * What the reviewer opens on: the view this student was left in, else the
+   * first file (or `?item=`). Read by ArtReviewer only at mount.
+   *
+   * A `?item=` that disagrees with the remembered file is a link to somewhere
+   * else, and the remembered frame and zoom belong to the file they were made
+   * on — so the link wins outright rather than borrowing them.
+   */
+  const initialView = useMemo(() => {
+    if (!contextId) return null;
+    const urlItem = openItem.get(contextId);
+    const saved = viewMemory.load(contextId);
+    if (saved) {
+      const byId = saved.itemId ? items.findIndex((i) => i.id === saved.itemId) : -1;
+      const itemIndex = byId >= 0 ? byId : saved.state.itemIndex ?? 0;
+      if (urlItem === undefined || urlItem === itemIndex) {
+        return {
+          state: { ...saved.state, itemIndex },
+          compareId: saved.compareId !== items[itemIndex]?.id ? saved.compareId : null,
+        };
+      }
+    }
+    return { state: { itemIndex: urlItem ?? 0 }, compareId: null };
+  }, [contextId, items, openItem, viewMemory]);
+
   const viewer = !selectedStudentId ? (
     <Centered>Select a student to begin the review.</Centered>
   ) : loading ? (
@@ -312,10 +358,12 @@ export function ReviewClient({ assignment, author }: Props) {
       // screen — refresh it in place rather than blanking the viewer.
       onItemsChanged={refresh}
       initial={{
+        ...initialView?.state,
         ...(initialGuides ? { guides: initialGuides } : {}),
-        itemIndex: openItem.get(contextId!) ?? 0,
       }}
+      initialCompareId={initialView?.compareId}
       onPositionChange={handlePositionChange}
+      onStateChange={handleStateChange}
       onGuidesChange={handleGuidesChange}
       pdfWorkerUrl="/pdf.worker.min.mjs"
       headerSlot={

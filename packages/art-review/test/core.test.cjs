@@ -374,6 +374,13 @@ test("initialStateFor clamps into range", () => {
   assert.equal(s.frame, 0);
 });
 
+test("initialStateFor keeps a restored playhead, and defaults it to the frame", () => {
+  const restored = initialStateFor(ITEMS, { frame: 3, playhead: 50 }, DEFAULT_VIEWER_STATE);
+  assert.equal(restored.frame, 3);
+  assert.equal(restored.playhead, 50);
+  assert.equal(initialStateFor(ITEMS, { frame: 3 }, DEFAULT_VIEWER_STATE).playhead, 3);
+});
+
 // ── clock ─────────────────────────────────────────────────────────────────────
 
 test("clock: recovers a known offset from ping/pong", () => {

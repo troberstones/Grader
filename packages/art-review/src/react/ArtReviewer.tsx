@@ -47,10 +47,19 @@ export interface ArtReviewerProps {
   /** Identifies the playlist for adapter.addItems — same id passed to listItems. */
   contextId: string;
   initial?: Partial<ViewerState>;
+  /** The file to open beside the first one, as last reported by `onStateChange`. */
+  initialCompareId?: string | null;
   pdfWorkerUrl?: string;
   /** Rendered top-right — grader puts student navigation here. */
   headerSlot?: React.ReactNode;
   onPositionChange?: (itemIndex: number, frame: number) => void;
+  /**
+   * Fires on every change to the view: file, frame, zoom, pan, colour, the
+   * compare pane. Like guides below, the module keeps none of it — a host that
+   * wants a remount to resume where this one left off stores it and hands it
+   * back through `initial` and `initialCompareId`.
+   */
+  onStateChange?: (state: ViewerState, compareId: string | null) => void;
   /** Called after addItems/removeItem succeeds, so the host can re-fetch listItems. */
   onItemsChanged?: () => void;
   /**
@@ -102,9 +111,11 @@ export function ArtReviewer({
   author,
   contextId,
   initial,
+  initialCompareId = null,
   pdfWorkerUrl,
   headerSlot,
   onPositionChange,
+  onStateChange,
   onItemsChanged,
   onGuidesChange,
   readOnly = false,
@@ -116,7 +127,7 @@ export function ArtReviewer({
   const compareCanvasRef = useRef<HTMLCanvasElement>(null);
   const compareOverlayRef = useRef<HTMLCanvasElement>(null);
   /** The item in the second pane, by id so it survives the playlist changing. */
-  const [compareId, setCompareId] = useState<string | null>(null);
+  const [compareId, setCompareId] = useState<string | null>(initialCompareId);
 
   // Read-only pins the tool to "select", which is the pan tool: every path
   // that could start a stroke, erase or place text branches off before then.
@@ -502,6 +513,10 @@ export function ArtReviewer({
     [state.itemIndex, state.frame, onPositionChange],
   );
   useEffect(() => onGuidesChange?.(state.guides), [state.guides, onGuidesChange]);
+  useEffect(
+    () => onStateChange?.(state, compareItem?.id ?? null),
+    [state, compareItem?.id, onStateChange],
+  );
 
   const canControl = session.role !== "follower";
 

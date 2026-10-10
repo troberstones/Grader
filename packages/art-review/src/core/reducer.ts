@@ -277,7 +277,9 @@ export function initialStateFor(
     ...merged,
     itemIndex: index,
     frame,
-    playhead: frame,
+    // A restored view carries its own: the shared playhead may sit past the
+    // end of the clip it was left on.
+    playhead: partial?.playhead ?? frame,
     fps: item?.fps && item.fps > 0 ? item.fps : merged.fps,
   };
 }
