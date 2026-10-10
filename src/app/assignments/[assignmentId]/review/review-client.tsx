@@ -85,6 +85,14 @@ export function ReviewClient({ assignment, author }: Props) {
   const { selectedStudentId, students } = useGrading();
   const { canDock, rubricDocked } = useViewLayout();
   const [items, setItems] = useState<ReviewItem[]>([]);
+  /**
+   * Whose playlist `items` is. A student switch changes contextId one render
+   * before the effect below swaps the playlist, and a reviewer mounted in that
+   * gap opens the new student on the previous student's files: the remembered
+   * file and frame get clamped to a playlist they were never made for, and
+   * then saved back over the real ones.
+   */
+  const [itemsFor, setItemsFor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -158,6 +166,7 @@ export function ReviewClient({ assignment, author }: Props) {
     const cached = playlists.current.get(contextId);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- seeding from cache then fetching fresh data keyed by contextId is the standard data-fetching effect; there's no external system to defer this to.
     setItems(cached ?? []);
+    setItemsFor(contextId);
     setLoading(!cached);
     setError(null);
     // First open of a submission transcodes a proxy, so this can take a few
@@ -307,6 +316,8 @@ export function ReviewClient({ assignment, author }: Props) {
 
   const viewer = !selectedStudentId ? (
     <Centered>Select a student to begin the review.</Centered>
+  ) : itemsFor !== contextId ? (
+    <Centered>{null}</Centered>
   ) : loading ? (
     <Centered>{ingestProgress ?? `Preparing media for ${student?.name ?? "student"}…`}</Centered>
   ) : error ? (
