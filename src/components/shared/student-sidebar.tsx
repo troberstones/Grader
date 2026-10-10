@@ -95,9 +95,6 @@ export function StudentSidebar({ pointsPossible }: { pointsPossible: number }) {
               {!reviewing && <StatusIcon status={status} />}
               <div className="flex-1 min-w-0">
                 <div className="truncate font-medium">{student.sortName}</div>
-                {detailed && student.netId && (
-                  <div className="text-xs text-muted-foreground">{student.netId}</div>
-                )}
               </div>
               {detailed && student.feedbackMail && <FeedbackMailIcon mail={student.feedbackMail} />}
               {detailed && score !== null && score !== undefined && (
