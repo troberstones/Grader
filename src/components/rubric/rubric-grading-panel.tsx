@@ -119,38 +119,47 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
   const { displayScore, gradedCount, totalCount, complete } = summarize(grading);
 
   return (
-    <div className={cn("flex-1 overflow-auto", dense ? "px-3 py-3" : "px-6 py-3")}>
-      {authExpired ? (
-        <GradingAlertBanner alert={{ kind: "auth", onRetry: retryAfterSignIn }} />
-      ) : conflict ? (
-        <GradingAlertBanner alert={{ kind: "conflict", onLoadTheirs: loadTheirs, onKeepMine: keepMine }} />
-      ) : null}
+    <div className="flex-1 min-h-0 flex flex-col">
+      {/* Only the criteria scroll. The score and Mark Graded stay pinned below,
+          so a rubric taller than the window never pushes them out of reach. */}
+      <div className={cn("flex-1 min-h-0 overflow-auto", dense ? "px-3 py-3" : "px-4 py-3")}>
+        {authExpired ? (
+          <GradingAlertBanner alert={{ kind: "auth", onRetry: retryAfterSignIn }} />
+        ) : conflict ? (
+          <GradingAlertBanner alert={{ kind: "conflict", onLoadTheirs: loadTheirs, onKeepMine: keepMine }} />
+        ) : null}
 
-      <div className="mb-2 flex items-center gap-1 rounded-md border text-xs overflow-hidden self-start w-fit">
-        {(Object.keys(RUBRIC_GRADING_VIEWS) as RubricGradingViewKey[]).map((key) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => chooseView(key)}
-            className={cn(
-              "px-2.5 py-1 transition-colors",
-              view === key
-                ? "bg-primary text-primary-foreground font-medium"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {GRADING_VIEW_LABELS[key]}
-          </button>
-        ))}
+        <div className="mb-2 flex items-center gap-1 rounded-md border text-xs overflow-hidden self-start w-fit">
+          {(Object.keys(RUBRIC_GRADING_VIEWS) as RubricGradingViewKey[]).map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => chooseView(key)}
+              className={cn(
+                "px-2.5 py-1 transition-colors",
+                view === key
+                  ? "bg-primary text-primary-foreground font-medium"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {GRADING_VIEW_LABELS[key]}
+            </button>
+          ))}
       </div>
 
       {(() => {
         const View = RUBRIC_GRADING_VIEWS[view];
         return <View grading={grading} />;
       })()}
+      </div>
 
       {/* Feedback + total */}
-      <div className={cn("mt-4 grid grid-cols-1 gap-4", !dense && "md:grid-cols-[1fr_auto]")}>
+      <div
+        className={cn(
+          "shrink-0 border-t grid grid-cols-1",
+          dense ? "gap-3 px-3 py-3" : "gap-4 px-4 py-3 md:grid-cols-[1fr_auto]",
+        )}
+      >
         <div className="space-y-1.5">
           <label className="text-sm font-medium">Feedback (optional)</label>
           <Textarea

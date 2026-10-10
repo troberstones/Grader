@@ -131,7 +131,7 @@ export function SendUploadLinkDialog({ assignmentId, courseId }: { assignmentId:
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button variant="outline" />}>
+      <DialogTrigger render={<Button variant="outline" size="sm" />}>
         <Link2 className="mr-2 h-4 w-4" />
         Send upload link
       </DialogTrigger>

@@ -148,7 +148,7 @@ export function SendFeedbackDialog({ assignmentId, trigger = "button", onSent }:
           <Mail className="h-3.5 w-3.5" />
         </DialogTrigger>
       ) : (
-        <DialogTrigger render={<Button variant="outline" />}>
+        <DialogTrigger render={<Button variant="outline" size="sm" />}>
           <Mail className="mr-2 h-4 w-4" />
           Send feedback to students
         </DialogTrigger>

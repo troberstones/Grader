@@ -69,7 +69,7 @@ export function UploadZipButton({ assignmentId }: { assignmentId: number }) {
           if (file) handleFile(file);
         }}
       />
-      <Button variant="outline" disabled={progress !== null} onClick={() => inputRef.current?.click()}>
+      <Button variant="outline" size="sm" disabled={progress !== null} onClick={() => inputRef.current?.click()}>
         <FileArchive className="mr-2 h-4 w-4" />
         {progress ?? "Upload zip"}
       </Button>
