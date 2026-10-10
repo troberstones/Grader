@@ -19,7 +19,7 @@ interface StudentNavBarProps {
  * Unified student navigation bar used on both the grade-sheet and review pages.
  * Reads students and the current selection directly from GradingContext.
  *
- * Layout:  [◀]  name · netId  ● status  [x of n]  [▶]  │  [actions]
+ * Layout:  [◀]  name  ● status  [x of n]  [▶]  │  [actions]
  *
  * This used to carry a `pageLink` slot for the Review ↔ Grade Sheet trip, which
  * each page had to fill in itself. The art reviewer never did, so once it became
@@ -54,11 +54,6 @@ export function StudentNavBar({ actions, className }: StudentNavBarProps) {
       {/* Name + meta — flex-1 keeps the arrows pinned to their edges */}
       <div className="flex-1 min-w-0 flex items-center gap-1.5 px-1">
         <span className="text-sm font-medium truncate">{student?.name ?? "—"}</span>
-        {student?.netId && (
-          <span className="text-xs text-muted-foreground shrink-0 hidden sm:inline">
-            {student.netId}
-          </span>
-        )}
         <StatusDot status={(student?.grade?.status ?? "ungraded") as GradeStatus} />
       </div>
 
