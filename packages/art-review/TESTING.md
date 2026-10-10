@@ -40,6 +40,11 @@ with "Sync pan/zoom" on two files of the same shape share zoom and pan, so
 flipping between two versions of a render is an A/B. Pages and stills keep
 their own place instead.
 
+**Wheel zoom** — over the artwork, a mouse wheel zooms around the cursor, one
+fixed step per notch. A trackpad is unchanged: two fingers pan, pinch zooms.
+Check both on the same machine — they arrive as the same event and are told
+apart by guesswork (see the wheel handler in ArtReviewer).
+
 **Compare** — `C`, or the Compare button beside the file switcher, opens a
 second file beside the first on the same frame, with the same colour and flips.
 Pick the file from the pane's own dropdown; `⇄` swaps sides. Both panes take

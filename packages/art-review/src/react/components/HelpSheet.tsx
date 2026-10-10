@@ -79,8 +79,8 @@ export function HelpSheet({ onClose }: { onClose: () => void }) {
         </div>
 
         <div style={{ marginTop: 20, fontSize: 11, color: C.faint, lineHeight: 1.6 }}>
-          Two-finger drag pans and pinch zooms on a trackpad or iPad. Apple Pencil
-          pressure varies pen width. Annotations are stored in media coordinates,
+          The mouse wheel zooms around the cursor. Two-finger drag pans and pinch
+          zooms on a trackpad or iPad. Apple Pencil pressure varies pen width. Annotations are stored in media coordinates,
           so a note drawn on one device lands in the same place on every other.
         </div>
       </div>

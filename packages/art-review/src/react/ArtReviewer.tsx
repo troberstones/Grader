@@ -1142,18 +1142,38 @@ export function ArtReviewer({
     [viewer],
   );
 
-  // Wheel: pinch-zoom around the cursor, two-finger scroll pans.
+  // Wheel: a mouse wheel or a trackpad pinch zooms around the cursor; a
+  // two-finger trackpad scroll pans.
   useEffect(() => {
     // Either pane, anchored on whichever the cursor is in. Linked, they share
     // one zoom and pan and the gesture moves both; unlinked, only its own.
     const els = [containerRef.current, compareContainerRef.current].filter((el) => el !== null);
+    // A wheel and a trackpad arrive as the same event. What tells them apart
+    // is the legacy wheelDelta: a wheel reports whole notches of 120, a
+    // trackpad a stream of small odd amounts (which can pass through 120, so
+    // the answer is held for the length of a gesture rather than asked of
+    // every event). Firefox reports a wheel in lines instead.
+    let wheelNotches = false;
+    let lastWheelAt = 0;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const pane = panesRef.current[paneOf(e)];
       const view = pane.view;
       const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      if (e.ctrlKey || e.metaKey) {
-        const k = Math.exp(-e.deltaY * 0.01);
+      const pinch = e.ctrlKey || e.metaKey;
+      const legacy = (e as WheelEvent & { wheelDeltaY?: number }).wheelDeltaY ?? 0;
+      if (e.timeStamp - lastWheelAt > 200) {
+        wheelNotches =
+          e.deltaMode !== 0 || (e.deltaX === 0 && legacy !== 0 && legacy % 120 === 0);
+      }
+      lastWheelAt = e.timeStamp;
+      if (pinch || (wheelNotches && e.deltaY !== 0)) {
+        // A notch is a fixed step whatever the OS made of its delta: Chrome
+        // says 100 on Windows and about 4 on a Mac for the same click.
+        const notches = Math.min(3, Math.max(1, Math.abs(legacy) / 120));
+        const k = pinch
+          ? Math.exp(-e.deltaY * 0.01)
+          : Math.pow(1.2, -Math.sign(e.deltaY) * notches);
         const ox = e.clientX - r.left;
         const oy = e.clientY - r.top;
         const ccx = r.width / 2;
