@@ -95,6 +95,7 @@ export function renderFeedbackEmail(input: FeedbackEmailInput): { subject: strin
           <div style="font-size:32px;font-weight:800;color:${INK};line-height:1.15;">${esc(model.letter ?? "—")}</div>
         </td>
       </tr></table>
+      ${model.gradeNote ? `<div style="font-size:13px;color:${MUTED};margin-top:8px;">${esc(model.gradeNote)}</div>` : ""}
       ${model.status === "missing" ? `<div style="font-size:13px;color:${MUTED};margin-top:8px;">No submission was received for this assignment.</div>` : ""}
     </td></tr>`);
 
@@ -209,7 +210,7 @@ function renderText(input: FeedbackEmailInput): string {
     lines.push(`[TEST SEND — would have gone to ${testRecipient.name} ${testRecipient.email ? `<${testRecipient.email}>` : "(no email on file)"}]`, "");
   }
   lines.push(`${model.course.code} · ${model.course.name}`, model.assignment.name, `Feedback for ${model.student.name}`, "");
-  lines.push(`Grade: ${model.letter ?? "—"}`);
+  lines.push(`Grade: ${model.letter ?? "—"}${model.gradeNote ? ` (${model.gradeNote})` : ""}`);
   if (model.status === "missing") lines.push("No submission was received for this assignment.");
   lines.push("");
   if (link) {

@@ -43,6 +43,11 @@ export interface FeedbackModel {
   gradeId: number | null;
   status: GradeStatus;
   letter: string | null;
+  /**
+   * Why the overall grade is not what the rubric alone gives ("Late 2 days"),
+   * when the professor overrode it and said why. Shown beside the grade.
+   */
+  gradeNote: string | null;
   feedback: string | null;
   criteria: FeedbackCriterion[];
   fingerprint: string | null;
@@ -132,7 +137,9 @@ export async function loadFeedbackModel(assignmentId: number, studentId: number)
       percent = (grade.totalScore / a.pointsPossible) * 100;
     }
   }
-  const letter = percent == null ? null : letterFor(percent);
+  // An override is the grade, whatever the rubric adds up to. The criteria
+  // above keep their own letters, so the student still sees how the work scored.
+  const letter = grade?.overrideLetter ?? (percent == null ? null : letterFor(percent));
 
   return {
     assignment: { id: a.id, name: a.name },
@@ -141,6 +148,7 @@ export async function loadFeedbackModel(assignmentId: number, studentId: number)
     gradeId: grade?.id ?? null,
     status,
     letter,
+    gradeNote: (grade?.overrideLetter && grade.overrideReason?.trim()) || null,
     feedback: grade?.feedback?.trim() || null,
     criteria,
     fingerprint: grade
@@ -148,6 +156,8 @@ export async function loadFeedbackModel(assignmentId: number, studentId: number)
           status: grade.status,
           totalScore: grade.totalScore,
           feedback: grade.feedback,
+          overrideLetter: grade.overrideLetter,
+          overrideReason: grade.overrideReason,
           entries: entries.map((e) => ({ criteriaId: e.criteriaId, levelId: e.levelId, nudge: e.nudge, comment: e.comment })),
         })
       : null,

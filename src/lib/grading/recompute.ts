@@ -2,7 +2,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "@/db";
 import { assignments, rubrics, grades, gradeEntries, rubricCriteria, rubricLevels } from "@/db/schema";
 import type { GradeStatus } from "@/types/grading";
-import { computeScore, criterionPoints, toNormalRubric, toSelections } from "@/lib/rubric";
+import { computeScore, criterionPoints, pointsForLetter, toNormalRubric, toSelections } from "@/lib/rubric";
 import type { DbCriterionRow } from "@/lib/rubric";
 
 /**
@@ -44,6 +44,11 @@ export type GradeTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * current rubric (criteria may have been archived since the entry was
  * written), but never touches `feedback` — callers own that separately.
  *
+ * A grade override (`grades.overrideLetter`) wins over all of that: the total
+ * is that letter's points and the grade is `graded`, however much of the
+ * rubric has been scored. The entries are still refreshed underneath, so the
+ * rubric's own result is back the moment the override is removed.
+ *
  * Synchronous and side-effect-only within `tx`, so it can run inside the same
  * `db.transaction` as the entry upserts that precede it. Callable with just
  * `gradeId` — `assignmentId` is read off the grade row — so a later rubric-edit
@@ -59,13 +64,25 @@ export function recomputeGrade(tx: GradeTx, gradeId: number): { status: GradeSta
     .where(eq(assignments.id, gradeRow.assignmentId))
     .get();
 
+  const overridePoints =
+    gradeRow.overrideLetter && assignmentRow
+      ? pointsForLetter(gradeRow.overrideLetter, assignmentRow.pointsPossible)
+      : null;
+
   if (!assignmentRow?.rubricId) {
-    // No rubric attached (or since detached) — nothing to score against.
+    // No rubric attached (or since detached) — nothing to score against, so
+    // only an override can make this a grade.
+    const overridden = overridePoints != null;
     tx.update(grades)
-      .set({ totalScore: null, status: "ungraded", gradedAt: null, updatedAt: nextUpdatedAt(gradeRow.updatedAt) })
+      .set({
+        totalScore: overridePoints,
+        status: overridden ? "graded" : "ungraded",
+        gradedAt: overridden ? (gradeRow.gradedAt ?? new Date().toISOString()) : null,
+        updatedAt: nextUpdatedAt(gradeRow.updatedAt),
+      })
       .where(eq(grades.id, gradeId))
       .run();
-    return { status: "ungraded", totalScore: 0 };
+    return { status: overridden ? "graded" : "ungraded", totalScore: overridePoints ?? 0 };
   }
 
   const rubricRecord = tx.select().from(rubrics).where(eq(rubrics.id, assignmentRow.rubricId)).get();
@@ -111,8 +128,9 @@ export function recomputeGrade(tx: GradeTx, gradeId: number): { status: GradeSta
     }
   }
 
-  const status: GradeStatus = result.scored === 0 ? "ungraded" : result.complete ? "graded" : "in_progress";
-  const totalScore = result.points ?? 0;
+  const rubricStatus: GradeStatus = result.scored === 0 ? "ungraded" : result.complete ? "graded" : "in_progress";
+  const status: GradeStatus = overridePoints != null ? "graded" : rubricStatus;
+  const totalScore = overridePoints ?? result.points ?? 0;
 
   tx.update(grades)
     .set({

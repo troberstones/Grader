@@ -108,6 +108,46 @@ export function letterFor(
   return "F";
 }
 
+/** Every letter the scale can produce, best first. What an override may be set to. */
+export const LETTER_GRADES: readonly string[] = [...DEFAULT_LETTER_SCALE.map(([, letter]) => letter), "F"];
+
+/**
+ * The percentage a letter stands for when the professor sets it directly (a
+ * grade override) rather than the rubric producing it: the middle of the
+ * letter's band, so a B is a plain B and not one that barely cleared the
+ * floor. F has no meaningful middle — it takes the rubric's default bottom
+ * band, the same "little / no effort" 55% a criterion at level 0 earns.
+ * Null for anything that is not a letter on the scale.
+ */
+export function percentForLetter(letter: string): number | null {
+  if (letter === "F") return DEFAULT_BAND_EDGES[0] * 100;
+  const i = DEFAULT_LETTER_SCALE.findIndex(([, l]) => l === letter);
+  if (i < 0) return null;
+  const ceiling = i === 0 ? 100 : DEFAULT_LETTER_SCALE[i - 1][0];
+  return (DEFAULT_LETTER_SCALE[i][0] + ceiling) / 2;
+}
+
+/** Points on an assignment for an overridden letter. Null for an unknown letter. */
+export function pointsForLetter(letter: string, pointsPossible: number): number | null {
+  const percent = percentForLetter(letter);
+  return percent == null ? null : round1((percent / 100) * pointsPossible);
+}
+
+/**
+ * `letter` knocked down `steps` whole letter grades (A- → B- → C-), the usual
+ * late penalty. A modifier the lower letter does not have is dropped (C- → D,
+ * there being no D-), and anything past D is an F.
+ */
+export function lowerLetter(letter: string, steps: number): string {
+  const bases = ["A", "B", "C", "D", "F"];
+  const base = bases.indexOf(letter[0]);
+  if (base < 0 || steps <= 0) return letter;
+  const lowered = bases[Math.min(bases.length - 1, base + Math.floor(steps))];
+  if (lowered === "F") return "F";
+  const withModifier = lowered + letter.slice(1);
+  return LETTER_GRADES.includes(withModifier) ? withModifier : lowered;
+}
+
 /**
  * Round to one decimal place, guarding the float representation so that values
  * like 0.15 do not round down.

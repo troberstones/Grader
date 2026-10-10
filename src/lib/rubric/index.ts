@@ -18,10 +18,14 @@ export {
   DEFAULT_BAND_EDGES,
   DEFAULT_LETTER_SCALE,
   HOUSE_LABELS,
+  LETTER_GRADES,
   bandEdgesProblem,
   fractionFor,
   letterFor,
   levelFractions,
+  lowerLetter,
+  percentForLetter,
+  pointsForLetter,
   round1,
 } from "./bands";
 

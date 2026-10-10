@@ -80,6 +80,7 @@ export function StudentSidebar({ pointsPossible }: { pointsPossible: number }) {
         {students.map((student) => {
           const status = student.grade?.status ?? "ungraded";
           const score = student.grade?.totalScore;
+          const override = student.grade?.overrideLetter;
           const isSelected = student.id === selectedStudentId;
 
           return (
@@ -100,10 +101,19 @@ export function StudentSidebar({ pointsPossible }: { pointsPossible: number }) {
               {detailed && score !== null && score !== undefined && (
                 <span className="text-xs tabular-nums shrink-0 text-muted-foreground">
                   {formatScore(score)}
-                  {pointsPossible > 0 && (
-                    <span className="ml-1.5 inline-block w-5 font-medium text-foreground">
-                      {letterFor((score / pointsPossible) * 100)}
+                  {override ? (
+                    <span
+                      title={`Overridden${student.grade?.overrideReason ? `: ${student.grade.overrideReason}` : ""}`}
+                      className="ml-1.5 inline-block w-5 font-medium text-amber-600 dark:text-amber-400"
+                    >
+                      {override}
                     </span>
+                  ) : (
+                    pointsPossible > 0 && (
+                      <span className="ml-1.5 inline-block w-5 font-medium text-foreground">
+                        {letterFor((score / pointsPossible) * 100)}
+                      </span>
+                    )
                   )}
                 </span>
               )}

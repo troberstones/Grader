@@ -3,7 +3,17 @@
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { BAND_PRESETS, fractionFor, levelFractions, bandEdgesProblem, letterFor, round1 } = require("./.build/bands");
+const {
+  BAND_PRESETS,
+  LETTER_GRADES,
+  fractionFor,
+  levelFractions,
+  bandEdgesProblem,
+  letterFor,
+  lowerLetter,
+  pointsForLetter,
+  round1,
+} = require("./.build/bands");
 const { computeScore, criterionPoints, previewOutcomes, bandTable } = require("./.build/score");
 const { validateRubric, repairMessage } = require("./.build/validate");
 const { toNormalRubric, toSelections, fromSelections, isShareModel } = require("./.build/adapter");
@@ -643,4 +653,28 @@ test("a forced calibration that matches what the points already said is still ex
   const forced = convertLegacyRubric(legacyRubric(criteria), { bandEdges: V1_BANDS });
   assert.strictEqual(forced.exact, true);
   assert.deepStrictEqual(forced.warnings, []);
+});
+
+// ─── grade overrides ────────────────────────────────────────────────────
+
+test("an overridden letter's points read back as that same letter", () => {
+  for (const pointsPossible of [5, 10, 25, 50, 100]) {
+    for (const letter of LETTER_GRADES) {
+      const points = pointsForLetter(letter, pointsPossible);
+      assert.strictEqual(letterFor((points / pointsPossible) * 100), letter, `${letter} of ${pointsPossible}`);
+    }
+  }
+  assert.strictEqual(pointsForLetter("B", 100), 85);
+  assert.strictEqual(pointsForLetter("F", 100), 55);
+  assert.strictEqual(pointsForLetter("Z", 100), null);
+});
+
+test("a late day costs one whole letter grade", () => {
+  assert.strictEqual(lowerLetter("A", 1), "B");
+  assert.strictEqual(lowerLetter("A-", 1), "B-");
+  assert.strictEqual(lowerLetter("B+", 2), "D+");
+  assert.strictEqual(lowerLetter("C-", 1), "D"); // there is no D-
+  assert.strictEqual(lowerLetter("D", 1), "F");
+  assert.strictEqual(lowerLetter("A", 9), "F");
+  assert.strictEqual(lowerLetter("B", 0), "B");
 });

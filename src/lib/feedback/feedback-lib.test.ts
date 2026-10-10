@@ -89,6 +89,7 @@ describe("feedback email", () => {
     gradeId: 1,
     status: "graded",
     letter: "B+",
+    gradeNote: null,
     feedback: "Line one\nLine two",
     criteria: [
       {

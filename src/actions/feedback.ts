@@ -103,6 +103,8 @@ export async function getFeedbackRoster(assignmentId: number): Promise<FeedbackR
             status: grade.status,
             totalScore: grade.totalScore,
             feedback: grade.feedback,
+            overrideLetter: grade.overrideLetter,
+            overrideReason: grade.overrideReason,
             entries: entryRows.filter((r) => r.grade_entries.gradeId === grade.id).map((r) => r.grade_entries),
           })
         : null;

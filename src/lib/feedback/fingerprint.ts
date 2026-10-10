@@ -15,6 +15,8 @@ export interface FingerprintGrade {
   status: string;
   totalScore: number | null;
   feedback: string | null;
+  overrideLetter?: string | null;
+  overrideReason?: string | null;
   entries: { criteriaId: number; levelId: number | null; nudge?: number | null; comment?: string | null }[];
 }
 
@@ -23,13 +25,16 @@ export function gradeFingerprint(grade: FingerprintGrade | null | undefined): st
   const entries = [...grade.entries]
     .sort((a, b) => a.criteriaId - b.criteriaId)
     .map((e) => [e.criteriaId, e.levelId ?? null, e.nudge ?? 0, (e.comment ?? "").trim()]);
-  const canonical = JSON.stringify([
+  const parts: unknown[] = [
     grade.status,
     grade.totalScore == null ? null : Math.round(grade.totalScore * 10) / 10,
     (grade.feedback ?? "").trim(),
     entries,
-  ]);
-  return fnv1a(canonical);
+  ];
+  // Appended only when there is an override, so every fingerprint stored
+  // before overrides existed still matches its unchanged grade.
+  if (grade.overrideLetter) parts.push([grade.overrideLetter, (grade.overrideReason ?? "").trim()]);
+  return fnv1a(JSON.stringify(parts));
 }
 
 /** 32-bit FNV-1a, hex. Change detection, not security — collisions only cost a skipped resend. */

@@ -130,6 +130,8 @@ const ARTIFACT_PROBES = {
   "0011_upload_links.sql": (db) => tableExists(db, "upload_links"),
   "0012_session_mode.sql": (db) => columnExists(db, "sessions", "mode"),
   "0013_feedback.sql": (db) => tableExists(db, "feedback_sends") && tableExists(db, "feedback_links"),
+  "0015_grade_override.sql": (db) =>
+    columnExists(db, "grades", "override_letter") && columnExists(db, "grades", "override_reason"),
 };
 
 /**

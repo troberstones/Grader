@@ -13,6 +13,7 @@ import { nextUpdatedAt, recomputeGrade } from "@/lib/grading/recompute";
 import { feedbackTestMode } from "@/lib/feedback/config";
 import { feedbackHistory } from "@/lib/feedback/history";
 import { mergeFeedback } from "@/lib/feedback/comment-ingest";
+import { LETTER_GRADES } from "@/lib/rubric";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +30,13 @@ export type StudentGrade = {
   totalScore: number | null;
   feedback: string | null;
   status: GradeStatus;
+  /**
+   * The professor's own letter standing in for the rubric's result, and why
+   * ("Late 2 days", "Incomplete"). While set, `totalScore` is that letter's
+   * points — see `setGradeOverride`.
+   */
+  overrideLetter: string | null;
+  overrideReason: string | null;
   gradedAt: string | null;
   exportedAt: string | null;
   /**
@@ -58,6 +66,27 @@ export type StudentWithGrade = {
 
 /** The raw row shape of `grades`. */
 export type GradeRow = typeof grades.$inferSelect;
+
+function toStudentGrade(row: GradeRow, entries: (typeof gradeEntries.$inferSelect)[]): StudentGrade {
+  return {
+    id: row.id,
+    totalScore: row.totalScore,
+    feedback: row.feedback,
+    status: row.status as GradeStatus,
+    overrideLetter: row.overrideLetter,
+    overrideReason: row.overrideReason,
+    gradedAt: row.gradedAt,
+    exportedAt: row.exportedAt,
+    updatedAt: row.updatedAt,
+    entries: entries.map((e) => ({
+      criteriaId: e.criteriaId,
+      levelId: e.levelId,
+      score: e.score,
+      comment: e.comment,
+      nudge: e.nudge,
+    })),
+  };
+}
 
 
 // ─── Get grade sheet data for an assignment ───────────────────────────────────
@@ -102,29 +131,9 @@ export async function getGradeSheet(assignmentId: number): Promise<StudentWithGr
   return enrolled.map((student) => {
     const grade = gradeRows.find((g) => g.studentId === student.id) ?? null;
     const lastSent = history.get(`${assignmentId}:${student.id}`)?.lastSent ?? null;
-    const entries = grade
-      ? allEntries.filter((e) => e.gradeId === grade.id).map((e) => ({
-          criteriaId: e.criteriaId,
-          levelId: e.levelId,
-          score: e.score,
-          comment: e.comment,
-          nudge: e.nudge,
-        }))
-      : [];
     return {
       ...student,
-      grade: grade
-        ? {
-            id: grade.id,
-            totalScore: grade.totalScore,
-            feedback: grade.feedback,
-            status: grade.status as GradeStatus,
-            gradedAt: grade.gradedAt,
-            exportedAt: grade.exportedAt,
-            updatedAt: grade.updatedAt,
-            entries,
-          }
-        : null,
+      grade: grade ? toStudentGrade(grade, allEntries.filter((e) => e.gradeId === grade.id)) : null,
       emailedFeedback: lastSent ? { sentAt: lastSent.sentAt, fingerprint: lastSent.fingerprint } : null,
     };
   });
@@ -202,23 +211,7 @@ export async function saveShareGrade({
         .from(gradeEntries)
         .where(eq(gradeEntries.gradeId, existing.id))
         .all();
-      const current: StudentGrade = {
-        id: existing.id,
-        totalScore: existing.totalScore,
-        feedback: existing.feedback,
-        status: existing.status as GradeStatus,
-        gradedAt: existing.gradedAt,
-        exportedAt: existing.exportedAt,
-        updatedAt: existing.updatedAt,
-        entries: currentEntries.map((e) => ({
-          criteriaId: e.criteriaId,
-          levelId: e.levelId,
-          score: e.score,
-          comment: e.comment,
-          nudge: e.nudge,
-        })),
-      };
-      return { success: false as const, reason: "stale" as const, current };
+      return { success: false as const, reason: "stale" as const, current: toStudentGrade(existing, currentEntries) };
     }
 
     let gradeId: number;
@@ -324,7 +317,15 @@ export async function markMissing(assignmentId: number, studentId: number): Prom
     updatedAt = nextUpdatedAt(existing[0].updatedAt);
     await db
       .update(grades)
-      .set({ totalScore: 0, feedback: null, status: "missing", gradedAt: now, updatedAt })
+      .set({
+        totalScore: 0,
+        feedback: null,
+        status: "missing",
+        overrideLetter: null,
+        overrideReason: null,
+        gradedAt: now,
+        updatedAt,
+      })
       .where(eq(grades.id, gradeId));
   } else {
     const [created] = await db
@@ -344,6 +345,80 @@ export async function markMissing(assignmentId: number, studentId: number): Prom
 
   revalidatePath(`/assignments/${assignmentId}`);
   return { success: true, updatedAt };
+}
+
+// ─── Override a grade with the professor's own letter ─────────────────────────
+
+export type SetGradeOverrideResult =
+  | { success: true; grade: StudentGrade }
+  | { success: false; reason: "auth" };
+
+/**
+ * Sets the letter grade outright, over whatever the rubric says — late work
+ * knocked down a letter a day, incomplete work, or simply the professor's
+ * call — with an optional reason the student sees beside the grade. Pass
+ * `letter: null` to remove the override and go back to the rubric's result.
+ *
+ * Only the two override columns are written here; `recomputeGrade` turns the
+ * letter into `totalScore`/`status`, so the rubric selections and feedback are
+ * untouched and every reader of `totalScore` (the sidebar, both Learning Suite
+ * exports, the feedback email) picks the override up without knowing about it.
+ *
+ * Reports a missing/expired session or missing capability as
+ * `{ success:false, reason:"auth" }` rather than throwing — see
+ * `saveShareGrade` for why.
+ */
+export async function setGradeOverride({
+  assignmentId,
+  studentId,
+  letter,
+  reason,
+}: {
+  assignmentId: number;
+  studentId: number;
+  letter: string | null;
+  reason?: string | null;
+}): Promise<SetGradeOverrideResult> {
+  const resource = await assignmentResource(assignmentId);
+  let actor: SessionUser;
+  try {
+    actor = await requireCapability("grade.write", resource);
+  } catch (err) {
+    if (err instanceof AuthError) return { success: false, reason: "auth" };
+    throw err;
+  }
+  if (letter !== null && !LETTER_GRADES.includes(letter)) throw new Error(`"${letter}" is not a letter grade.`);
+  const overrideReason = letter === null ? null : reason?.trim().slice(0, 200) || null;
+
+  const grade = db.transaction((tx) => {
+    let row = tx
+      .select()
+      .from(grades)
+      .where(and(eq(grades.assignmentId, assignmentId), eq(grades.studentId, studentId)))
+      .get();
+    if (!row) {
+      // Nothing to remove an override from.
+      if (letter === null) return null;
+      row = tx.insert(grades).values({ assignmentId, studentId, status: "ungraded" }).returning().get();
+    }
+    tx.update(grades).set({ overrideLetter: letter, overrideReason }).where(eq(grades.id, row.id)).run();
+    recomputeGrade(tx, row.id);
+    const saved = tx.select().from(grades).where(eq(grades.id, row.id)).get()!;
+    const entries = tx.select().from(gradeEntries).where(eq(gradeEntries.gradeId, row.id)).all();
+    return toStudentGrade(saved, entries);
+  });
+
+  revalidatePath(`/assignments/${assignmentId}`);
+  if (!grade) throw new Error("This student has no grade to remove an override from.");
+
+  await writeAudit(actor, {
+    action: "grade.override",
+    targetType: "grade",
+    targetId: grade.id,
+    detail: { assignmentId, studentId, letter, reason: overrideReason, totalScore: grade.totalScore },
+  });
+
+  return { success: true, grade };
 }
 
 // ─── Import written feedback for many students at once ────────────────────────
@@ -402,25 +477,7 @@ export async function importFeedback(
       const updatedAt = nextUpdatedAt(row.updatedAt);
       tx.update(grades).set({ feedback, updatedAt }).where(eq(grades.id, row.id)).run();
       const entries = tx.select().from(gradeEntries).where(eq(gradeEntries.gradeId, row.id)).all();
-      out.push({
-        studentId,
-        grade: {
-          id: row.id,
-          totalScore: row.totalScore,
-          feedback,
-          status: row.status as GradeStatus,
-          gradedAt: row.gradedAt,
-          exportedAt: row.exportedAt,
-          updatedAt,
-          entries: entries.map((e) => ({
-            criteriaId: e.criteriaId,
-            levelId: e.levelId,
-            score: e.score,
-            comment: e.comment,
-            nudge: e.nudge,
-          })),
-        },
-      });
+      out.push({ studentId, grade: toStudentGrade({ ...row, feedback, updatedAt }, entries) });
     }
     return out;
   });

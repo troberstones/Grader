@@ -5,7 +5,7 @@ import { db } from "@/db";
 import { assignments, courses, grades, rubricCriteria, rubricLevels, rubrics, sessions, students, users } from "@/db/schema";
 import { createSession } from "@/lib/auth/session";
 import { hashPassword } from "@/lib/auth/password";
-import { clearGrade, exportGradesCSV, markMissing, saveShareGrade } from "@/actions/grades";
+import { clearGrade, exportGradesCSV, markMissing, saveShareGrade, setGradeOverride } from "@/actions/grades";
 
 // Admin bypasses every resource-specific capability check (see can() in
 // src/lib/auth/roles.ts), so a signed-in admin is enough to exercise these
@@ -415,5 +415,84 @@ describe("exportGradesCSV", () => {
 
     const result = await exportGradesCSV(assignment.id);
     expect(result.missing).toBeNull();
+  });
+});
+
+describe("setGradeOverride", () => {
+  it("replaces the rubric's score with the letter's, and gives it back when removed", async () => {
+    await seedSignedInAdmin();
+    const course = await makeCourse("Course G");
+    const { rubric, criteria } = await makeShareRubric(["Composition", "Technique"]);
+    const assignment = await makeAssignment(course.id, rubric.id, 100);
+    const student = await makeStudent("Late Student", { netId: "ls01" });
+
+    await saveShareGrade({
+      assignmentId: assignment.id,
+      studentId: student.id,
+      entries: [
+        { criteriaId: criteria[0].id, levelId: levelId(criteria, 0, 3) },
+        { criteriaId: criteria[1].id, levelId: levelId(criteria, 1, 3) },
+      ],
+      feedback: "Nice work",
+    });
+
+    const set = await setGradeOverride({ assignmentId: assignment.id, studentId: student.id, letter: "B", reason: " Late 1 day " });
+    expect(set.success).toBe(true);
+    if (!set.success) return;
+    expect(set.grade.overrideLetter).toBe("B");
+    expect(set.grade.overrideReason).toBe("Late 1 day");
+    expect(set.grade.totalScore).toBe(85);
+    expect(set.grade.status).toBe("graded");
+    expect(set.grade.feedback).toBe("Nice work");
+    expect(set.grade.entries).toHaveLength(2);
+
+    // A later rubric save must not undo the override.
+    const resave = await saveShareGrade({
+      assignmentId: assignment.id,
+      studentId: student.id,
+      entries: [{ criteriaId: criteria[0].id, levelId: levelId(criteria, 0, 2) }],
+    });
+    expect(resave.success && resave.totalScore).toBe(85);
+
+    const exported = await exportGradesCSV(assignment.id);
+    expect(exported.grades).toContain('"ls01","Late Student","85"');
+
+    const removed = await setGradeOverride({ assignmentId: assignment.id, studentId: student.id, letter: null });
+    expect(removed.success).toBe(true);
+    if (!removed.success) return;
+    expect(removed.grade.overrideLetter).toBeNull();
+    expect(removed.grade.overrideReason).toBeNull();
+    expect(removed.grade.totalScore).toBe(94); // (0.88 + 1.0) / 2
+  });
+
+  it("grades a student whose rubric was never scored", async () => {
+    await seedSignedInAdmin();
+    const course = await makeCourse("Course H");
+    const { rubric } = await makeShareRubric(["Composition"]);
+    const assignment = await makeAssignment(course.id, rubric.id, 100);
+    const student = await makeStudent("Incomplete Student");
+
+    const set = await setGradeOverride({ assignmentId: assignment.id, studentId: student.id, letter: "D", reason: "Incomplete" });
+    expect(set.success).toBe(true);
+    if (!set.success) return;
+    expect(set.grade.status).toBe("graded");
+    expect(set.grade.totalScore).toBe(63.5);
+  });
+
+  it("is dropped when the student is marked missing, and refuses a made-up letter", async () => {
+    await seedSignedInAdmin();
+    const course = await makeCourse("Course I");
+    const { rubric } = await makeShareRubric(["Composition"]);
+    const assignment = await makeAssignment(course.id, rubric.id, 100);
+    const student = await makeStudent("Gone Student");
+
+    await setGradeOverride({ assignmentId: assignment.id, studentId: student.id, letter: "C" });
+    await markMissing(assignment.id, student.id);
+    const [row] = await db.select().from(grades).where(eq(grades.assignmentId, assignment.id));
+    expect(row.overrideLetter).toBeNull();
+    expect(row.status).toBe("missing");
+    expect(row.totalScore).toBe(0);
+
+    await expect(setGradeOverride({ assignmentId: assignment.id, studentId: student.id, letter: "Q" })).rejects.toThrow();
   });
 });

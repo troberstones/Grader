@@ -13,6 +13,7 @@ const ACTION_LABELS: Record<string, string> = {
   "grade.save": "Grade saved",
   "grade.clear": "Grade cleared",
   "grade.mark_missing": "Grade marked missing",
+  "grade.override": "Grade overridden",
   "user.role_change": "Role changed",
   "user.status_change": "Status changed",
   "user.force_sign_out": "Forced sign-out",

@@ -8,7 +8,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { RUBRIC_GRADING_VIEWS, GRADING_VIEW_LABELS, type RubricGradingViewKey } from "@/components/rubric/grading-registry";
 import { UnconvertedRubricNotice } from "@/components/rubric/unconverted-rubric-notice";
 import { GradingAlertBanner } from "@/components/rubric/grading-alert-banner";
+import { GradeOverrideDialog } from "@/components/rubric/grade-override-dialog";
 import type { RubricGrading } from "@/hooks/use-rubric-grading";
+import { letterFor, pointsForLetter } from "@/lib/rubric";
 import { cn, formatScore } from "@/lib/utils";
 
 const VIEW_PREF_KEY = "rubric-grading-view-pref";
@@ -72,7 +74,9 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
     keepMine,
     authExpired,
     retryAfterSignIn,
+    handleSetOverride,
   } = grading;
+  const [overrideOpen, setOverrideOpen] = useState(false);
 
   // Deliberately deferred to an effect rather than a lazy useState
   // initializer: this component renders during SSR, where localStorage
@@ -117,6 +121,14 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
   }
 
   const { displayScore, gradedCount, totalCount, complete } = summarize(grading);
+  const selectedGrade = grading.selectedStudent?.grade;
+  const override = selectedGrade?.overrideLetter
+    ? { letter: selectedGrade.overrideLetter, reason: selectedGrade.overrideReason ?? null }
+    : null;
+  const rubricLetter =
+    gradedCount > 0 && assignment.pointsPossible > 0
+      ? letterFor((displayScore / assignment.pointsPossible) * 100)
+      : null;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -177,13 +189,40 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
           )}
         >
           <div className={dense ? "text-left min-w-0" : "text-right"}>
-            <div className={cn("font-bold tabular-nums", dense ? "text-2xl" : "text-3xl")}>
-              {formatScore(displayScore)}
-              <span className="text-base font-normal text-muted-foreground ml-1">/ {assignment.pointsPossible}</span>
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {gradedCount} of {totalCount} criteria
-            </div>
+            {override ? (
+              <>
+                <div className={cn("font-bold tabular-nums", dense ? "text-2xl" : "text-3xl")}>
+                  {override.letter}
+                  <span className="text-base font-normal text-muted-foreground ml-1.5">
+                    {formatScore(pointsForLetter(override.letter, assignment.pointsPossible) ?? 0)} / {assignment.pointsPossible}
+                  </span>
+                </div>
+                <div className="text-xs text-amber-600 dark:text-amber-400">
+                  Overridden{override.reason ? ` · ${override.reason}` : ""}
+                </div>
+                <div className="text-xs text-muted-foreground tabular-nums">
+                  Rubric: {formatScore(displayScore)}
+                  {rubricLetter ? ` (${rubricLetter})` : ""} · {gradedCount} of {totalCount} criteria
+                </div>
+              </>
+            ) : (
+              <>
+                <div className={cn("font-bold tabular-nums", dense ? "text-2xl" : "text-3xl")}>
+                  {formatScore(displayScore)}
+                  <span className="text-base font-normal text-muted-foreground ml-1">/ {assignment.pointsPossible}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {gradedCount} of {totalCount} criteria
+                </div>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => setOverrideOpen(true)}
+              className="text-xs text-muted-foreground underline hover:text-foreground"
+            >
+              {override ? "Change override" : "Override grade"}
+            </button>
           </div>
 
           <div className="flex items-center gap-3">
@@ -216,6 +255,18 @@ export function RubricGradingPanel({ grading, dense = false }: Props) {
           </div>
         </div>
       </div>
+
+      {overrideOpen && (
+        <GradeOverrideDialog
+          open
+          onOpenChange={setOverrideOpen}
+          rubricLetter={rubricLetter}
+          pointsPossible={assignment.pointsPossible}
+          current={override}
+          saving={saving}
+          onSubmit={handleSetOverride}
+        />
+      )}
     </div>
   );
 }

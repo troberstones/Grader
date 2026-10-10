@@ -61,6 +61,12 @@ export interface ShareGrading {
   handleSave: (markComplete?: boolean) => Promise<boolean>;
   handleClear: () => Promise<void>;
   handleMarkMissing: () => Promise<void>;
+  /**
+   * Sets the selected student's grade to `letter` outright, over the rubric,
+   * with an optional reason; `letter: null` removes the override. Resolves
+   * false if it did not land.
+   */
+  handleSetOverride: (letter: string | null, reason: string | null) => Promise<boolean>;
   exportCsv: (assignmentName: string) => Promise<boolean>;
   loadStudent: (studentId: number) => void;
   selections: SelectionMap;
@@ -112,7 +118,7 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     selectHandlerRef,
     flushHandlerRef,
   } = useGrading();
-  const { saveShare, markStudentMissing, clear, exportCsv, saving, exporting } = useGradeActions(assignment.id);
+  const { saveShare, markStudentMissing, overrideGrade, clear, exportCsv, saving, exporting } = useGradeActions(assignment.id);
 
   const selectedStudent = students.find((s) => s.id === selectedStudentId) ?? null;
   // Own useMemo so the fallback `[]` isn't a fresh reference on every render
@@ -365,6 +371,8 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
       totalScore: result.totalScore,
       feedback: targetFeedback,
       status: result.status,
+      overrideLetter: currentFull?.grade?.overrideLetter ?? null,
+      overrideReason: currentFull?.grade?.overrideReason ?? null,
       gradedAt: result.status === "graded" ? new Date().toISOString() : null,
       exportedAt: currentFull?.grade?.exportedAt ?? null,
       updatedAt: result.updatedAt,
@@ -446,12 +454,36 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
       totalScore: 0,
       feedback: null,
       status: "missing",
+      overrideLetter: null,
+      overrideReason: null,
       gradedAt: new Date().toISOString(),
       exportedAt: null,
       updatedAt: result.updatedAt,
       entries: [],
     });
     toast.success("Marked missing");
+  }
+
+  async function handleSetOverride(letter: string | null, reason: string | null): Promise<boolean> {
+    if (!selectedStudentId) return false;
+    const targetStudentId = selectedStudentId;
+    // Anything still unsaved goes first, so the override is computed over —
+    // and its returned grade reflects — the rubric as it stands on screen.
+    if (!(await flushAutoSave())) return false;
+    const result = await overrideGrade(targetStudentId, letter, reason);
+    if (!result.ok) {
+      if (result.reason === "auth") {
+        setAuthExpired(true);
+        retryActionRef.current = () => void handleSetOverride(letter, reason);
+      }
+      return false;
+    }
+    setAuthExpired(false);
+    setConflict(null);
+    if (selectedStudentIdRef.current === targetStudentId) baseUpdatedAtRef.current = result.grade.updatedAt;
+    updateStudentGrade(targetStudentId, result.grade);
+    toast.success(letter ? `Grade set to ${letter}` : "Override removed");
+    return true;
   }
 
   const guardRef = useRef<(id: number) => void>(() => {});
@@ -595,6 +627,7 @@ export function useRubricGrading(assignment: Assignment): RubricGrading {
     handleSave,
     handleClear,
     handleMarkMissing,
+    handleSetOverride,
     exportCsv,
     loadStudent,
     selections,

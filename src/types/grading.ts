@@ -15,6 +15,9 @@ export interface GradingStudent {
   grade?: {
     status: GradeStatus;
     totalScore: number | null;
+    /** Set when the professor overrode the rubric's grade with their own letter. */
+    overrideLetter?: string | null;
+    overrideReason?: string | null;
   } | null;
   /**
    * Feedback email state for the sidebar: when it was last emailed, and

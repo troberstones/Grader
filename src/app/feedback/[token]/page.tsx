@@ -53,6 +53,7 @@ export default async function FeedbackPage({ params }: { params: Promise<{ token
           <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Grade</span>
           <span className="text-3xl font-bold">{model.letter ?? "—"}</span>
         </div>
+        {model.gradeNote && <p className="text-sm text-muted-foreground">{model.gradeNote}</p>}
         {model.status === "missing" && (
           <p className="text-sm text-muted-foreground">No submission was received for this assignment.</p>
         )}

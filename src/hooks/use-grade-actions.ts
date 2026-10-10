@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { saveShareGrade, clearGrade, exportGradesCSV, markMissing } from "@/actions/grades";
+import { saveShareGrade, clearGrade, exportGradesCSV, markMissing, setGradeOverride } from "@/actions/grades";
 import type { StudentGrade } from "@/actions/grades";
 
 type ShareSavePayload = Parameters<typeof saveShareGrade>[0];
@@ -79,6 +79,30 @@ export function useGradeActions(assignmentId: number) {
   }
 
   /**
+   * Set (or, with `letter: null`, remove) a student's grade override. Returns
+   * the whole grade as it now stands. Shows a toast on a generic error; an
+   * "auth" failure is passed through instead, for the same reason as
+   * `saveShare`.
+   */
+  async function overrideGrade(
+    studentId: number,
+    letter: string | null,
+    reason: string | null,
+  ): Promise<{ ok: true; grade: StudentGrade } | ActionFailure> {
+    setSaving(true);
+    try {
+      const result = await setGradeOverride({ assignmentId, studentId, letter, reason });
+      if (!result.success) return { ok: false, reason: "auth" };
+      return { ok: true, grade: result.grade };
+    } catch (err) {
+      toast.error(`Override failed: ${err instanceof Error ? err.message : String(err)}`);
+      return { ok: false, reason: "error" };
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
    * Clear a student's grade entirely. Shows a toast on a generic error; an
    * "auth" failure is passed through instead, for the same reason as
    * `saveShare`.
@@ -120,7 +144,7 @@ export function useGradeActions(assignmentId: number) {
     }
   }
 
-  return { saveShare, clear, markStudentMissing, exportCsv, saving, exporting };
+  return { saveShare, clear, markStudentMissing, overrideGrade, exportCsv, saving, exporting };
 }
 
 /**

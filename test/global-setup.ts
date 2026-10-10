@@ -5,7 +5,7 @@
  * migration folder stays the single source of schema truth for tests too,
  * instead of a second hand-maintained schema. On an empty file every
  * migration's baseline probe is false, so this simply runs
- * drizzle/0000..0014 in order.
+ * drizzle/0000..0015 in order.
  */
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";

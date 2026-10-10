@@ -166,6 +166,12 @@ export const grades = sqliteTable("grades", {
   // 'missing' is not "graded zero": it records that nothing was submitted,
   // which is what makes the rubric's non-zero bottom band defensible.
   status: text("status").notNull().default("ungraded"), // 'ungraded' | 'in_progress' | 'graded' | 'missing'
+  // The professor's own letter, set over whatever the rubric says (late work,
+  // incomplete work, their call). While set, total_score is this letter's
+  // points and status is 'graded' — see recomputeGrade. The rubric entries
+  // are kept as they are, so removing the override restores the rubric grade.
+  overrideLetter: text("override_letter"),
+  overrideReason: text("override_reason"),
   gradedAt: text("graded_at"),
   exportedAt: text("exported_at"),
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
