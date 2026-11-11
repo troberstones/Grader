@@ -77,7 +77,7 @@ export function TransportBar({
   const dim = !canControl;
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: "max-content" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
         <button
           title="Previous annotated frame  ["
@@ -225,7 +225,7 @@ export function ViewBar({
   onColor,
 }: ViewBarProps) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: "max-content" }}>
       <div style={{ display: "flex", gap: 2 }}>
         <button
           title="Flip horizontally  F — the classic check-your-drawing move"
@@ -368,6 +368,8 @@ interface InkRailProps {
   artwork?: { index: number; count: number; onStep: (dir: -1 | 1) => void };
   /** Step between students; the host decides who is skipped. Omitted → no buttons. */
   student?: { canPrev: boolean; canNext: boolean; onStep: (dir: -1 | 1) => void };
+  /** One column and a slimmer rail; same controls, same order. */
+  narrow?: boolean;
 }
 
 const TOOLS = ["pen", "highlight", "arrow", "line", "rect", "ellipse", "text", "erase"] as const;
@@ -401,24 +403,37 @@ export function InkRail({
   onClear,
   artwork,
   student,
+  narrow = false,
 }: InkRailProps) {
+  const cols: CSSProperties = narrow ? { ...grid, gridTemplateColumns: "1fr" } : grid;
   return (
     <div
       style={{
-        width: 64,
+        width: narrow ? 44 : 64,
         flexShrink: 0,
         display: "flex",
         flexDirection: "column",
-        alignItems: "center",
         gap: 6,
         padding: 6,
         background: C.container,
         borderRadius: 8,
-        // A short window shortens the rail rather than pushing it off-screen.
-        overflowY: "auto",
+        minHeight: 0,
       }}
     >
-      <div style={grid}>
+      {/* A short window shortens this part and scrolls it; the artwork and
+          student buttons below are pinned so they never move or scroll away. */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+      <div style={cols}>
         {TOOLS.map((t) => (
           <button
             key={t}
@@ -433,7 +448,7 @@ export function InkRail({
 
       <Rule />
 
-      <div style={grid}>
+      <div style={cols}>
         {INK_COLORS.map((c) => (
           <button
             key={c}
@@ -454,7 +469,7 @@ export function InkRail({
 
       <Rule />
 
-      <div style={grid}>
+      <div style={cols}>
         {INK_WIDTHS.map((w) => (
           <button
             key={w}
@@ -477,7 +492,7 @@ export function InkRail({
 
       <Rule />
 
-      <div style={grid}>
+      <div style={cols}>
         <button onClick={onUndo} disabled={!canUndo} style={{ ...iconButton(false, !canUndo), width: "100%" }} title="Undo  ⌘Z">
           ↶
         </button>
@@ -494,12 +509,14 @@ export function InkRail({
       </button>
 
       {saving && <span style={{ ...label, color: C.faint, fontSize: 9 }}>saving…</span>}
+      </div>
 
+      <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
       {artwork && (
         <>
           <Rule />
           <span style={{ ...label, fontSize: 9 }}>Artwork</span>
-          <div style={grid}>
+          <div style={cols}>
             <button
               onClick={() => artwork.onStep(-1)}
               disabled={artwork.index <= 0}
@@ -524,7 +541,7 @@ export function InkRail({
         <>
           <Rule />
           <span style={{ ...label, fontSize: 9 }}>Student</span>
-          <div style={grid}>
+          <div style={cols}>
             <button
               onClick={() => student.onStep(-1)}
               disabled={!student.canPrev}
@@ -544,6 +561,7 @@ export function InkRail({
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }

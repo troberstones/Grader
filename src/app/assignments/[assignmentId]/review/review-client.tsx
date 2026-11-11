@@ -404,12 +404,12 @@ export function ReviewClient({ assignment, author }: Props) {
       onGuidesChange={handleGuidesChange}
       pdfWorkerUrl="/pdf.worker.min.mjs"
       studentNav={studentNav}
-      headerSlot={
+      headerSlot={(tier) => (
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 12, color: "#adaaaa" }}>{assignment.name}</span>
+          {tier === "wide" && <span style={{ fontSize: 12, color: "#adaaaa" }}>{assignment.name}</span>}
           <StudentNavBar />
         </div>
-      }
+      )}
     />
   );
 

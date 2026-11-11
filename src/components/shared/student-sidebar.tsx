@@ -28,7 +28,21 @@ import { letterFor } from "@/lib/rubric";
  * students — and in a session that cannot grade, they are progress against work
  * you are not here to do.
  */
-export function StudentSidebar({ pointsPossible }: { pointsPossible: number }) {
+export function StudentSidebar({
+  pointsPossible,
+  variant = "docked",
+}: {
+  pointsPossible: number;
+  /**
+   * "docked" lives beside the page and steps down with the window: full at
+   * xl, an initials strip from 900px, gone below that (the shell's Students
+   * button opens the "sheet" variant instead). "sheet" is always full width.
+   */
+  variant?: "docked" | "sheet";
+}) {
+  const sheet = variant === "sheet";
+  // What only the full-width sidebar shows.
+  const full = sheet ? "" : "max-xl:hidden";
   const { students, selectedStudentId, selectStudent, scrollRef } = useGrading();
   const reviewing = useIsReviewing();
   const onReviewRoute = isReviewRoute(usePathname());
@@ -52,13 +66,15 @@ export function StudentSidebar({ pointsPossible }: { pointsPossible: number }) {
   return (
     <div
       className={cn(
-        "shrink-0 border-r flex flex-col bg-sidebar transition-[width]",
-        detailed ? "w-56" : "w-44",
+        "shrink-0 border-r flex flex-col bg-sidebar",
+        sheet
+          ? "w-full h-full"
+          : cn("max-[899px]:hidden min-[900px]:w-12", detailed ? "xl:w-56" : "xl:w-44"),
       )}
     >
       {/* Progress summary — grading progress, so only in a grading session. */}
       {!reviewing && (
-      <div className="px-4 py-3 border-b">
+      <div className={cn("px-4 py-3 border-b", full)}>
         <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
           <span className="flex items-center gap-1">
             <Users className="h-3 w-3" />
@@ -89,17 +105,34 @@ export function StudentSidebar({ pointsPossible }: { pointsPossible: number }) {
               id={`student-${student.id}`}
               onClick={() => selectStudent(student.id)}
               className={cn(
-                "w-full text-left px-4 py-2.5 flex items-center gap-2 text-sm border-b last:border-b-0 transition-colors hover:bg-muted/50",
+                "w-full text-left py-2.5 flex items-center gap-2 text-sm border-b last:border-b-0 transition-colors hover:bg-muted/50",
+                sheet ? "px-4" : "max-xl:justify-center max-xl:px-0 xl:px-4",
                 isSelected && "bg-primary/8 border-l-2 border-l-primary",
               )}
             >
-              {!reviewing && <StatusIcon status={status} />}
-              <div className="flex-1 min-w-0">
+              {!reviewing && (
+                <span className={cn("shrink-0 flex", !sheet && "max-xl:hidden")}>
+                  <StatusIcon status={status} />
+                </span>
+              )}
+              {!sheet && (
+                <span
+                  title={student.sortName}
+                  className="xl:hidden text-xs font-medium tabular-nums"
+                >
+                  {initials(student.name)}
+                </span>
+              )}
+              <div className={cn("flex-1 min-w-0", full)}>
                 <div className="truncate font-medium">{student.sortName}</div>
               </div>
-              {detailed && student.feedbackMail && <FeedbackMailIcon mail={student.feedbackMail} />}
+              {detailed && student.feedbackMail && (
+                <span className={cn("shrink-0 flex", full)}>
+                  <FeedbackMailIcon mail={student.feedbackMail} />
+                </span>
+              )}
               {detailed && score !== null && score !== undefined && (
-                <span className="text-xs tabular-nums shrink-0 text-muted-foreground">
+                <span className={cn("text-xs tabular-nums shrink-0 text-muted-foreground", full)}>
                   {formatScore(score)}
                   {override ? (
                     <span
@@ -151,4 +184,12 @@ function FeedbackMailIcon({ mail }: { mail: NonNullable<GradingStudent["feedback
       <Mail className="h-3.5 w-3.5 text-muted-foreground" />
     </span>
   );
+}
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0][0] ?? "";
+  const last = parts.length > 1 ? (parts[parts.length - 1][0] ?? "") : "";
+  return (first + last).toUpperCase();
 }

@@ -52,7 +52,7 @@ export interface ArtReviewerProps {
   initialCompareId?: string | null;
   pdfWorkerUrl?: string;
   /** Rendered top-right — grader puts student navigation here. */
-  headerSlot?: React.ReactNode;
+  headerSlot?: React.ReactNode | ((tier: LayoutTier) => React.ReactNode);
   /** Previous/next-student buttons under the ink rail. The host owns who counts as next. */
   studentNav?: { canPrev: boolean; canNext: boolean; onStep: (dir: -1 | 1) => void };
   onPositionChange?: (itemIndex: number, frame: number) => void;
@@ -84,6 +84,16 @@ const LASER_LIFETIME_MS = 1200;
 
 /** The stage is one pane, or two side by side while comparing. */
 type PaneId = "main" | "compare";
+
+/**
+ * How much room the reviewer itself has (not the window — the host docks
+ * panels beside it). Controls keep their slots across tiers and only change
+ * form: labels become icons, status readouts move behind "⋯", the ink rail
+ * narrows. Nothing wraps and nothing changes order.
+ */
+export type LayoutTier = "wide" | "medium" | "narrow";
+const WIDE_MIN = 720;
+const MEDIUM_MIN = 460;
 
 type Framing = { zoom?: number; panX?: number; panY?: number; fit?: FitMode };
 
@@ -133,6 +143,24 @@ export function ArtReviewer({
   /** The item in the second pane, by id so it survives the playlist changing. */
   const [compareId, setCompareId] = useState<string | null>(initialCompareId);
   const [showSheet, setShowSheet] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [tier, setTier] = useState<LayoutTier>("wide");
+  const [showMore, setShowMore] = useState(false);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.clientWidth;
+      setTier(w >= WIDE_MIN ? "wide" : w >= MEDIUM_MIN ? "medium" : "narrow");
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  useEffect(() => {
+    if (tier === "wide") setShowMore(false);
+  }, [tier]);
 
   // Read-only pins the tool to "select", which is the pan tool: every path
   // that could start a stroke, erase or place text branches off before then.
@@ -1397,6 +1425,37 @@ export function ArtReviewer({
   const hasPrev = prevMarker(annotations.annotatedFrames, state.frame) !== null;
   const hasNext = nextMarker(annotations.annotatedFrames, state.frame) !== null;
 
+  const statusItems = (
+    <>
+      {!readOnly && <Presence session={session} />}
+      {/* Beside "Follow view" on purpose: both answer "what does this screen
+          do in the room", as opposed to what the clip does. */}
+      <label
+        style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", flexShrink: 0 }}
+        title="Only one machine in the room should play audio"
+      >
+        <input
+          type="checkbox"
+          checked={audioOwner}
+          onChange={(e) => setAudioOwner(e.target.checked)}
+          style={{ accentColor: C.primary }}
+        />
+        <span style={label}>Audio</span>
+      </label>
+      <MemoryReadout autoBytes={viewer.budget.ram} item={item} />
+      {item?.kind === "video" && (
+        <VideoQualityControl
+          item={item}
+          source={viewer.source}
+          quality={viewer.videoQuality}
+          onQuality={viewer.setVideoQuality}
+          sharpen={viewer.sharpenOnPause}
+          onSharpen={viewer.setSharpenOnPause}
+        />
+      )}
+    </>
+  );
+
   const cursor =
     tools.tool === "select" || spaceRef.current
       ? "grab"
@@ -1406,8 +1465,10 @@ export function ArtReviewer({
 
   return (
     <div
+      ref={rootRef}
       style={{
         ...noSelect,
+        position: "relative",
         display: "flex",
         height: "100%",
         minHeight: 0,
@@ -1446,33 +1507,9 @@ export function ArtReviewer({
           of them came off the stage. Two items left now — session state and
           which student — so one row is the normal case. It still wraps rather
           than clipping: a hidden "Follow view" is worse than a shorter stage. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0, flexWrap: "wrap" }}>
-        {!readOnly && <Presence session={session} />}
-        {/* Beside "Follow view" on purpose: both answer "what does this screen
-            do in the room", as opposed to what the clip does. */}
-        <label
-          style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", flexShrink: 0 }}
-          title="Only one machine in the room should play audio"
-        >
-          <input
-            type="checkbox"
-            checked={audioOwner}
-            onChange={(e) => setAudioOwner(e.target.checked)}
-            style={{ accentColor: C.primary }}
-          />
-          <span style={label}>Audio</span>
-        </label>
-        <MemoryReadout autoBytes={viewer.budget.ram} item={item} />
-        {item?.kind === "video" && (
-          <VideoQualityControl
-            item={item}
-            source={viewer.source}
-            quality={viewer.videoQuality}
-            onQuality={viewer.setVideoQuality}
-            sharpen={viewer.sharpenOnPause}
-            onSharpen={viewer.setSharpenOnPause}
-          />
-        )}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, minWidth: 0, position: "relative" }}>
+        {/* Left zone: which piece. Always the same three controls in the same
+            order; only the labels shrink. */}
         <Playlist
           items={items}
           index={state.itemIndex}
@@ -1482,29 +1519,39 @@ export function ArtReviewer({
           onAdd={adapter.addItems ? handleAddFiles : undefined}
           onRemove={adapter.removeItem ? handleRemoveItem : undefined}
         />
-        {items.length > 1 && (
+        <button
+          onClick={toggleCompare}
+          disabled={items.length <= 1}
+          style={{ ...textButton(compareItem !== null), flexShrink: 0, ...(items.length <= 1 ? { opacity: 0.35 } : {}) }}
+          title="Show a second file beside this one, on the same frame  C"
+        >
+          {tier === "wide" ? "Compare" : "⧉"}
+        </button>
+        <button
+          onClick={() => setShowSheet(true)}
+          disabled={items.length <= 1}
+          style={{ ...textButton(showSheet), flexShrink: 0, ...(items.length <= 1 ? { opacity: 0.35 } : {}) }}
+          title="Every piece on one page"
+        >
+          {tier === "wide" ? "Contact sheet" : "⊞"}
+        </button>
+        <div style={{ flex: 1, minWidth: 0 }} />
+        {/* Right zone: who, then status, then help. Status readouts are the
+            first thing to leave when room runs out, and they go behind "⋯" in
+            one step rather than wrapping the header onto extra rows. */}
+        <div style={{ minWidth: 0, overflow: "hidden" }}>
+          {typeof headerSlot === "function" ? headerSlot(tier) : headerSlot}
+        </div>
+        {tier === "wide" && statusItems}
+        {tier !== "wide" && (
           <button
-            onClick={toggleCompare}
-            style={{ ...textButton(compareItem !== null), flexShrink: 0 }}
-            title="Show a second file beside this one, on the same frame  C"
+            onClick={() => setShowMore((v) => !v)}
+            style={{ ...textButton(showMore), flexShrink: 0 }}
+            title="Audio, memory, connection"
           >
-            Compare
+            ⋯
           </button>
         )}
-        {items.length > 1 && (
-          <button
-            onClick={() => setShowSheet(true)}
-            style={{ ...textButton(showSheet), flexShrink: 0 }}
-            title="Every piece on one page"
-          >
-            Contact sheet
-          </button>
-        )}
-        <div style={{ flex: 1, minWidth: 8 }} />
-        {/* Shrinkable: the host's slot (assignment name, student nav) is wider
-            than the panel once a sidebar is open, and an unshrinkable child
-            overflows the header no matter how willing the header is to wrap. */}
-        <div style={{ minWidth: 0, overflowX: "auto" }}>{headerSlot}</div>
         {/* The keyboard shortcut is no use on the device this is for. */}
         {!readOnly && <button
           onClick={() => setShowLog((v) => !v)}
@@ -1520,6 +1567,27 @@ export function ArtReviewer({
         >
           ?
         </button>
+        {tier !== "wide" && showMore && (
+          <div
+            style={{
+              position: "absolute",
+              top: "100%",
+              right: 0,
+              marginTop: 4,
+              zIndex: 30,
+              background: C.container,
+              borderRadius: 8,
+              padding: 10,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "flex-start",
+              gap: 10,
+              boxShadow: "0 12px 28px rgba(0,0,0,0.5)",
+            }}
+          >
+            {statusItems}
+          </div>
+        )}
       </div>
 
       {/* stage */}
@@ -1823,7 +1891,8 @@ export function ArtReviewer({
 
       {/* controls — fixed height, scrolling sideways rather than wrapping into
           extra rows that eat the stage */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0, minWidth: 0 }}>
+        <div style={{ overflowX: "auto", paddingBottom: 2, minWidth: 0 }}>
         <TransportBar
           state={state}
           frameCount={frameCount}
@@ -1841,7 +1910,8 @@ export function ArtReviewer({
           }
           onOnionSkin={(n) => dispatch({ a: "opts", patch: { onionSkin: n } })}
         />
-        <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 2 }}>
+        </div>
+        <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 2, minWidth: 0 }}>
           <ViewBar
             state={state}
             guides={state.guides}
@@ -1876,6 +1946,7 @@ export function ArtReviewer({
             dispatch({ a: "goto", item: Math.max(0, Math.min(items.length - 1, state.itemIndex + d)) }),
         }}
         student={studentNav}
+        narrow={tier === "narrow"}
       />}
 
       {showSheet && (

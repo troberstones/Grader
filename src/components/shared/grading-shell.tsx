@@ -4,7 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { isGradingRoute } from "@/lib/grading-routes";
 import Link from "next/link";
-import { LogOut, Menu, Settings, Wifi, WifiOff } from "lucide-react";
+import { LogOut, Menu, Settings, Users, Wifi, WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -71,6 +71,7 @@ export function GradingShell({
           {/* Hamburger row */}
           <div className="shrink-0 px-3 py-2 flex items-center gap-2 border-b bg-sidebar">
             <NavDrawer />
+            <StudentsDrawer pointsPossible={pointsPossible} />
             <SyncToggle />
             <ViewSwitch />
             <ReviewBadge className="ml-auto" />
@@ -153,6 +154,38 @@ function StudentUrlSync() {
   }, [selectedStudentId]);
 
   return null;
+}
+
+/**
+ * Below 900px the student list has no room beside the page, so it moves
+ * behind a button here instead of squeezing the artwork. Above that the
+ * docked sidebar is showing and this button is hidden.
+ */
+function StudentsDrawer({ pointsPossible }: { pointsPossible: number }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger
+        render={<Button variant="ghost" size="icon-sm" title="Students" className="min-[900px]:hidden" />}
+      >
+        <Users className="h-4 w-4" />
+      </SheetTrigger>
+      <SheetContent side="left" className="w-64 p-0">
+        <SheetTitle className="sr-only">Students</SheetTitle>
+        <SheetDescription className="sr-only">Choose a student</SheetDescription>
+        {/* Picking a student closes the drawer. */}
+        <div
+          className="h-full"
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest("button")) setOpen(false);
+          }}
+        >
+          <StudentSidebar pointsPossible={pointsPossible} variant="sheet" />
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
 }
 
 function NavDrawer() {
