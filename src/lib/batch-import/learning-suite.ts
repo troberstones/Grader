@@ -32,9 +32,10 @@ export const learningSuiteImporter: BatchImporter = {
     for (let i = 2; i < parts.length - 1; i++) {
       const studentId = byNetId.get(parts[i].toLowerCase());
       if (studentId == null) continue;
+      // No extension check: a file that lost its extension is still theirs,
+      // and the upload sniffs what it is (see ./ingest.ts).
       const fileName = parts.slice(i + 1).join("_");
-      if (!path.extname(fileName)) continue;
-      return { studentId, fileName };
+      if (fileName) return { studentId, fileName };
     }
     return null;
   },

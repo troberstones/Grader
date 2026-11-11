@@ -6,33 +6,45 @@ import { createWriteStream } from "fs";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import type { ReadableStream as NodeReadableStream } from "stream/web";
-import { eq } from "drizzle-orm";
-import yauzl from "yauzl";
+import { asc, eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { assignments, courseEnrollments, students } from "@/db/schema";
 import { requireCapability } from "@/lib/auth/require";
 import { assignmentResource } from "@/lib/auth/resource-lookup";
 import { writeAudit } from "@/lib/audit";
-import { MAX_FILE_SIZE } from "@/lib/constants";
-import { getMediaType } from "@/lib/file-storage";
-import { storeSubmissionFile } from "@/lib/submission-store";
 import { detectImporter, isJunkEntry, type RosterEntry } from "@/lib/batch-import";
+import {
+  classifySource,
+  ingestForStudent,
+  listEntries,
+  openZip,
+  type IngestOutcome,
+  type IngestSource,
+} from "@/lib/batch-import/ingest";
+import { stagePending, sweepPending } from "@/lib/batch-import/pending";
 import { ensureIngested } from "@/actions/review";
 
 export interface BatchUploadResult {
   format: string;
   imported: { studentName: string; fileName: string }[];
-  /** Files no roster student could be matched to. */
-  unmatched: string[];
-  /** Matched, but not something review can show (a .blend, a nested zip, …) or too large. */
+  /**
+   * Files no roster student could be matched to, kept on the server under
+   * `token` until the instructor assigns them (see ./assign).
+   */
+  unmatched: { token: string; fileName: string }[];
+  /** Not something review can show (a .blend, …), too large, or encrypted. */
   skipped: { fileName: string; reason: string }[];
+  /** The course roster, for assigning unmatched files. */
+  roster: { studentId: number; name: string }[];
 }
 
 /**
  * Accepts an LMS "download all submissions" zip for one assignment and files
  * each entry under the student it belongs to. Which LMS made the zip is
- * detected from its file names (see src/lib/batch-import).
+ * detected from its file names (see src/lib/batch-import). A zip that no
+ * format recognizes still uploads: every file comes back unmatched, for the
+ * instructor to assign by hand.
  *
  * The zip arrives as the raw request body rather than multipart form data:
  * these bundles are routinely several GB of video, and `request.formData()`
@@ -58,8 +70,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       .select({ studentId: students.id, netId: students.netId, name: students.name, sortName: students.sortName })
       .from(courseEnrollments)
       .innerJoin(students, eq(students.id, courseEnrollments.studentId))
-      .where(eq(courseEnrollments.courseId, assignment.courseId));
+      .where(eq(courseEnrollments.courseId, assignment.courseId))
+      .orderBy(asc(students.sortName));
 
+    await sweepPending();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "grader-batch-"));
     const zipPath = path.join(tmpDir, "upload.zip");
     await pipeline(Readable.fromWeb(request.body as NodeReadableStream), createWriteStream(zipPath));
@@ -68,61 +82,65 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     try {
       const entries = await listEntries(zip);
       const importer = detectImporter(entries.map((e) => e.fileName), roster);
-      if (!importer) {
+
+      const nameById = new Map(roster.map((s) => [s.studentId, s.name]));
+      const out: IngestOutcome = { imported: [], skipped: [], submissionIds: [] };
+      const unmatched: BatchUploadResult["unmatched"] = [];
+
+      for (const entry of entries) {
+        if (isJunkEntry(entry.fileName)) continue;
+        if (entry.isEncrypted()) {
+          out.skipped.push({ fileName: entry.fileName, reason: "encrypted" });
+          continue;
+        }
+        const match = importer?.match(entry.fileName, roster) ?? null;
+        const base = path.posix.basename(entry.fileName);
+        const src: IngestSource = {
+          name: match?.fileName ?? base,
+          size: entry.uncompressedSize,
+          open: () => zip.openReadStreamPromise(entry),
+        };
+
+        if (match) {
+          await ingestForStudent(src, { assignmentId, studentId: match.studentId, tmpDir, out, label: entry.fileName });
+          continue;
+        }
+        // Only worth keeping for assignment if review could use it once assigned.
+        if (!(await classifySource(src))) {
+          out.skipped.push({ fileName: base, reason: "no matching student, and not a file type review can show" });
+          continue;
+        }
+        const token = await stagePending(assignmentId, base, async (abs) =>
+          pipeline(await src.open(), createWriteStream(abs)),
+        );
+        unmatched.push({ token, fileName: base });
+      }
+
+      if (out.imported.length === 0 && unmatched.length === 0) {
         return NextResponse.json(
-          {
-            error:
-              "Couldn't match any file in this zip to a student on the roster. " +
-              "It may be a format this app doesn't read yet, or the roster may be missing net IDs.",
-          },
+          { error: "Nothing in this zip is a file review can show.", skipped: out.skipped },
           { status: 400 },
         );
       }
 
-      const nameById = new Map(roster.map((s) => [s.studentId, s.name]));
-      const result: BatchUploadResult = { format: importer.label, imported: [], unmatched: [], skipped: [] };
-      const submissionIds: number[] = [];
-
-      for (const entry of entries) {
-        if (isJunkEntry(entry.fileName)) continue;
-        const match = importer.match(entry.fileName, roster);
-        if (!match) {
-          result.unmatched.push(path.posix.basename(entry.fileName));
-          continue;
-        }
-        if (!getMediaType(match.fileName)) {
-          result.skipped.push({ fileName: entry.fileName, reason: "unsupported file type" });
-          continue;
-        }
-        if (entry.uncompressedSize > MAX_FILE_SIZE) {
-          result.skipped.push({ fileName: entry.fileName, reason: "larger than 500MB" });
-          continue;
-        }
-        if (entry.isEncrypted()) {
-          result.skipped.push({ fileName: entry.fileName, reason: "encrypted" });
-          continue;
-        }
-
-        const id = await storeSubmissionFile({
-          assignmentId,
-          studentId: match.studentId,
-          originalName: match.fileName,
-          size: entry.uncompressedSize,
-          write: async (abs) => pipeline(await zip.openReadStreamPromise(entry), createWriteStream(abs)),
-        });
-        submissionIds.push(id);
-        result.imported.push({ studentName: nameById.get(match.studentId) ?? "", fileName: match.fileName });
-      }
+      const result: BatchUploadResult = {
+        format: importer?.label ?? "zip with no recognized naming",
+        imported: out.imported.map((i) => ({ studentName: nameById.get(i.studentId) ?? "", fileName: i.fileName })),
+        unmatched,
+        skipped: out.skipped,
+        roster: roster.map((s) => ({ studentId: s.studentId, name: s.name })),
+      };
 
       await writeAudit(user, {
         action: "submission.batch_import",
         targetType: "assignment",
         targetId: assignmentId,
-        detail: { format: importer.id, imported: result.imported.length, unmatched: result.unmatched.length },
+        detail: { format: importer?.id ?? null, imported: result.imported.length, unmatched: unmatched.length },
       });
 
       // One at a time: a class's worth of video transcoding at once would
       // starve the server that's also serving the review page.
+      const submissionIds = [...new Set(out.submissionIds)];
       after(async () => {
         for (const id of submissionIds) await ensureIngested(id).catch(() => {});
       });
@@ -139,26 +157,4 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   } finally {
     if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
-}
-
-function openZip(zipPath: string): Promise<yauzl.ZipFile> {
-  return new Promise((resolve, reject) => {
-    yauzl.open(zipPath, { lazyEntries: true, autoClose: false }, (err, zip) => {
-      if (err) reject(new Error("That file isn't a readable zip."));
-      else resolve(zip);
-    });
-  });
-}
-
-function listEntries(zip: yauzl.ZipFile): Promise<yauzl.Entry[]> {
-  return new Promise((resolve, reject) => {
-    const entries: yauzl.Entry[] = [];
-    zip.on("entry", (entry: yauzl.Entry) => {
-      entries.push(entry);
-      zip.readEntry();
-    });
-    zip.on("end", () => resolve(entries));
-    zip.on("error", reject);
-    zip.readEntry();
-  });
 }

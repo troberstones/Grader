@@ -23,6 +23,7 @@ export type AuditAction =
   | "upload_link.revoke"
   | "upload_link.use"
   | "submission.batch_import"
+  | "submission.batch_assign"
   | "feedback.send"
   | "auth.sign_in"
   | "auth.sign_in_failed"

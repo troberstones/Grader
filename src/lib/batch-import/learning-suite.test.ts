@@ -40,6 +40,10 @@ describe("learningSuiteImporter.match", () => {
     });
   });
 
+  it("matches a file that lost its extension", () => {
+    expect(learningSuiteImporter.match("Gray_Rose_rosegray_render", roster)).toEqual({ studentId: 2, fileName: "render" });
+  });
+
   it("returns null for a student not on the roster", () => {
     expect(learningSuiteImporter.match("Galloway_Olivia_og114_Turnaround.mov", roster)).toBeNull();
   });
