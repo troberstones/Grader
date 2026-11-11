@@ -495,7 +495,7 @@ export function InkRail({
 
       {saving && <span style={{ ...label, color: C.faint, fontSize: 9 }}>saving…</span>}
 
-      {artwork && artwork.count > 1 && (
+      {artwork && (
         <>
           <Rule />
           <span style={{ ...label, fontSize: 9 }}>Artwork</span>
