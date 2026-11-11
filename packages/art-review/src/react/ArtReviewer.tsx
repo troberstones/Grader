@@ -25,6 +25,7 @@ import { setStoredLinkView } from "../sources/playback-prefs";
 import { VideoElementSource } from "../sources/video-element";
 import type { ReviewChannel, ReviewDataAdapter } from "../adapter/types";
 import type { ReviewItem } from "../core/types";
+import { ContactSheet } from "./components/ContactSheet";
 import { HelpSheet } from "./components/HelpSheet";
 import { InputLog, type InputEntry } from "./components/InputLog";
 import { LayerPanel } from "./components/LayerPanel";
@@ -131,6 +132,7 @@ export function ArtReviewer({
   const compareOverlayRef = useRef<HTMLCanvasElement>(null);
   /** The item in the second pane, by id so it survives the playlist changing. */
   const [compareId, setCompareId] = useState<string | null>(initialCompareId);
+  const [showSheet, setShowSheet] = useState(false);
 
   // Read-only pins the tool to "select", which is the pan tool: every path
   // that could start a stroke, erase or place text branches off before then.
@@ -1489,6 +1491,15 @@ export function ArtReviewer({
             Compare
           </button>
         )}
+        {items.length > 1 && (
+          <button
+            onClick={() => setShowSheet(true)}
+            style={{ ...textButton(showSheet), flexShrink: 0 }}
+            title="Every piece on one page"
+          >
+            Contact sheet
+          </button>
+        )}
         <div style={{ flex: 1, minWidth: 8 }} />
         {/* Shrinkable: the host's slot (assignment name, student nav) is wider
             than the panel once a sidebar is open, and an unshrinkable child
@@ -1866,6 +1877,18 @@ export function ArtReviewer({
         }}
         student={studentNav}
       />}
+
+      {showSheet && (
+        <ContactSheet
+          items={items}
+          current={state.itemIndex}
+          onOpen={(i) => {
+            dispatch({ a: "goto", item: i });
+            setShowSheet(false);
+          }}
+          onClose={() => setShowSheet(false)}
+        />
+      )}
 
       {showHelp && <HelpSheet onClose={() => setShowHelp(false)} />}
     </div>
