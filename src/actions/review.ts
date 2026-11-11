@@ -263,6 +263,21 @@ export async function retryIngest(submissionId: number): Promise<void> {
 
 // ── Playlist ──────────────────────────────────────────────────────────────────
 
+/**
+ * Who has any work for this assignment, read fresh. The student-stepping
+ * buttons call it on every click: a list captured when the page loaded goes
+ * stale the moment anyone uploads, and the buttons then skip or stop at
+ * students who do have artwork.
+ */
+export async function studentIdsWithWork(assignmentId: number): Promise<number[]> {
+  await requireCapability("roster.view", await assignmentResource(assignmentId));
+  const rows = await db
+    .selectDistinct({ studentId: submissions.studentId })
+    .from(submissions)
+    .where(eq(submissions.assignmentId, assignmentId));
+  return rows.map((r) => r.studentId);
+}
+
 export async function listReviewItems(contextId: string): Promise<ReviewItem[]> {
   const { assignmentId, studentId } = await parseContext(contextId);
   await requireCapability("roster.view", await assignmentResource(assignmentId));

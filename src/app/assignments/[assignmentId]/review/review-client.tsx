@@ -27,6 +27,7 @@ import {
   loadPrefs,
   retryIngest,
   savePrefs,
+  studentIdsWithWork,
 } from "@/actions/review";
 
 type Assignment = NonNullable<Awaited<ReturnType<typeof getAssignment>>>;
@@ -239,24 +240,29 @@ export function ReviewClient({ assignment, author }: Props) {
    */
   const studentNav = useMemo(() => {
     const idx = students.findIndex((s) => s.id === selectedStudentId);
-    const has = (s: (typeof students)[number]) => s.hasSubmission !== false;
-    const find = (dir: -1 | 1) => {
-      for (let i = idx + dir; i >= 0 && i < students.length; i += dir) {
-        if (has(students[i])) return students[i];
-      }
-      return null;
-    };
-    const prev = find(-1);
-    const next = find(1);
     return {
-      canPrev: !!prev,
-      canNext: !!next,
-      onStep: (dir: -1 | 1) => {
-        const target = dir < 0 ? prev : next;
-        if (target) selectStudent(target.id);
+      // Positional only: whether anyone in that direction has work is asked of
+      // the server when the button is pressed, not guessed from the list the
+      // page loaded with.
+      canPrev: idx > 0,
+      canNext: idx >= 0 && idx < students.length - 1,
+      onStep: async (dir: -1 | 1) => {
+        let withWork: Set<number>;
+        try {
+          withWork = new Set(await studentIdsWithWork(assignmentId));
+        } catch {
+          // Can't ask: step to the neighbour rather than leave the button dead.
+          withWork = new Set(students.map((s) => s.id));
+        }
+        for (let i = idx + dir; i >= 0 && i < students.length; i += dir) {
+          if (withWork.has(students[i].id)) {
+            selectStudent(students[i].id);
+            return;
+          }
+        }
       },
     };
-  }, [students, selectedStudentId, selectStudent]);
+  }, [students, selectedStudentId, selectStudent, assignmentId]);
 
   /**
    * Which piece of a student's playlist was open, by contextId.
