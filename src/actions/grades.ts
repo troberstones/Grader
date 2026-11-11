@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/db";
-import { assignments, grades, gradeEntries, students, courseEnrollments } from "@/db/schema";
+import { assignments, grades, gradeEntries, students, courseEnrollments, submissions } from "@/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { GradeStatus } from "@/types/grading";
@@ -62,6 +62,8 @@ export type StudentWithGrade = {
    * sidebar can tell when the grade has changed since.
    */
   emailedFeedback: { sentAt: string; fingerprint: string | null } | null;
+  /** Has any work been submitted for this assignment? Next/previous-student buttons skip those without. */
+  hasSubmission: boolean;
 };
 
 /** The raw row shape of `grades`. */
@@ -128,6 +130,15 @@ export async function getGradeSheet(assignmentId: number): Promise<StudentWithGr
 
   const history = await feedbackHistory([assignmentId], feedbackTestMode());
 
+  const submitted = new Set(
+    (
+      await db
+        .selectDistinct({ studentId: submissions.studentId })
+        .from(submissions)
+        .where(eq(submissions.assignmentId, assignmentId))
+    ).map((r) => r.studentId),
+  );
+
   return enrolled.map((student) => {
     const grade = gradeRows.find((g) => g.studentId === student.id) ?? null;
     const lastSent = history.get(`${assignmentId}:${student.id}`)?.lastSent ?? null;
@@ -135,6 +146,7 @@ export async function getGradeSheet(assignmentId: number): Promise<StudentWithGr
       ...student,
       grade: grade ? toStudentGrade(grade, allEntries.filter((e) => e.gradeId === grade.id)) : null,
       emailedFeedback: lastSent ? { sentAt: lastSent.sentAt, fingerprint: lastSent.fingerprint } : null,
+      hasSubmission: submitted.has(student.id),
     };
   });
 }

@@ -12,6 +12,8 @@ export interface GradingStudent {
   name: string;
   sortName: string;
   netId?: string | null;
+  /** Any submitted work for this assignment; undefined is treated as "yes". */
+  hasSubmission?: boolean;
   grade?: {
     status: GradeStatus;
     totalScore: number | null;

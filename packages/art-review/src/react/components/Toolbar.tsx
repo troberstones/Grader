@@ -364,6 +364,10 @@ interface InkRailProps {
   onUndo: () => void;
   onRedo: () => void;
   onClear: () => void;
+  /** Step between a student's pieces. */
+  artwork?: { index: number; count: number; onStep: (dir: -1 | 1) => void };
+  /** Step between students; the host decides who is skipped. Omitted → no buttons. */
+  student?: { canPrev: boolean; canNext: boolean; onStep: (dir: -1 | 1) => void };
 }
 
 const TOOLS = ["pen", "highlight", "arrow", "line", "rect", "ellipse", "text", "erase"] as const;
@@ -395,6 +399,8 @@ export function InkRail({
   onUndo,
   onRedo,
   onClear,
+  artwork,
+  student,
 }: InkRailProps) {
   return (
     <div
@@ -488,6 +494,56 @@ export function InkRail({
       </button>
 
       {saving && <span style={{ ...label, color: C.faint, fontSize: 9 }}>saving…</span>}
+
+      {artwork && artwork.count > 1 && (
+        <>
+          <Rule />
+          <span style={{ ...label, fontSize: 9 }}>Artwork</span>
+          <div style={grid}>
+            <button
+              onClick={() => artwork.onStep(-1)}
+              disabled={artwork.index <= 0}
+              style={{ ...iconButton(false, artwork.index <= 0), width: "100%" }}
+              title="Previous artwork"
+            >
+              ◀
+            </button>
+            <button
+              onClick={() => artwork.onStep(1)}
+              disabled={artwork.index >= artwork.count - 1}
+              style={{ ...iconButton(false, artwork.index >= artwork.count - 1), width: "100%" }}
+              title="Next artwork"
+            >
+              ▶
+            </button>
+          </div>
+        </>
+      )}
+
+      {student && (
+        <>
+          <Rule />
+          <span style={{ ...label, fontSize: 9 }}>Student</span>
+          <div style={grid}>
+            <button
+              onClick={() => student.onStep(-1)}
+              disabled={!student.canPrev}
+              style={{ ...iconButton(false, !student.canPrev), width: "100%" }}
+              title="Previous student with work"
+            >
+              ◀
+            </button>
+            <button
+              onClick={() => student.onStep(1)}
+              disabled={!student.canNext}
+              style={{ ...iconButton(false, !student.canNext), width: "100%" }}
+              title="Next student with work"
+            >
+              ▶
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -52,6 +52,8 @@ export interface ArtReviewerProps {
   pdfWorkerUrl?: string;
   /** Rendered top-right — grader puts student navigation here. */
   headerSlot?: React.ReactNode;
+  /** Previous/next-student buttons under the ink rail. The host owns who counts as next. */
+  studentNav?: { canPrev: boolean; canNext: boolean; onStep: (dir: -1 | 1) => void };
   onPositionChange?: (itemIndex: number, frame: number) => void;
   /**
    * Fires on every change to the view: file, frame, zoom, pan, colour, the
@@ -114,6 +116,7 @@ export function ArtReviewer({
   initialCompareId = null,
   pdfWorkerUrl,
   headerSlot,
+  studentNav,
   onPositionChange,
   onStateChange,
   onItemsChanged,
@@ -1855,6 +1858,13 @@ export function ArtReviewer({
         onUndo={() => void activeNotes.undo()}
         onRedo={() => void activeNotes.redo()}
         onClear={() => void activeNotes.clearFrame(panes[activePane].frame)}
+        artwork={{
+          index: state.itemIndex,
+          count: items.length,
+          onStep: (d) =>
+            dispatch({ a: "goto", item: Math.max(0, Math.min(items.length - 1, state.itemIndex + d)) }),
+        }}
+        student={studentNav}
       />}
 
       {showHelp && <HelpSheet onClose={() => setShowHelp(false)} />}

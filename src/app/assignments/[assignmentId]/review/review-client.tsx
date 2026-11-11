@@ -82,7 +82,7 @@ export function ReviewClient({ assignment, author }: Props) {
     };
   }, []);
 
-  const { selectedStudentId, students } = useGrading();
+  const { selectedStudentId, students, selectStudent } = useGrading();
   const { canDock, rubricDocked } = useViewLayout();
   const [items, setItems] = useState<ReviewItem[]>([]);
   /**
@@ -233,6 +233,32 @@ export function ReviewClient({ assignment, author }: Props) {
   const student = students.find((s) => s.id === selectedStudentId);
 
   /**
+   * Previous/next student for the rail buttons, skipping anyone with nothing
+   * submitted. Goes through selectStudent so the page's dirty-check/flush
+   * guard still runs.
+   */
+  const studentNav = useMemo(() => {
+    const idx = students.findIndex((s) => s.id === selectedStudentId);
+    const has = (s: (typeof students)[number]) => s.hasSubmission !== false;
+    const find = (dir: -1 | 1) => {
+      for (let i = idx + dir; i >= 0 && i < students.length; i += dir) {
+        if (has(students[i])) return students[i];
+      }
+      return null;
+    };
+    const prev = find(-1);
+    const next = find(1);
+    return {
+      canPrev: !!prev,
+      canNext: !!next,
+      onStep: (dir: -1 | 1) => {
+        const target = dir < 0 ? prev : next;
+        if (target) selectStudent(target.id);
+      },
+    };
+  }, [students, selectedStudentId, selectStudent]);
+
+  /**
    * Which piece of a student's playlist was open, by contextId.
    *
    * Seeded from `?item=` so a reload lands on the same artwork rather than
@@ -377,6 +403,7 @@ export function ReviewClient({ assignment, author }: Props) {
       onStateChange={handleStateChange}
       onGuidesChange={handleGuidesChange}
       pdfWorkerUrl="/pdf.worker.min.mjs"
+      studentNav={studentNav}
       headerSlot={
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 12, color: "#adaaaa" }}>{assignment.name}</span>
