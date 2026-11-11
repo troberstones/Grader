@@ -9,7 +9,6 @@ import {
   type ViewerState,
 } from "@grader/art-review";
 import { useGrading } from "@/components/shared/grading-context";
-import { StudentNavBar } from "@/components/shared/student-nav-bar";
 import { useViewLayout } from "@/components/shared/view-layout";
 import { RubricDock } from "@/components/rubric/rubric-dock";
 import { MediaDropZone } from "@/components/shared/media-drop-zone";
@@ -83,7 +82,7 @@ export function ReviewClient({ assignment, author }: Props) {
   }, []);
 
   const { selectedStudentId, students, selectStudent } = useGrading();
-  const { canDock, rubricDocked } = useViewLayout();
+  const { canDock, rubricDocked, globalControlsSlot } = useViewLayout();
   const [items, setItems] = useState<ReviewItem[]>([]);
   /**
    * Whose playlist `items` is. A student switch changes contextId one render
@@ -230,7 +229,8 @@ export function ReviewClient({ assignment, author }: Props) {
     [],
   );
 
-  const student = students.find((s) => s.id === selectedStudentId);
+  const studentIndex = students.findIndex((s) => s.id === selectedStudentId);
+  const student = studentIndex >= 0 ? students[studentIndex] : undefined;
 
   /**
    * Previous/next student for the rail buttons, skipping anyone with nothing
@@ -404,10 +404,25 @@ export function ReviewClient({ assignment, author }: Props) {
       onGuidesChange={handleGuidesChange}
       pdfWorkerUrl="/pdf.worker.min.mjs"
       studentNav={studentNav}
+      globalControlsTarget={globalControlsSlot}
+      // Whose work this is. Stepping between students is on the ink rail, so
+      // this is a label, not a second set of arrows. Wide adds the assignment
+      // and the place in the roster; the assignment gives way first.
       headerSlot={(tier) => (
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {tier === "wide" && <span style={{ fontSize: 12, color: "#adaaaa" }}>{assignment.name}</span>}
-          <StudentNavBar />
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, whiteSpace: "nowrap" }}>
+          {tier === "wide" && (
+            <span style={{ ...headerText, color: "#adaaaa", fontSize: 12, flexShrink: 100 }}>
+              {assignment.name}
+            </span>
+          )}
+          <span title={student?.name} style={{ ...headerText, color: "#f2f0ef", fontSize: 13, fontWeight: 500 }}>
+            {student?.name}
+          </span>
+          {tier === "wide" && studentIndex >= 0 && (
+            <span style={{ fontSize: 12, color: "#adaaaa", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+              {studentIndex + 1} of {students.length}
+            </span>
+          )}
         </div>
       )}
     />
@@ -429,6 +444,12 @@ export function ReviewClient({ assignment, author }: Props) {
     </div>
   );
 }
+
+const headerText: React.CSSProperties = {
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  minWidth: 0,
+};
 
 function Centered({
   children,

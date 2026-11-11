@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/sheet";
 import { GradingProvider, useGrading } from "./grading-context";
 import { StudentSidebar } from "./student-sidebar";
-import { ViewLayoutProvider } from "./view-layout";
+import { useViewLayout, ViewLayoutProvider } from "./view-layout";
 import { ViewSwitch } from "./view-switch";
 import { useSync } from "@/hooks/use-sync";
 import { useGlobalSync } from "./global-sync";
@@ -68,13 +68,15 @@ export function GradingShell({
       <StudentUrlSync />
       <ViewLayoutProvider>
         <div className="flex flex-col h-full">
-          {/* Hamburger row */}
-          <div className="shrink-0 px-3 py-2 flex items-center gap-2 border-b bg-sidebar">
+          {/* Hamburger row. One fixed height and never wraps: the reviewer's
+              controls in the slot step down a tier instead. */}
+          <div className="shrink-0 h-12 px-3 flex items-center gap-2 border-b bg-sidebar">
             <NavDrawer />
             <StudentsDrawer pointsPossible={pointsPossible} />
             <SyncToggle />
             <ViewSwitch />
-            <ReviewBadge className="ml-auto" />
+            <GlobalControlsSlot />
+            <ReviewBadge className="shrink-0" />
           </div>
 
           {/* Main area: sidebar + page content */}
@@ -86,6 +88,16 @@ export function GradingShell({
       </ViewLayoutProvider>
     </GradingProvider>
   );
+}
+
+/**
+ * Where the art reviewer portals the controls that are about this machine
+ * rather than the student's work. Takes all the room the row has left and no
+ * more (zero basis), so what goes in it can never push the row wider.
+ */
+function GlobalControlsSlot() {
+  const { setGlobalControlsSlot } = useViewLayout();
+  return <div ref={setGlobalControlsSlot} className="flex-1 basis-0 min-w-0 self-stretch flex items-center" />;
 }
 
 /** Rendered inside GradingProvider so it can access context. */

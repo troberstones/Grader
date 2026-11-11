@@ -1,13 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { hexToRgba, Smoother, simplify } from "../core/strokes";
 import { nextMarker, prevMarker } from "../core/fold";
 import { FRESH_VIEW, resumeFrame } from "../core/reducer";
 import { RGBE_TRANSFER } from "../core/rgbe";
-import { QUALITY_STEPS, type VideoQuality } from "../core/budget";
-import { DecodedVideoSource } from "../sources/decoded-video";
-import type { FrameSource } from "../sources/types";
 import type { Author, FitMode, LoopMode, Stroke, StrokeTool, ViewerState } from "../core/types";
 import { GLRenderer, type ViewParams } from "../render/gl";
 import {
@@ -20,17 +18,16 @@ import {
   type GuideKind,
 } from "../render/overlay";
 import { LayeredSource } from "../sources/layered";
-import { setStoredCacheLimit, sharedLedger, storedCacheLimit } from "../sources/ledger";
 import { setStoredLinkView } from "../sources/playback-prefs";
 import { VideoElementSource } from "../sources/video-element";
 import type { ReviewChannel, ReviewDataAdapter } from "../adapter/types";
 import type { ReviewItem } from "../core/types";
 import { ContactSheet } from "./components/ContactSheet";
+import { GlobalControls } from "./components/GlobalControls";
 import { HelpSheet } from "./components/HelpSheet";
 import { InputLog, type InputEntry } from "./components/InputLog";
 import { LayerPanel } from "./components/LayerPanel";
 import { Playlist } from "./components/Playlist";
-import { Presence } from "./components/Presence";
 import { Timeline } from "./components/Timeline";
 import { InkRail, TransportBar, ViewBar, type ToolState } from "./components/Toolbar";
 import { readDroppedFiles, readPastedFiles } from "./dropFiles";
@@ -38,6 +35,7 @@ import { isButtonTarget, isTypingTarget } from "./keymap";
 import { C, iconButton, label, noSelect, select as selectStyle, selectableText, textButton } from "./styles";
 import { useAnnotations, type AnnotationApi } from "./useAnnotations";
 import { useSession } from "./useSession";
+import { useElementWidth } from "./useElementWidth";
 import { useViewer } from "./useViewer";
 
 export interface ArtReviewerProps {
@@ -53,6 +51,15 @@ export interface ArtReviewerProps {
   pdfWorkerUrl?: string;
   /** Rendered top-right — grader puts student navigation here. */
   headerSlot?: React.ReactNode | ((tier: LayoutTier) => React.ReactNode);
+  /**
+   * Where to render the controls that are about this machine and the room
+   * rather than the piece on screen (session, audio, memory, video quality,
+   * input log, help). A host with chrome of its own passes an element there
+   * and they render into it through a portal; omitted, they sit at the right
+   * of the reviewer's own header. `null` means a target is coming but not yet
+   * mounted, and renders them nowhere until it is.
+   */
+  globalControlsTarget?: HTMLElement | null;
   /** Previous/next-student buttons under the ink rail. The host owns who counts as next. */
   studentNav?: { canPrev: boolean; canNext: boolean; onStep: (dir: -1 | 1) => void };
   onPositionChange?: (itemIndex: number, frame: number) => void;
@@ -92,7 +99,7 @@ type PaneId = "main" | "compare";
  * narrows. Nothing wraps and nothing changes order.
  */
 export type LayoutTier = "wide" | "medium" | "narrow";
-const WIDE_MIN = 720;
+const WIDE_MIN = 820;
 const MEDIUM_MIN = 460;
 
 type Framing = { zoom?: number; panX?: number; panY?: number; fit?: FitMode };
@@ -127,6 +134,7 @@ export function ArtReviewer({
   initialCompareId = null,
   pdfWorkerUrl,
   headerSlot,
+  globalControlsTarget,
   studentNav,
   onPositionChange,
   onStateChange,
@@ -143,24 +151,9 @@ export function ArtReviewer({
   /** The item in the second pane, by id so it survives the playlist changing. */
   const [compareId, setCompareId] = useState<string | null>(initialCompareId);
   const [showSheet, setShowSheet] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const [tier, setTier] = useState<LayoutTier>("wide");
-  const [showMore, setShowMore] = useState(false);
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el) return;
-    const measure = () => {
-      const w = el.clientWidth;
-      setTier(w >= WIDE_MIN ? "wide" : w >= MEDIUM_MIN ? "medium" : "narrow");
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  useEffect(() => {
-    if (tier === "wide") setShowMore(false);
-  }, [tier]);
+  const [rootRef, rootWidth] = useElementWidth<HTMLDivElement>();
+  const tier: LayoutTier =
+    rootWidth === null || rootWidth >= WIDE_MIN ? "wide" : rootWidth >= MEDIUM_MIN ? "medium" : "narrow";
 
   // Read-only pins the tool to "select", which is the pan tool: every path
   // that could start a stroke, erase or place text branches off before then.
@@ -1425,36 +1418,25 @@ export function ArtReviewer({
   const hasPrev = prevMarker(annotations.annotatedFrames, state.frame) !== null;
   const hasNext = nextMarker(annotations.annotatedFrames, state.frame) !== null;
 
-  const statusItems = (
-    <>
-      {!readOnly && <Presence session={session} />}
-      {/* Beside "Follow view" on purpose: both answer "what does this screen
-          do in the room", as opposed to what the clip does. */}
-      <label
-        style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", flexShrink: 0 }}
-        title="Only one machine in the room should play audio"
-      >
-        <input
-          type="checkbox"
-          checked={audioOwner}
-          onChange={(e) => setAudioOwner(e.target.checked)}
-          style={{ accentColor: C.primary }}
-        />
-        <span style={label}>Audio</span>
-      </label>
-      <MemoryReadout autoBytes={viewer.budget.ram} item={item} />
-      {item?.kind === "video" && (
-        <VideoQualityControl
-          item={item}
-          source={viewer.source}
-          quality={viewer.videoQuality}
-          onQuality={viewer.setVideoQuality}
-          sharpen={viewer.sharpenOnPause}
-          onSharpen={viewer.setSharpenOnPause}
-        />
-      )}
-    </>
+  const globalControls = (
+    <GlobalControls
+      session={readOnly ? undefined : session}
+      audioOwner={audioOwner}
+      onAudioOwner={setAudioOwner}
+      item={item}
+      autoCacheBytes={viewer.budget.ram}
+      video={{
+        source: viewer.source,
+        quality: viewer.videoQuality,
+        onQuality: viewer.setVideoQuality,
+        sharpen: viewer.sharpenOnPause,
+        onSharpen: viewer.setSharpenOnPause,
+      }}
+      log={readOnly ? undefined : { open: showLog, onToggle: () => setShowLog((v) => !v) }}
+      onHelp={() => setShowHelp(true)}
+    />
   );
+  const globalInPlace = globalControlsTarget === undefined;
 
   const cursor =
     tools.tool === "select" || spaceRef.current
@@ -1503,18 +1485,17 @@ export function ArtReviewer({
           gap: 8,
         }}
       >
-      {/* Header. It used to wrap to three rows at tablet widths and every one
-          of them came off the stage. Two items left now — session state and
-          which student — so one row is the normal case. It still wraps rather
-          than clipping: a hidden "Follow view" is worse than a shorter stage. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, minWidth: 0, position: "relative" }}>
-        {/* Left zone: which piece. Always the same three controls in the same
-            order; only the labels shrink. */}
+      {/* Header: which piece, and which student. One row at every width:
+          labels turn into icons, the student nav into a name, and nothing
+          wraps or changes order. The controls that are not about the piece
+          live in the host's chrome when it offers a place for them. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, minWidth: 0, height: 32 }}>
         <Playlist
           items={items}
           index={state.itemIndex}
           disabled={!canControl}
           busy={playlistBusy}
+          compact={tier !== "wide"}
           onSelect={(i) => dispatch({ a: "goto", item: i })}
           onAdd={adapter.addItems ? handleAddFiles : undefined}
           onRemove={adapter.removeItem ? handleRemoveItem : undefined}
@@ -1535,60 +1516,20 @@ export function ArtReviewer({
         >
           {tier === "wide" ? "Contact sheet" : "⊞"}
         </button>
-        <div style={{ flex: 1, minWidth: 0 }} />
-        {/* Right zone: who, then status, then help. Status readouts are the
-            first thing to leave when room runs out, and they go behind "⋯" in
-            one step rather than wrapping the header onto extra rows. */}
-        <div style={{ minWidth: 0, overflow: "hidden" }}>
-          {typeof headerSlot === "function" ? headerSlot(tier) : headerSlot}
-        </div>
-        {tier === "wide" && statusItems}
-        {tier !== "wide" && (
-          <button
-            onClick={() => setShowMore((v) => !v)}
-            style={{ ...textButton(showMore), flexShrink: 0 }}
-            title="Audio, memory, connection"
-          >
-            ⋯
-          </button>
+        {globalInPlace ? (
+          <div style={{ flex: "1 1 0", minWidth: 0 }}>{globalControls}</div>
+        ) : (
+          <div style={{ flex: "1 1 0", minWidth: 0 }} />
         )}
-        {/* The keyboard shortcut is no use on the device this is for. */}
-        {!readOnly && <button
-          onClick={() => setShowLog((v) => !v)}
-          style={{ ...textButton(showLog), flexShrink: 0 }}
-          title="Input log — every pointer event and what it did  D"
-        >
-          ⌁
-        </button>}
-        <button
-          onClick={() => setShowHelp(true)}
-          style={{ ...textButton(), flexShrink: 0 }}
-          title="Shortcuts  ?"
-        >
-          ?
-        </button>
-        {tier !== "wide" && showMore && (
-          <div
-            style={{
-              position: "absolute",
-              top: "100%",
-              right: 0,
-              marginTop: 4,
-              zIndex: 30,
-              background: C.container,
-              borderRadius: 8,
-              padding: 10,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "flex-start",
-              gap: 10,
-              boxShadow: "0 12px 28px rgba(0,0,0,0.5)",
-            }}
-          >
-            {statusItems}
+        {headerSlot && (
+          // Gives way first: the host's slot is told the tier so it can pick a
+          // form that fits, and is clipped rather than wrapped if it does not.
+          <div style={{ minWidth: 0, overflow: "hidden", display: "flex", alignItems: "center" }}>
+            {typeof headerSlot === "function" ? headerSlot(tier) : headerSlot}
           </div>
         )}
       </div>
+      {!globalInPlace && globalControlsTarget && createPortal(globalControls, globalControlsTarget)}
 
       {/* stage */}
       {/* The floor lives here, on the flex row, not on the stage inside it.
@@ -1889,11 +1830,12 @@ export function ArtReviewer({
         onScrubStart={() => state.playing && dispatch({ a: "pause" })}
       />
 
-      {/* controls — fixed height, scrolling sideways rather than wrapping into
-          extra rows that eat the stage */}
+      {/* controls — two fixed rows. Each bar keeps its everyday controls in
+          the row and moves the rest behind "⋯" when the tier says the row is
+          short; the column above clips, so nothing scrolls or wraps. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0, minWidth: 0 }}>
-        <div style={{ overflowX: "auto", paddingBottom: 2, minWidth: 0 }}>
         <TransportBar
+          tier={tier}
           state={state}
           frameCount={frameCount}
           canControl={canControl}
@@ -1910,21 +1852,19 @@ export function ArtReviewer({
           }
           onOnionSkin={(n) => dispatch({ a: "opts", patch: { onionSkin: n } })}
         />
-        </div>
-        <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 2, minWidth: 0 }}>
-          <ViewBar
-            state={state}
-            guides={state.guides}
-            hdr={currentItem?.colorSpace?.transfer === RGBE_TRANSFER}
-            onFlip={(h, v) => dispatch({ a: "flip", h, v })}
-            onRotate={() =>
-              dispatch({ a: "rotate", deg: (((state.rotate + 90) % 360) as 0 | 90 | 180 | 270) })
-            }
-            onZoom={setZoom}
-            onGuides={(mode) => dispatch({ a: "guides", mode })}
-            onColor={(patch) => dispatch({ a: "color", patch })}
-          />
-        </div>
+        <ViewBar
+          tier={tier}
+          state={state}
+          guides={state.guides}
+          hdr={currentItem?.colorSpace?.transfer === RGBE_TRANSFER}
+          onFlip={(h, v) => dispatch({ a: "flip", h, v })}
+          onRotate={() =>
+            dispatch({ a: "rotate", deg: (((state.rotate + 90) % 360) as 0 | 90 | 180 | 270) })
+          }
+          onZoom={setZoom}
+          onGuides={(mode) => dispatch({ a: "guides", mode })}
+          onColor={(patch) => dispatch({ a: "color", patch })}
+        />
       </div>
       </div>
 
@@ -1963,164 +1903,6 @@ export function ArtReviewer({
 
       {showHelp && <HelpSheet onClose={() => setShowHelp(false)} />}
     </div>
-  );
-}
-
-/**
- * Frame-cache memory, live. Worth a permanent slot rather than a debug flag:
- * this is the number that decides whether the tab is comfortable or pushing
- * the machine into swap, and it should never be a mystery.
- */
-const MB = 1024 * 1024;
-
-/**
- * Cache ceilings offered by hand. Stops at 2 GB because the ledger clamps
- * there anyway: the constraint is Chrome's renderer heap, not the machine's
- * memory, and a tab that asks for more gets killed rather than throttled.
- */
-const CACHE_CHOICES = [512 * MB, 1024 * MB, 1536 * MB, 2048 * MB];
-
-function MemoryReadout({ autoBytes, item }: { autoBytes: number; item: ReviewItem | null }) {
-  const ledger = sharedLedger();
-  const [, force] = useState(0);
-
-  useEffect(() => {
-    const off = ledger.onChange(() => force((n) => n + 1));
-    const timer = setInterval(() => force((n) => n + 1), 2000);
-    return () => {
-      off();
-      clearInterval(timer);
-    };
-  }, [ledger]);
-
-  const usedMb = ledger.bytesUsed / 1024 / 1024;
-  const limitMb = ledger.bytesLimit / 1024 / 1024;
-  const pressure = ledger.pressure;
-
-  // What the current item costs to hold whole — the number that decides whether
-  // playback is smooth or decodes a frame at a time. HDR frames are held twice
-  // over, packed and unpacked, which is where the factor of three comes from.
-  const perFrame = item
-    ? item.width * item.height * (item.colorSpace?.transfer === RGBE_TRANSFER ? 12 : 4)
-    : 0;
-  const wholeItemMb = (perFrame * (item?.frameCount ?? 1)) / 1024 / 1024;
-  const fits = wholeItemMb > 0 && wholeItemMb <= limitMb;
-
-  const hint = item
-    ? ` ${item.label} needs ${wholeItemMb.toFixed(0)} MB to hold every frame — ${
-        fits ? "it fits, so playback runs from memory." : "it does not fit, so playback re-decodes."
-      }`
-    : "";
-
-  return (
-    <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-      <span
-        title={`Decoded frame cache across every open file.${hint}`}
-        style={{
-          ...label,
-          color: pressure > 0.9 ? C.primary : C.faint,
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        {usedMb.toFixed(0)}/{limitMb.toFixed(0)} MB
-      </span>
-      <select
-        value={storedCacheLimit() ?? ""}
-        onChange={(e) => {
-          setStoredCacheLimit(e.target.value ? Number(e.target.value) : null, autoBytes);
-          force((n) => n + 1);
-        }}
-        title={
-          "Frame cache ceiling. Detection guesses from the browser, which cannot know a whole " +
-          "shot is worth holding resident — raise it when a sequence will not fit." +
-          hint
-        }
-        style={{ ...selectStyle, padding: "1px 4px", fontSize: 10 }}
-      >
-        <option value="">Auto ({(autoBytes / MB).toFixed(0)})</option>
-        {CACHE_CHOICES.map((b) => (
-          <option key={b} value={b}>
-            {b >= 1024 * MB ? `${(b / 1024 / MB).toFixed(b % (1024 * MB) ? 1 : 0)} GB` : `${b / MB} MB`}
-          </option>
-        ))}
-      </select>
-    </span>
-  );
-}
-
-/** "1080p" for a 1920×1080 frame; measured on the short side, as YouTube does. */
-function linesLabel(width: number, height: number): string {
-  return `${Math.min(width, height)}p`;
-}
-
-/**
- * Cache resolution for the open video, YouTube-style: Auto, the clip's own
- * resolution, then the standard steps below it. Auto names what it actually
- * chose, because "Auto" alone is how a 1080p render ended up on screen at
- * 180p without anyone knowing why.
- */
-function VideoQualityControl({
-  item,
-  source,
-  quality,
-  onQuality,
-  sharpen,
-  onSharpen,
-}: {
-  item: ReviewItem;
-  source: FrameSource | null;
-  quality: VideoQuality;
-  onQuality: (q: VideoQuality) => void;
-  sharpen: boolean;
-  onSharpen: (on: boolean) => void;
-}) {
-  const native = Math.min(item.width, item.height);
-  const steps = QUALITY_STEPS.filter((h) => h < native);
-  const cached = source instanceof DecodedVideoSource ? source : null;
-  const streaming = source instanceof VideoElementSource;
-
-  // A remembered step at or above this clip's own size means native here.
-  const value = quality === "auto" ? "auto" : quality === "full" || quality >= native ? "full" : String(quality);
-  const autoLabel = cached ? `Auto (${linesLabel(cached.cacheWidth, cached.cacheHeight)})` : "Auto";
-
-  return (
-    <span style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-      <select
-        value={value}
-        onChange={(e) => {
-          const v = e.target.value;
-          onQuality(v === "auto" || v === "full" ? v : Number(v));
-        }}
-        title={
-          cached
-            ? `Cached at ${cached.cacheWidth}×${cached.cacheHeight} of ${item.width}×${item.height}.`
-            : streaming
-              ? `Streaming at ${item.width}×${item.height}.`
-              : "Video resolution"
-        }
-        style={{ ...selectStyle, padding: "1px 4px", fontSize: 10 }}
-      >
-        <option value="auto">{autoLabel}</option>
-        <option value="full">Full ({linesLabel(item.width, item.height)})</option>
-        {steps.map((h) => (
-          <option key={h} value={h}>
-            {h}p
-          </option>
-        ))}
-      </select>
-      <label
-        style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}
-        title="When paused, redraw the frame at the clip's full resolution even if the cache holds it smaller"
-      >
-        <input
-          type="checkbox"
-          checked={sharpen}
-          onChange={(e) => onSharpen(e.target.checked)}
-          style={{ accentColor: C.primary }}
-        />
-        <span style={label}>Sharpen on pause</span>
-      </label>
-    </span>
   );
 }
 

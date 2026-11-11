@@ -15,6 +15,8 @@ interface PlaylistProps {
   onRemove?: (itemId: string) => void;
   /** An add/remove is in flight — disables everything so a second click can't race it. */
   busy?: boolean;
+  /** Narrower file menu and an icon-only Add, for a reviewer short of width. */
+  compact?: boolean;
 }
 
 const KIND_LABEL: Record<ReviewItem["kind"], string> = {
@@ -26,7 +28,7 @@ const KIND_LABEL: Record<ReviewItem["kind"], string> = {
 };
 
 /** Compact file switcher: dropdown + prev/next, plus optional add/remove. */
-export function Playlist({ items, index, disabled, onSelect, onAdd, onRemove, busy }: PlaylistProps) {
+export function Playlist({ items, index, disabled, onSelect, onAdd, onRemove, busy, compact = false }: PlaylistProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const current = items[index];
   const dim = disabled || busy;
@@ -35,7 +37,9 @@ export function Playlist({ items, index, disabled, onSelect, onAdd, onRemove, bu
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-      {items.length > 1 && (
+      {/* Shown even for a single piece, grayed out, so that stepping to a
+          student with one piece does not slide everything after it left. */}
+      {items.length > 0 && (
         <>
           <button
             onClick={() => onSelect(Math.max(0, index - 1))}
@@ -47,9 +51,9 @@ export function Playlist({ items, index, disabled, onSelect, onAdd, onRemove, bu
           </button>
           <select
             value={index}
-            disabled={dim}
+            disabled={dim || items.length === 1}
             onChange={(e) => onSelect(Number(e.target.value))}
-            style={{ ...selectStyle, maxWidth: 200 }}
+            style={{ ...selectStyle, maxWidth: compact ? 130 : 200 }}
             title="Switch file"
           >
             {items.map((it, i) => (
@@ -101,7 +105,7 @@ export function Playlist({ items, index, disabled, onSelect, onAdd, onRemove, bu
             style={{ ...textButton(), flexShrink: 0, opacity: dim ? 0.5 : 1 }}
             title="Add more artwork for this student — or paste an image  Cmd/Ctrl + V"
           >
-            {busy ? "Adding…" : "+ Add"}
+            {busy ? (compact ? "…" : "Adding…") : compact ? "+" : "+ Add"}
           </button>
         </>
       )}

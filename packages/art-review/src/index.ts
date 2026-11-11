@@ -1,4 +1,4 @@
-export { ArtReviewer, type ArtReviewerProps } from "./react/ArtReviewer";
+export { ArtReviewer, type ArtReviewerProps, type LayoutTier } from "./react/ArtReviewer";
 export { useViewer } from "./react/useViewer";
 export { useSession } from "./react/useSession";
 export { useAnnotations } from "./react/useAnnotations";

@@ -87,7 +87,7 @@ export function ViewSwitch() {
   if (reviewing) return null;
 
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex shrink-0 items-center gap-1.5">
       <div className="flex items-center rounded-md border p-0.5" role="group">
         <SegmentButton
           active={!onArtwork}

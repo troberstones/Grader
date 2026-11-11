@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
@@ -25,6 +26,14 @@ interface ViewLayoutValue {
   /** The instructor wants the dock open. Only meaningful when `canDock`. */
   rubricDocked: boolean;
   setRubricDocked: (open: boolean) => void;
+  /**
+   * The empty stretch of the shell's header row, for the art reviewer to put
+   * its machine-wide controls in (session, audio, memory…). Null until that
+   * row mounts. The reviewer is the only thing that fills it, so on the grade
+   * sheet it stays empty.
+   */
+  globalControlsSlot: HTMLElement | null;
+  setGlobalControlsSlot: (el: HTMLElement | null) => void;
 }
 
 const ViewLayoutContext = createContext<ViewLayoutValue | null>(null);
@@ -68,8 +77,14 @@ export function ViewLayoutProvider({ children }: { children: ReactNode }) {
     for (const listener of dockListeners) listener();
   }, []);
 
+  // State rather than a ref: the reviewer has to re-render once the element
+  // exists to portal into it.
+  const [globalControlsSlot, setGlobalControlsSlot] = useState<HTMLElement | null>(null);
+
   return (
-    <ViewLayoutContext.Provider value={{ canDock, rubricDocked, setRubricDocked }}>
+    <ViewLayoutContext.Provider
+      value={{ canDock, rubricDocked, setRubricDocked, globalControlsSlot, setGlobalControlsSlot }}
+    >
       {children}
     </ViewLayoutContext.Provider>
   );

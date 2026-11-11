@@ -13,6 +13,10 @@ import {
   selectableText,
   textButton,
 } from "../styles";
+import { MenuRow, MoreMenu } from "./MoreMenu";
+
+/** The reviewer's width tier; see LayoutTier in ArtReviewer. */
+type Tier = "wide" | "medium" | "narrow";
 
 export interface ToolState {
   tool: StrokeTool | "erase" | "select";
@@ -21,6 +25,8 @@ export interface ToolState {
 }
 
 interface TransportBarProps {
+  /** Below "wide", everything after the transport buttons goes behind "⋯". */
+  tier: Tier;
   state: ViewerState;
   frameCount: number;
   canControl: boolean;
@@ -59,6 +65,7 @@ const TOOL_ICONS: Record<string, string> = {
 };
 
 export function TransportBar({
+  tier,
   state,
   frameCount,
   canControl,
@@ -76,8 +83,73 @@ export function TransportBar({
   const single = frameCount <= 1;
   const dim = !canControl;
 
+  const loop = (
+    <select
+      value={state.loop}
+      disabled={dim}
+      onChange={(e) => onLoop(e.target.value as LoopMode)}
+      style={select}
+      title="At the end: stop, wrap around, or ping-pong back and forth"
+    >
+      <option value="off">No loop</option>
+      <option value="loop">Loop</option>
+      <option value="bounce">Bounce</option>
+    </select>
+  );
+  const speed = (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <span style={label}>fps</span>
+      <input
+        type="number"
+        min={1}
+        max={120}
+        value={Math.round(state.fps)}
+        disabled={dim}
+        onChange={(e) => onFps(Number(e.target.value))}
+        style={{ ...select, ...selectableText, width: 58 }}
+      />
+      <select
+        value={state.rate}
+        disabled={dim}
+        onChange={(e) => onRate(Number(e.target.value))}
+        style={select}
+        title="Playback rate"
+      >
+        {[0.25, 0.5, 1, 1.5, 2, 4].map((r) => (
+          <option key={r} value={r}>
+            {r}×
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+  const stopOnNotes = (
+    <button
+      onClick={onTogglePauseOnAnnotated}
+      disabled={dim}
+      title="Stop playback when a frame carrying annotations is reached"
+      style={textButton(state.pauseOnAnnotated)}
+    >
+      Stop on notes
+    </button>
+  );
+  const onion = (
+    <select
+      value={state.onionSkin}
+      onChange={(e) => onOnionSkin(Number(e.target.value))}
+      style={select}
+      title="Ghost neighbouring frames"
+      disabled={single}
+    >
+      <option value={0}>No onion skin</option>
+      <option value={1}>Onion ±1</option>
+      <option value={2}>Onion ±2</option>
+      <option value={3}>Onion ±3</option>
+    </select>
+  );
+
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: "max-content" }}>
+    <div style={bar}>
       <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
         <button
           title="Previous annotated frame  ["
@@ -123,83 +195,46 @@ export function TransportBar({
 
       <Divider />
 
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <span style={label}>Loop</span>
-        {(["off", "loop", "bounce"] as LoopMode[]).map((m) => (
-          <button
-            key={m}
-            disabled={dim}
-            onClick={() => onLoop(m)}
-            title={
-              m === "bounce"
-                ? "Ping-pong: plays forward then backward"
-                : m === "loop"
-                  ? "Wrap around at the end"
-                  : "Stop at the end"
-            }
-            style={textButton(state.loop === m)}
-          >
-            {m === "off" ? "Off" : m === "loop" ? "Loop" : "Bounce"}
-          </button>
-        ))}
-      </div>
-
-      <Divider />
-
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={label}>fps</span>
-        <input
-          type="number"
-          min={1}
-          max={120}
-          value={Math.round(state.fps)}
-          disabled={dim}
-          onChange={(e) => onFps(Number(e.target.value))}
-          style={{ ...select, ...selectableText, width: 58 }}
-        />
-        <select
-          value={state.rate}
-          disabled={dim}
-          onChange={(e) => onRate(Number(e.target.value))}
-          style={select}
-          title="Playback rate"
-        >
-          {[0.25, 0.5, 1, 1.5, 2, 4].map((r) => (
-            <option key={r} value={r}>
-              {r}×
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <Divider />
-
-      <button
-        onClick={onTogglePauseOnAnnotated}
-        disabled={dim}
-        title="Stop playback when a frame carrying annotations is reached"
-        style={textButton(state.pauseOnAnnotated)}
-      >
-        Stop on notes
-      </button>
-
-      <select
-        value={state.onionSkin}
-        onChange={(e) => onOnionSkin(Number(e.target.value))}
-        style={select}
-        title="Ghost neighbouring frames"
-        disabled={single}
-      >
-        <option value={0}>No onion skin</option>
-        <option value={1}>Onion ±1</option>
-        <option value={2}>Onion ±2</option>
-        <option value={3}>Onion ±3</option>
-      </select>
+      {tier === "wide" ? (
+        <>
+          {loop}
+          <Divider />
+          {speed}
+          <Divider />
+          {stopOnNotes}
+          {onion}
+        </>
+      ) : (
+        <MoreMenu title="Loop, speed, stop on notes, onion skin" placement="above" align="start">
+          <MenuRow>{loop}</MenuRow>
+          <MenuRow>{speed}</MenuRow>
+          <MenuRow>{stopOnNotes}</MenuRow>
+          <MenuRow>{onion}</MenuRow>
+        </MoreMenu>
+      )}
     </div>
   );
 }
 
+/**
+ * A bar under the stage: one row, laid out at its natural width. It does not
+ * shrink its controls or scroll; the tiers keep it inside the column, and the
+ * column clips if one ever falls short.
+ */
+const bar: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  minWidth: "max-content",
+  whiteSpace: "nowrap",
+};
+
 interface ViewBarProps {
+  /**
+   * "wide" shows everything; "medium" keeps Value in the row and puts the
+   * channel, guides and exposure behind "⋯"; "narrow" puts Value there too.
+   */
+  tier: Tier;
   state: ViewerState;
   guides: GuideKind;
   /**
@@ -215,6 +250,7 @@ interface ViewBarProps {
 }
 
 export function ViewBar({
+  tier,
   state,
   guides,
   hdr = false,
@@ -224,8 +260,83 @@ export function ViewBar({
   onGuides,
   onColor,
 }: ViewBarProps) {
+  const exposure = hdr && (
+    <div
+      style={{ display: "flex", alignItems: "center", gap: 6 }}
+      title="Exposure in stops — an HDR frame keeps detail above white, so pulling down recovers blown highlights instead of just darkening"
+    >
+      <span style={{ fontSize: 11, color: "#8a8a8a", letterSpacing: 0.5 }}>EV</span>
+      <input
+        type="range"
+        min={-6}
+        max={6}
+        step={0.25}
+        value={state.color.exposure}
+        onChange={(e) => onColor({ exposure: Number(e.target.value) })}
+        style={{ width: 72 }}
+      />
+      <button
+        onClick={() => onColor({ exposure: 0 })}
+        style={{
+          ...textButton(state.color.exposure !== 0),
+          // Fixed width and tabular figures: this label changes on every
+          // pointermove while the slider is dragged, and letting it size
+          // to its text shoved the rest of the bar sideways the whole way.
+          // Wide enough for "-3.25", the longest value the range allows.
+          width: 48,
+          textAlign: "center",
+          fontVariantNumeric: "tabular-nums",
+          padding: "3px 0",
+        }}
+        title="Back to 0 EV"
+      >
+        {state.color.exposure > 0 ? "+" : ""}
+        {state.color.exposure.toFixed(2).replace(/\.?0+$/, "")}
+      </button>
+    </div>
+  );
+  const value = (
+    <button
+      title="Value check — strip colour to judge values  V"
+      onClick={() => onColor({ saturation: state.color.saturation < 1 ? 1 : 0 })}
+      style={textButton(state.color.saturation < 1)}
+    >
+      Value
+    </button>
+  );
+  const channel = (
+    <select
+      value={state.color.channel}
+      onChange={(e) => onColor({ channel: e.target.value as ViewerState["color"]["channel"] })}
+      style={select}
+      title="Isolate a channel"
+    >
+      <option value="rgb">RGB</option>
+      <option value="r">Red</option>
+      <option value="g">Green</option>
+      <option value="b">Blue</option>
+      <option value="a">Alpha</option>
+      <option value="luma">Luma</option>
+    </select>
+  );
+  const guideSelect = (
+    <select
+      value={guides}
+      onChange={(e) => onGuides(e.target.value as GuideKind)}
+      style={select}
+      title="Composition guides  G"
+    >
+      <option value="none">No guides</option>
+      <option value="thirds">Thirds</option>
+      <option value="golden">Golden</option>
+      <option value="center">Centre</option>
+      <option value="diagonals">Diagonals</option>
+      <option value="grid">Grid</option>
+    </select>
+  );
+
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: "max-content" }}>
+    <div style={{ ...bar, gap: 8 }}>
       <div style={{ display: "flex", gap: 2 }}>
         <button
           title="Flip horizontally  F — the classic check-your-drawing move"
@@ -275,80 +386,31 @@ export function ViewBar({
 
       <Divider />
 
-      {hdr && (
+      {tier === "wide" ? (
         <>
-          <div
-            style={{ display: "flex", alignItems: "center", gap: 6 }}
-            title="Exposure in stops — an HDR frame keeps detail above white, so pulling down recovers blown highlights instead of just darkening"
-          >
-            <span style={{ fontSize: 11, color: "#8a8a8a", letterSpacing: 0.5 }}>EV</span>
-            <input
-              type="range"
-              min={-6}
-              max={6}
-              step={0.25}
-              value={state.color.exposure}
-              onChange={(e) => onColor({ exposure: Number(e.target.value) })}
-              style={{ width: 90 }}
-            />
-            <button
-              onClick={() => onColor({ exposure: 0 })}
-              style={{
-                ...textButton(state.color.exposure !== 0),
-                // Fixed width and tabular figures: this label changes on every
-                // pointermove while the slider is dragged, and letting it size
-                // to its text shoved the rest of the bar sideways the whole way.
-                // Wide enough for "-3.25", the longest value the range allows.
-                width: 48,
-                textAlign: "center",
-                fontVariantNumeric: "tabular-nums",
-                padding: "3px 0",
-              }}
-              title="Back to 0 EV"
-            >
-              {state.color.exposure > 0 ? "+" : ""}
-              {state.color.exposure.toFixed(2).replace(/\.?0+$/, "")}
-            </button>
-          </div>
-          <Divider />
+          {exposure && (
+            <>
+              {exposure}
+              <Divider />
+            </>
+          )}
+          {value}
+          {channel}
+          {guideSelect}
+        </>
+      ) : (
+        <>
+          {tier === "medium" && value}
+          <MoreMenu title="Channel, guides, exposure" placement="above" align="start">
+            {tier === "narrow" && <MenuRow>{value}</MenuRow>}
+            <MenuRow>
+              {channel}
+              {guideSelect}
+            </MenuRow>
+            {exposure && <MenuRow>{exposure}</MenuRow>}
+          </MoreMenu>
         </>
       )}
-
-      <button
-        title="Value check — strip colour to judge values  V"
-        onClick={() => onColor({ saturation: state.color.saturation < 1 ? 1 : 0 })}
-        style={textButton(state.color.saturation < 1)}
-      >
-        Value
-      </button>
-
-      <select
-        value={state.color.channel}
-        onChange={(e) => onColor({ channel: e.target.value as ViewerState["color"]["channel"] })}
-        style={select}
-        title="Isolate a channel"
-      >
-        <option value="rgb">RGB</option>
-        <option value="r">Red</option>
-        <option value="g">Green</option>
-        <option value="b">Blue</option>
-        <option value="a">Alpha</option>
-        <option value="luma">Luma</option>
-      </select>
-
-      <select
-        value={guides}
-        onChange={(e) => onGuides(e.target.value as GuideKind)}
-        style={select}
-        title="Composition guides  G"
-      >
-        <option value="none">No guides</option>
-        <option value="thirds">Thirds</option>
-        <option value="golden">Golden</option>
-        <option value="center">Centre</option>
-        <option value="diagonals">Diagonals</option>
-        <option value="grid">Grid</option>
-      </select>
     </div>
   );
 }
@@ -427,6 +489,9 @@ export function InkRail({
           flex: 1,
           minHeight: 0,
           overflowY: "auto",
+          // Still scrolls in a very short window (by wheel or touch), but
+          // shows no bar: a scrollbar here took width from the buttons.
+          scrollbarWidth: "none",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
